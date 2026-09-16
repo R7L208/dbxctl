@@ -46,7 +46,8 @@ fn reports_missing_databricks_binary() {
         .output()
         .expect("run dbxctl");
     assert!(!output.status.success());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("dbxctl-definitely-missing"));
+    // `doctor` renders the problem as diagnostic output rather than aborting.
+    assert!(String::from_utf8_lossy(&output.stdout).contains("dbxctl-definitely-missing"));
 }
 
 #[test]
@@ -58,7 +59,7 @@ fn reports_broken_version_command() {
         .output()
         .expect("run dbxctl");
     assert_eq!(output.status.code(), Some(1));
-    assert!(String::from_utf8_lossy(&output.stderr).contains("exit status: 9"));
+    assert!(String::from_utf8_lossy(&output.stdout).contains("exit status: 9"));
 }
 
 #[test]
@@ -71,7 +72,7 @@ fn rejects_malformed_and_non_utf8_version_output() {
             .output()
             .expect("run dbxctl");
         assert!(!output.status.success());
-        assert!(String::from_utf8_lossy(&output.stderr).contains(expected));
+        assert!(String::from_utf8_lossy(&output.stdout).contains(expected));
     }
 }
 
@@ -84,7 +85,20 @@ fn enforces_minimum_databricks_version() {
         .output()
         .expect("run dbxctl");
     assert!(!output.status.success());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("unsupported"));
+    assert!(String::from_utf8_lossy(&output.stdout).contains("unsupported"));
+}
+
+#[cfg(unix)]
+#[test]
+fn propagates_signal_termination_as_128_plus_signal() {
+    let output = dbxctl()
+        .env("DATABRICKS_CLI_PATH", fake_databricks())
+        .env("FAKE_DATABRICKS_ABORT", "1")
+        .args(["databricks", "jobs", "list"])
+        .output()
+        .expect("run dbxctl");
+    // SIGABRT is signal 6; the shell convention reports 128 + the signal.
+    assert_eq!(output.status.code(), Some(134));
 }
 
 #[test]

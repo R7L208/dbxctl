@@ -1,9 +1,11 @@
 # dbxctl
 
-`dbxctl` is a small Rust CLI that validates and delegates commands to the
-official [Databricks CLI](https://docs.databricks.com/dev-tools/cli/). It keeps
+`dbxctl` is a small Rust CLI that delegates commands to the official
+[Databricks CLI](https://docs.databricks.com/dev-tools/cli/). It keeps
 Databricks API behavior in the upstream Go binary while providing a controlled
-place for additional workflows and policy.
+place for additional workflows and policy. Use `dbxctl doctor` to check that a
+supported Databricks CLI is installed; passthrough commands run the upstream
+binary directly without a redundant version probe on the hot path.
 
 The project currently has no third-party Rust dependencies.
 

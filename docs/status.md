@@ -7,8 +7,10 @@ Last updated: 2026-09-16
 - Initialized the Rust 2024 CLI with Rust 1.89.0 pinned.
 - Added `help`, `version`, `doctor`, and Databricks passthrough commands.
 - Added Databricks CLI discovery through `PATH` or `DATABRICKS_CLI_PATH`.
-- Enforced Databricks CLI 0.200.0 or newer.
-- Preserved upstream arguments and process exit codes without a shell.
+- Added a `doctor` check that enforces Databricks CLI 0.200.0 or newer and
+  reports dependency status instead of aborting on the first problem.
+- Preserved upstream arguments and exact process exit codes without a shell,
+  including signal termination and codes above 255.
 - Kept the Rust runtime dependency graph empty.
 - Added portable Rust unit, wrapper-contract, and upstream-contract tests.
 - Added native Linux, macOS, and Windows CI lanes.
