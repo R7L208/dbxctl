@@ -1,0 +1,15 @@
+# Cargo build output
+/target/
+debug/
+
+# rustfmt backup files
+**/*.rs.bk
+
+# MSVC debug info
+*.pdb
+
+# Local tooling and OS/editor cruft
+.DS_Store
+.env
+.isaac/
+

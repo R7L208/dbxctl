@@ -1,0 +1,134 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_HOME: ${{ runner.temp }}/cargo-home
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: "1"
+
+jobs:
+  portability:
+    name: Test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Install pinned Rust toolchain
+        run: rustup toolchain install 1.89.0 --profile minimal
+      - name: Run tests
+        run: cargo test --locked --all-features
+      - name: Analyze all targets
+        run: cargo check --locked --all-targets --all-features
+
+  quality:
+    name: Format, lint, test
+    runs-on: ubuntu-24.04
+    container:
+      image: rust:1.89.0-bookworm@sha256:c9ac3fa8945b61dede1e4500d25028aa8fd8a8fe46365fcf9c0422f8d999b9b0
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Install Rust components
+        run: rustup component add --toolchain 1.89.0-x86_64-unknown-linux-gnu clippy llvm-tools-preview rustfmt
+      - name: Check formatting
+        run: cargo fmt --all --check
+      - name: Run Clippy
+        run: cargo clippy --locked --all-targets --all-features -- -D warnings
+      - name: Run tests
+        run: cargo test --locked --all-features
+      - name: Install checksum-pinned coverage tool
+        env:
+          TOOL_SHA256: b3f68e625481fed9b16444174f3fa5ebcdbde4a1878803a35eabe2dcefcdc41a
+          TOOL_URL: https://github.com/taiki-e/cargo-llvm-cov/releases/download/v0.9.1/cargo-llvm-cov-x86_64-unknown-linux-gnu.tar.gz
+        run: |
+          set -euo pipefail
+          install -d -m 0755 "${RUNNER_TEMP}/dbxctl-tools"
+          curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location \
+            --output "${RUNNER_TEMP}/cargo-llvm-cov.tar.gz" "${TOOL_URL}"
+          echo "${TOOL_SHA256}  ${RUNNER_TEMP}/cargo-llvm-cov.tar.gz" | sha256sum --check --strict
+          tar --extract --gzip --file "${RUNNER_TEMP}/cargo-llvm-cov.tar.gz" \
+            --directory "${RUNNER_TEMP}/dbxctl-tools"
+          echo "${RUNNER_TEMP}/dbxctl-tools" >> "${GITHUB_PATH}"
+      - name: Measure coverage
+        run: cargo llvm-cov --locked --all-features --workspace --ignore-filename-regex '(/rustc/|/tests/)' --fail-under-lines 90
+      - name: Analyze all targets
+        run: cargo check --locked --all-targets --all-features
+      - name: Build dbxctl for upstream contract tests
+        run: cargo build --locked
+      - name: Download pinned Databricks CLI
+        run: |
+          curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location \
+            --output /tmp/databricks-cli.tar.gz \
+            https://github.com/databricks/cli/releases/download/v0.296.0/databricks_cli_0.296.0_linux_amd64.tar.gz
+          echo 'cd9fa9748878f35d3c1cdf6b99ac285ce3124117b8839b653a9513b2e87820e6  /tmp/databricks-cli.tar.gz' \
+            | sha256sum --check --strict
+          mkdir /tmp/databricks-cli
+          tar --extract --gzip --file /tmp/databricks-cli.tar.gz --directory /tmp/databricks-cli
+      - name: Check pinned upstream passthrough contract
+        env:
+          DATABRICKS_CLI_PATH: /tmp/databricks-cli/databricks
+        run: cargo test --locked --test upstream_contract -- --ignored
+
+  supply-chain:
+    name: CVEs, licenses, dependency policy
+    runs-on: ubuntu-24.04
+    container:
+      image: rust:1.89.0-bookworm@sha256:c9ac3fa8945b61dede1e4500d25028aa8fd8a8fe46365fcf9c0422f8d999b9b0
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Install checksum-pinned security tools
+        env:
+          AUDIT_SHA256: 7fb9497f8594b389e5fce5ef9b92db08432996895b2e0c5a0167a69ed445c428
+          AUDIT_URL: https://github.com/rustsec/rustsec/releases/download/cargo-audit/v0.22.2/cargo-audit-x86_64-unknown-linux-musl-v0.22.2.tgz
+          DENY_SHA256: 9f12ed4c49936e09b48bf862b595cde2fe64fcbd9d74dfacac6131ca824c8d5f
+          DENY_URL: https://github.com/EmbarkStudios/cargo-deny/releases/download/0.20.2/cargo-deny-0.20.2-x86_64-unknown-linux-musl.tar.gz
+        run: |
+          set -euo pipefail
+          install -d -m 0755 "${RUNNER_TEMP}/dbxctl-tools"
+
+          curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location \
+            --output "${RUNNER_TEMP}/cargo-audit.tgz" "${AUDIT_URL}"
+          echo "${AUDIT_SHA256}  ${RUNNER_TEMP}/cargo-audit.tgz" | sha256sum --check --strict
+          tar --extract --gzip --file "${RUNNER_TEMP}/cargo-audit.tgz" \
+            --directory "${RUNNER_TEMP}/dbxctl-tools" --strip-components 1 \
+            cargo-audit-x86_64-unknown-linux-musl-v0.22.2/cargo-audit
+
+          curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location \
+            --output "${RUNNER_TEMP}/cargo-deny.tar.gz" "${DENY_URL}"
+          echo "${DENY_SHA256}  ${RUNNER_TEMP}/cargo-deny.tar.gz" | sha256sum --check --strict
+          tar --extract --gzip --file "${RUNNER_TEMP}/cargo-deny.tar.gz" \
+            --directory "${RUNNER_TEMP}/dbxctl-tools" --strip-components 1 \
+            cargo-deny-0.20.2-x86_64-unknown-linux-musl/cargo-deny
+
+          chmod 0755 "${RUNNER_TEMP}/dbxctl-tools/cargo-audit" \
+            "${RUNNER_TEMP}/dbxctl-tools/cargo-deny"
+          echo "${RUNNER_TEMP}/dbxctl-tools" >> "${GITHUB_PATH}"
+      - name: Check RustSec advisories
+        run: cargo audit --deny warnings
+      - name: Check dependency policy
+        run: cargo deny check

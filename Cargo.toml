@@ -1,0 +1,23 @@
+[package]
+name = "dbxctl"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.89"
+description = "A focused control-plane wrapper for the Databricks CLI"
+license = "Apache-2.0"
+publish = false
+
+[dependencies]
+
+[profile.release]
+codegen-units = 1
+lto = "thin"
+panic = "abort"
+strip = "symbols"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = { level = "deny", priority = -1 }
+pedantic = { level = "deny", priority = -1 }
