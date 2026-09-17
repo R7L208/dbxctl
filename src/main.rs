@@ -2,7 +2,7 @@ use std::env;
 use std::ffi::{OsStr, OsString};
 use std::fmt;
 use std::path::PathBuf;
-use std::process::{Command, ExitCode};
+use std::process::{Command, ExitCode, ExitStatus};
 
 const MINIMUM_DATABRICKS_VERSION: Version = Version::new(0, 200, 0);
 
@@ -31,27 +31,33 @@ impl Version {
     }
 
     fn parse(output: &str) -> Option<Self> {
-        let candidate = output
-            .split_whitespace()
-            .find(|part| {
-                part.trim_start_matches('v')
-                    .starts_with(|c: char| c.is_ascii_digit())
-            })?
-            .trim_start_matches('v');
+        // Anchor on the documented `Databricks CLI <version>` banner rather than
+        // scanning for the first digit-leading token, so an unrelated number
+        // elsewhere in the output cannot be mistaken for the version.
+        let candidate = version_token(output)?.trim_start_matches('v');
         let mut parts = candidate.split('.');
-        Some(Self::new(
-            parts.next()?.parse().ok()?,
-            parts.next()?.parse().ok()?,
-            parts.next()?.split_once('-').map_or_else(
-                || candidate_patch(candidate),
-                |(patch, _)| patch.parse().ok(),
-            )?,
-        ))
+        let major = parts.next()?.parse().ok()?;
+        let minor = parts.next()?.parse().ok()?;
+        // The patch segment may carry a prerelease suffix such as `3-preview`.
+        let patch_segment = parts.next()?;
+        let patch = patch_segment
+            .split_once('-')
+            .map_or(patch_segment, |(patch, _)| patch)
+            .parse()
+            .ok()?;
+        Some(Self::new(major, minor, patch))
     }
 }
 
-fn candidate_patch(candidate: &str) -> Option<u64> {
-    candidate.split('.').nth(2)?.parse().ok()
+/// Returns the token following the `Databricks CLI` banner, if present.
+fn version_token(output: &str) -> Option<&str> {
+    let mut tokens = output.split_whitespace();
+    while let Some(token) = tokens.next() {
+        if token == "Databricks" && tokens.next() == Some("CLI") {
+            return tokens.next();
+        }
+    }
+    None
 }
 
 impl fmt::Display for Version {
@@ -132,35 +138,63 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
 }
 
 fn run_with_binary(cli: Cli, binary: &OsStr) -> Result<ExitCode, String> {
-    if matches!(cli, Cli::Help | Cli::Version) {
-        match cli {
-            Cli::Help => print_help(),
-            Cli::Version => println!("dbxctl {}", env!("CARGO_PKG_VERSION")),
-            Cli::Doctor | Cli::Databricks(_) => unreachable!(),
-        }
-        return Ok(ExitCode::SUCCESS);
-    }
-
-    let version = validate_databricks(binary)?;
-
     match cli {
-        Cli::Doctor => {
-            println!("dbxctl {}", env!("CARGO_PKG_VERSION"));
-            println!("Databricks CLI {version} ({})", binary.display());
+        Cli::Help => {
+            print_help();
             Ok(ExitCode::SUCCESS)
         }
-        Cli::Databricks(args) => {
-            let status = Command::new(binary)
-                .args(args)
-                .status()
-                .map_err(|error| format!("failed to run Databricks CLI: {error}"))?;
-            Ok(status
-                .code()
-                .and_then(|code| u8::try_from(code).ok())
-                .map_or(ExitCode::FAILURE, ExitCode::from))
+        Cli::Version => {
+            println!("dbxctl {}", env!("CARGO_PKG_VERSION"));
+            Ok(ExitCode::SUCCESS)
         }
-        Cli::Help | Cli::Version => unreachable!(),
+        Cli::Doctor => Ok(run_doctor(binary)),
+        Cli::Databricks(args) => run_databricks(binary, args),
     }
+}
+
+/// Reports dependency status without aborting on the first problem it exists to
+/// diagnose. Returns a failure exit code when the Databricks CLI is missing or
+/// unsupported so the command stays usable as a scripted health check.
+fn run_doctor(binary: &OsStr) -> ExitCode {
+    println!("dbxctl {}", env!("CARGO_PKG_VERSION"));
+    match validate_databricks(binary) {
+        Ok(version) => {
+            println!("Databricks CLI {version} ({})", binary.display());
+            ExitCode::SUCCESS
+        }
+        Err(problem) => {
+            println!("Databricks CLI ({}): {problem}", binary.display());
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn run_databricks(binary: &OsStr, args: Vec<OsString>) -> Result<ExitCode, String> {
+    let status = Command::new(binary)
+        .args(args)
+        .status()
+        .map_err(|error| format!("failed to run Databricks CLI: {error}"))?;
+    // Faithfully propagate the upstream exit status, including codes above 255
+    // (possible on Windows) and signal termination (Unix), neither of which
+    // `ExitCode` can represent.
+    std::process::exit(passthrough_exit_code(status));
+}
+
+#[cfg(unix)]
+fn passthrough_exit_code(status: ExitStatus) -> i32 {
+    use std::os::unix::process::ExitStatusExt;
+
+    // A process terminated by a signal has no exit code; follow the shell
+    // convention of reporting 128 + the signal number.
+    status
+        .code()
+        .unwrap_or_else(|| 128 + status.signal().unwrap_or(0))
+}
+
+#[cfg(not(unix))]
+fn passthrough_exit_code(status: ExitStatus) -> i32 {
+    // On Windows the full 32-bit process exit code is preserved through `code()`.
+    status.code().unwrap_or(1)
 }
 
 fn main() -> ExitCode {
@@ -203,6 +237,14 @@ mod tests {
     #[test]
     fn rejects_unrelated_output() {
         assert_eq!(Version::parse("not installed"), None);
+    }
+
+    #[test]
+    fn ignores_unrelated_numbers_before_the_banner() {
+        assert_eq!(
+            Version::parse("build 12345\nDatabricks CLI v0.296.0\n"),
+            Some(Version::new(0, 296, 0))
+        );
     }
 
     #[test]

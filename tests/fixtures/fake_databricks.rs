@@ -12,6 +12,13 @@ fn main() -> ExitCode {
         println!("<{}>", argument.to_string_lossy());
     }
 
+    if env::var_os("FAKE_DATABRICKS_ABORT").is_some() {
+        io::stdout().flush().expect("flush stdout before abort");
+        // Terminates the process via SIGABRT on Unix, exercising the wrapper's
+        // signal-termination exit-code path.
+        std::process::abort();
+    }
+
     env::var("FAKE_DATABRICKS_EXIT_CODE")
         .ok()
         .and_then(|code| code.parse::<u8>().ok())
