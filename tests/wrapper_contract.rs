@@ -59,7 +59,13 @@ fn reports_broken_version_command() {
         .output()
         .expect("run dbxctl");
     assert_eq!(output.status.code(), Some(1));
-    assert!(String::from_utf8_lossy(&output.stdout).contains("exit status: 9"));
+    // The upstream exit status renders as "exit status: 9" on Unix and
+    // "exit code: 9" on Windows.
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("exit status: 9") || stdout.contains("exit code: 9"),
+        "unexpected doctor output: {stdout}"
+    );
 }
 
 #[test]
