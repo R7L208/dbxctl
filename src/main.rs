@@ -67,7 +67,15 @@ impl fmt::Display for Version {
 }
 
 fn databricks_binary() -> PathBuf {
-    env::var_os("DATABRICKS_CLI_PATH").map_or_else(|| PathBuf::from("databricks"), PathBuf::from)
+    resolve_binary(env::var_os("DATABRICKS_CLI_PATH"))
+}
+
+/// Resolves the Databricks binary from an optional explicit override, falling
+/// back to `databricks` on `PATH` when none is set. Split from `databricks_binary`
+/// so the override and default branches are testable without mutating the
+/// process environment.
+fn resolve_binary(explicit: Option<OsString>) -> PathBuf {
+    explicit.map_or_else(|| PathBuf::from("databricks"), PathBuf::from)
 }
 
 fn parse_args(mut args: impl Iterator<Item = OsString>) -> Result<Cli, String> {
@@ -211,8 +219,9 @@ fn main() -> ExitCode {
 #[cfg(test)]
 mod tests {
     use std::ffi::OsString;
+    use std::path::PathBuf;
 
-    use super::{Cli, Version, parse_args};
+    use super::{Cli, Version, parse_args, resolve_binary};
 
     fn args(values: &[&str]) -> impl Iterator<Item = OsString> {
         values.iter().map(OsString::from)
@@ -252,6 +261,24 @@ mod tests {
         assert_eq!(Version::parse("Databricks CLI v1.2"), None);
         assert_eq!(Version::parse("Databricks CLI v1.two.3"), None);
         assert_eq!(Version::parse("Databricks CLI v1.2.three"), None);
+    }
+
+    #[test]
+    fn rejects_missing_minor_and_non_numeric_major() {
+        // Only a major segment: the minor `?` short-circuits to None.
+        assert_eq!(Version::parse("Databricks CLI v1"), None);
+        // Non-numeric major: the `.ok()?` on the major segment short-circuits.
+        assert_eq!(Version::parse("Databricks CLI vx.2.3"), None);
+    }
+
+    #[test]
+    fn resolves_binary_from_override_or_defaults_to_path() {
+        assert_eq!(
+            resolve_binary(Some(OsString::from("/opt/databricks/bin/databricks"))),
+            PathBuf::from("/opt/databricks/bin/databricks")
+        );
+        // No override: falls back to bare `databricks` for `PATH` resolution.
+        assert_eq!(resolve_binary(None), PathBuf::from("databricks"));
     }
 
     #[test]
