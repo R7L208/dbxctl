@@ -108,6 +108,38 @@ fn propagates_signal_termination_as_128_plus_signal() {
 }
 
 #[test]
+fn reports_passthrough_spawn_failure() {
+    // Passthrough to a binary that cannot be launched propagates the error out
+    // through `main`, unlike `doctor`, which renders the problem itself.
+    let missing =
+        std::env::temp_dir().join(format!("dbxctl-missing-passthrough-{}", std::process::id()));
+    let output = dbxctl()
+        .env("DATABRICKS_CLI_PATH", missing)
+        .args(["databricks", "jobs", "list"])
+        .output()
+        .expect("run dbxctl");
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("failed to run Databricks CLI"),
+        "unexpected stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn reports_unknown_command() {
+    // An unrecognized wrapper command surfaces the parse error on stderr and a
+    // failure exit code.
+    let output = dbxctl().arg("bogus").output().expect("run dbxctl");
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("unknown command bogus"),
+        "unexpected stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
 fn doctor_accepts_supported_databricks_cli() {
     let output = dbxctl()
         .env("DATABRICKS_CLI_PATH", fake_databricks())

@@ -13,3 +13,6 @@ debug/
 .env
 .isaac/
 
+# Personal learning notes (Claude teaching sessions)
+.learning/
+
