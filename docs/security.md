@@ -44,7 +44,9 @@ The macOS and Windows portability jobs similarly install Cargo, `rustc`, and
 the target standard library from dated Rust 1.89.0 standalone archives rather
 than asking `rustup` to resolve the minimal toolchain. The workflow contains
 the archive SHA-256 values for macOS Arm64, macOS x86-64, and Windows x86-64
-and rejects runner architectures without an explicit checksum set.
+and rejects runner architectures without an explicit checksum set. Each job
+also asserts the installed release and host target before running project
+commands.
 
 | Target | Cargo SHA-256 | rustc SHA-256 | standard library SHA-256 |
 | --- | --- | --- | --- |
@@ -54,6 +56,10 @@ and rejects runner architectures without an explicit checksum set.
 
 Tools and Cargo state are installed under the job's ephemeral `RUNNER_TEMP`.
 They are not restored from shared caches or written into the repository.
+`RUSTUP_DIST_SERVER` points to a reserved, non-resolving domain throughout the
+workflow so an accidental future `rustup` operation fails closed instead of
+downloading unpinned content. Both Linux container jobs explicitly select the
+toolchain already present in the digest-pinned image.
 
 ## Analysis
 

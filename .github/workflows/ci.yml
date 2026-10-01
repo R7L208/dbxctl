@@ -15,6 +15,7 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: "1"
+  RUSTUP_DIST_SERVER: https://rustup-downloads-disabled.invalid
 
 jobs:
   portability:
@@ -106,8 +107,14 @@ jobs:
           else
             echo "${toolchain_root}/bin" >> "${GITHUB_PATH}"
           fi
-          rustc --version --verbose
-          cargo --version --verbose
+          rustc_version="$(rustc --version --verbose)"
+          cargo_version="$(cargo --version --verbose)"
+          echo "${rustc_version}"
+          echo "${cargo_version}"
+          grep --fixed-strings --line-regexp 'release: 1.89.0' <<< "${rustc_version}"
+          grep --fixed-strings --line-regexp "host: ${rust_target}" <<< "${rustc_version}"
+          grep --fixed-strings --line-regexp 'release: 1.89.0' <<< "${cargo_version}"
+          grep --fixed-strings --line-regexp "host: ${rust_target}" <<< "${cargo_version}"
       - name: Run tests
         run: cargo test --locked --all-features
       - name: Analyze all targets
@@ -164,6 +171,14 @@ jobs:
 
           cargo clippy --version
           cargo fmt --version
+          rustc_version="$(rustc --version --verbose)"
+          cargo_version="$(cargo --version --verbose)"
+          grep --fixed-strings --line-regexp 'release: 1.89.0' <<< "${rustc_version}"
+          grep --fixed-strings --line-regexp 'host: x86_64-unknown-linux-gnu' \
+            <<< "${rustc_version}"
+          grep --fixed-strings --line-regexp 'release: 1.89.0' <<< "${cargo_version}"
+          grep --fixed-strings --line-regexp 'host: x86_64-unknown-linux-gnu' \
+            <<< "${cargo_version}"
           test -x "${rust_sysroot}/lib/rustlib/x86_64-unknown-linux-gnu/bin/llvm-profdata"
       - name: Check formatting
         run: cargo fmt --all --check
@@ -210,11 +225,25 @@ jobs:
     runs-on: ubuntu-24.04
     container:
       image: rust:1.89.0-bookworm@sha256:c9ac3fa8945b61dede1e4500d25028aa8fd8a8fe46365fcf9c0422f8d999b9b0
+    env:
+      RUSTUP_TOOLCHAIN: 1.89.0-x86_64-unknown-linux-gnu
     timeout-minutes: 20
     steps:
       - name: Isolate Cargo home in ephemeral storage
         shell: bash
         run: echo "CARGO_HOME=${RUNNER_TEMP}/cargo-home" >> "$GITHUB_ENV"
+      - name: Verify pinned Rust toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustc_version="$(rustc --version --verbose)"
+          cargo_version="$(cargo --version --verbose)"
+          grep --fixed-strings --line-regexp 'release: 1.89.0' <<< "${rustc_version}"
+          grep --fixed-strings --line-regexp 'host: x86_64-unknown-linux-gnu' \
+            <<< "${rustc_version}"
+          grep --fixed-strings --line-regexp 'release: 1.89.0' <<< "${cargo_version}"
+          grep --fixed-strings --line-regexp 'host: x86_64-unknown-linux-gnu' \
+            <<< "${cargo_version}"
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
