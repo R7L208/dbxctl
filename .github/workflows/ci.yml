@@ -45,6 +45,8 @@ jobs:
     runs-on: ubuntu-24.04
     container:
       image: rust:1.89.0-bookworm@sha256:c9ac3fa8945b61dede1e4500d25028aa8fd8a8fe46365fcf9c0422f8d999b9b0
+    env:
+      RUSTUP_TOOLCHAIN: 1.89.0-x86_64-unknown-linux-gnu
     timeout-minutes: 20
     steps:
       - name: Isolate Cargo home in ephemeral storage
@@ -54,8 +56,42 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Install Rust components
-        run: rustup component add --toolchain 1.89.0-x86_64-unknown-linux-gnu clippy llvm-tools-preview rustfmt
+      - name: Install checksum-pinned Rust components
+        shell: bash
+        env:
+          CLIPPY_SHA256: c6c362c6cd74567022e9ba0c16f6676f8c2b73d955adcf1f6f4c51cf15e57ce8
+          CLIPPY_URL: https://static.rust-lang.org/dist/2025-08-07/clippy-1.89.0-x86_64-unknown-linux-gnu.tar.xz
+          LLVM_TOOLS_SHA256: bb0ced899fd1ac628f26e375adabc970b415c516ec82fb7cf9ac3c63cb4d0fee
+          LLVM_TOOLS_URL: https://static.rust-lang.org/dist/2025-08-07/llvm-tools-1.89.0-x86_64-unknown-linux-gnu.tar.xz
+          RUSTFMT_SHA256: 540eb7adf43e37b22936f981c630b10c63915f64f3c227d981a8b592ece33430
+          RUSTFMT_URL: https://static.rust-lang.org/dist/2025-08-07/rustfmt-1.89.0-x86_64-unknown-linux-gnu.tar.xz
+        run: |
+          set -euo pipefail
+          rust_sysroot="$(rustc --print sysroot)"
+
+          install_component() {
+            component_name="$1"
+            component_url="$2"
+            component_sha256="$3"
+            archive="${RUNNER_TEMP}/${component_name}.tar.xz"
+            component_dir="${RUNNER_TEMP}/${component_name}"
+
+            curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location \
+              --output "${archive}" "${component_url}"
+            echo "${component_sha256}  ${archive}" | sha256sum --check --strict
+            install -d -m 0755 "${component_dir}"
+            tar --extract --xz --file "${archive}" --directory "${component_dir}" \
+              --strip-components 1
+            sh "${component_dir}/install.sh" --prefix="${rust_sysroot}" --disable-ldconfig
+          }
+
+          install_component clippy "${CLIPPY_URL}" "${CLIPPY_SHA256}"
+          install_component llvm-tools "${LLVM_TOOLS_URL}" "${LLVM_TOOLS_SHA256}"
+          install_component rustfmt "${RUSTFMT_URL}" "${RUSTFMT_SHA256}"
+
+          cargo clippy --version
+          cargo fmt --version
+          test -x "${rust_sysroot}/lib/rustlib/x86_64-unknown-linux-gnu/bin/llvm-profdata"
       - name: Check formatting
         run: cargo fmt --all --check
       - name: Run Clippy
