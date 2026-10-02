@@ -26,8 +26,40 @@ verified. Current pinned tools are:
 | cargo-deny | 0.20.2, musl | `9f12ed4c49936e09b48bf862b595cde2fe64fcbd9d74dfacac6131ca824c8d5f` |
 | Databricks CLI | 0.296.0, Linux amd64 | `cd9fa9748878f35d3c1cdf6b99ac285ce3124117b8839b653a9513b2e87820e6` |
 
+The Linux quality job also downloads the Rust 1.89.0 Clippy, LLVM tools, and
+Rustfmt component archives directly from the dated Rust distribution path.
+Their SHA-256 values are pinned in the workflow and verified before their
+installers run. This avoids allowing `rustup component add` to resolve and
+download components dynamically at job runtime. The job also selects the
+already-installed, fully qualified Rust toolchain through `RUSTUP_TOOLCHAIN`,
+so the repository's toolchain file cannot trigger implicit component setup.
+
+| Rust component | Archive SHA-256 |
+| --- | --- |
+| Clippy | `c6c362c6cd74567022e9ba0c16f6676f8c2b73d955adcf1f6f4c51cf15e57ce8` |
+| LLVM tools | `bb0ced899fd1ac628f26e375adabc970b415c516ec82fb7cf9ac3c63cb4d0fee` |
+| Rustfmt | `540eb7adf43e37b22936f981c630b10c63915f64f3c227d981a8b592ece33430` |
+
+The macOS and Windows portability jobs similarly install Cargo, `rustc`, and
+the target standard library from dated Rust 1.89.0 standalone archives rather
+than asking `rustup` to resolve the minimal toolchain. The workflow contains
+the archive SHA-256 values for macOS Arm64, macOS x86-64, and Windows x86-64
+and rejects runner architectures without an explicit checksum set. Each job
+also asserts the installed release and host target before running project
+commands.
+
+| Target | Cargo SHA-256 | rustc SHA-256 | standard library SHA-256 |
+| --- | --- | --- | --- |
+| `aarch64-apple-darwin` | `545517d16ac76789aa6ce801cbc3eeecc9acaf43f3ccb63148c3577f2bb4b8d3` | `6d2cf6164bef00ff3d2c37ca0a0658ffb7c9c3178882a72d78e35abeba888860` | `1f729f8ba21725618ab894f14cc38f01470f1d15ea76a81fac2da63291bed75c` |
+| `x86_64-apple-darwin` | `81fabf0d783af844c7dd74dfe10d0302dd063775789a914f29b33e3d46ee1cf0` | `04f3acf7ddfb998fa2713226fd8528e6157b9030f9a6ac6678133d82d5c099f9` | `09780642e83b12085500ea78dcb46112a546467352cc4a4dd229f22e03d4a5f0` |
+| `x86_64-pc-windows-msvc` | `8c0a40a5411746ff6600d93acd16652fef56702196bb25b940ff399d7e107f40` | `76f70bbd3dc8681ee189931bc5e270cd9524ff3d17738d87f609bba4980c466c` | `ba81500406fdf8a3a81078df2129bd6e4793b579c9e1a498563670bccad92611` |
+
 Tools and Cargo state are installed under the job's ephemeral `RUNNER_TEMP`.
 They are not restored from shared caches or written into the repository.
+`RUSTUP_DIST_SERVER` points to a reserved, non-resolving domain throughout the
+workflow so an accidental future `rustup` operation fails closed instead of
+downloading unpinned content. Both Linux container jobs explicitly select the
+toolchain already present in the digest-pinned image.
 
 ## Release Evidence
 
@@ -73,8 +105,10 @@ vulnerabilities, and passed the advisory, ban, license, and source policies.
 ## Remaining Trust Boundaries
 
 - GitHub's `ubuntu-24.04` runner remains the Docker host.
-- Native macOS and Windows runner images are mutable.
-- Rustfmt, Clippy, and LLVM components are downloaded by rustup at job runtime.
+- Native macOS and Windows runner images are mutable. The `macos-15` and
+  `windows-2025` labels select an OS generation, but GitHub does not expose
+  digest-pinned hosted images; removing this boundary would require controlled
+  self-hosted runners.
 - The live RustSec database is trusted as security data.
 - There is no automated workflow security scanner or policy preventing a
   future unpinned Action.
@@ -86,4 +120,3 @@ vulnerabilities, and passed the advisory, ban, license, and source policies.
 
 These gaps should be addressed individually so each trust decision and update
 mechanism can be reviewed independently.
-
