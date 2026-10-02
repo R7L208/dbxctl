@@ -13,8 +13,12 @@ rust:1.89.0-bookworm@sha256:c9ac3fa8945b61dede1e4500d25028aa8fd8a8fe46365fcf9c04
 ```
 
 This pins the Linux userspace, compiler, Cargo, and base utilities. GitHub
-Actions use full commit SHAs, token permissions are read-only, checkout does
-not persist credentials, and jobs use timeouts and concurrency cancellation.
+Actions use full commit SHAs, checkout does not persist credentials in build
+and release jobs, and jobs use timeouts and concurrency cancellation. Most CI
+jobs have read-only tokens. Release jobs additionally receive narrowly scoped
+OIDC and attestation permissions. The reviewed pin-update workflow has
+`contents: write` and `pull-requests: write` so it can propose, but not merge,
+an update.
 
 Downloaded executables are treated as inert until their committed SHA-256 is
 verified. Current pinned tools are:
@@ -63,7 +67,7 @@ toolchain already present in the digest-pinned image.
 
 ## Release Evidence
 
-Pushing a version tag such as `v0.1.0` builds locked native releases for Linux
+Pushing a version tag such as `v0.1.0` builds locked native packages for Linux
 x86-64, macOS Arm64 or x86-64 (matching the hosted runner), and Windows x86-64.
 The tag must exactly match the version in `Cargo.toml`. Each job packages the
 binary with its license and Cargo manifests, records the archive's SHA-256
@@ -73,8 +77,10 @@ All platforms use the same package layout and normalized `tar.gz` format.
 Archive entry order, timestamps, ownership, user names, and gzip metadata are
 fixed. Builds disable Cargo incremental compilation and remap the checkout
 path; macOS disables the random Mach-O UUID and Windows enables the linker's
-reproducible-build mode. CI packages each native debug binary twice and rejects
-different archive bytes.
+reproducible-build mode. CI packages the same native debug binary twice and
+rejects different archive bytes. This tests deterministic packaging for a
+fixed binary; the project does not yet compare binaries from independent
+builds or claim bit-for-bit reproducible native builds.
 
 GitHub Artifact Attestations create two Sigstore-signed, tamper-evident records:
 
@@ -92,11 +98,16 @@ gh attestation verify dbxctl-0.1.0-x86_64-unknown-linux-gnu.tar.gz \
 sha256sum --check dbxctl-0.1.0-x86_64-unknown-linux-gnu.tar.gz.sha256
 ```
 
-The workflow uploads each archive, checksum, and standalone SBOM as a GitHub
-Actions artifact. Publishing those files as GitHub Release assets remains a
-separate release-management decision. The macOS and Windows system linkers and
-hosted runner images remain mutable trust boundaries even though the Rust
-compiler, standard library, and Cargo archives are checksum-pinned.
+The workflow uploads each archive, checksum, and standalone SBOM only as a
+GitHub Actions workflow artifact. Those artifacts expire after 30 days and do
+not appear as durable downloads on the repository's GitHub Releases page.
+Publishing durable GitHub Release assets remains a separate release-management
+task. The macOS and Windows system linkers and hosted runner images remain
+mutable trust boundaries even though the Rust compiler, standard library, and
+Cargo archives are checksum-pinned.
+
+See the [Release runbook](releases.md) for version preparation, tag creation,
+workflow monitoring, cross-platform verification, and failure recovery.
 
 ## Analysis
 
@@ -126,7 +137,10 @@ vulnerabilities, and passed the advisory, ban, license, and source policies.
 - Release binaries are not signed in their platform-native formats. Each
   package digest is covered by signed provenance, which requires an
   attestation-aware verifier.
-- No controlled dependency-update procedure exists yet.
+- The pin-update workflow downloads new upstream artifacts and calculates their
+  hashes before opening a review PR. Reviewers must validate the upstream
+  release identity and CI results; a checksum calculated from a compromised
+  upstream artifact does not independently establish its trustworthiness.
 
 These gaps should be addressed individually so each trust decision and update
 mechanism can be reviewed independently.

@@ -102,5 +102,6 @@ scripts/update-pins.py --help
 - macOS: native tests and analysis
 - Windows: native tests and analysis
 
-The Windows lane must complete successfully in GitHub Actions before the
-platform is considered verified.
+All three platform lanes have completed successfully in GitHub Actions. Native
+macOS and Windows builds still inherit their hosted runner images and system
+linkers as mutable trust boundaries.
