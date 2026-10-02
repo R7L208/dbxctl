@@ -1,0 +1,119 @@
+name: Release artifacts
+
+on:
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTUP_DIST_SERVER: https://rustup-downloads-disabled.invalid
+
+jobs:
+  linux:
+    name: Linux x86-64 artifact and attestations
+    runs-on: ubuntu-24.04
+    container:
+      image: rust:1.89.0-bookworm@sha256:c9ac3fa8945b61dede1e4500d25028aa8fd8a8fe46365fcf9c0422f8d999b9b0
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    env:
+      RUSTUP_TOOLCHAIN: 1.89.0-x86_64-unknown-linux-gnu
+    steps:
+      - name: Isolate Cargo home in ephemeral storage
+        shell: bash
+        run: echo "CARGO_HOME=${RUNNER_TEMP}/cargo-home" >> "$GITHUB_ENV"
+
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Validate release version
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag_version="${GITHUB_REF_NAME#v}"
+          crate_version="$(sed -n 's/^version = "\([^"]*\)"$/\1/p' Cargo.toml)"
+          test -n "${crate_version}"
+          if [[ "${tag_version}" != "${crate_version}" ]]; then
+            echo "Tag version ${tag_version} does not match Cargo.toml ${crate_version}" >&2
+            exit 1
+          fi
+
+      - name: Build locked release binary
+        run: cargo build --release --locked
+
+      - name: Package reproducible release archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          archive_root="dbxctl-${version}-x86_64-unknown-linux-gnu"
+          install -d -m 0755 "dist/${archive_root}"
+          install -m 0755 target/release/dbxctl "dist/${archive_root}/dbxctl"
+          install -m 0644 LICENSE README.md Cargo.toml Cargo.lock "dist/${archive_root}/"
+          SOURCE_DATE_EPOCH="$(git show -s --format=%ct HEAD)"
+          export SOURCE_DATE_EPOCH
+          tar --create --gzip --file "dist/${archive_root}.tar.gz" \
+            --sort=name --mtime="@${SOURCE_DATE_EPOCH}" --owner=0 --group=0 \
+            --numeric-owner --directory dist "${archive_root}"
+          (
+            cd dist
+            sha256sum "${archive_root}.tar.gz" > "${archive_root}.tar.gz.sha256"
+          )
+          echo "ARCHIVE=dist/${archive_root}.tar.gz" >> "$GITHUB_ENV"
+          echo "SBOM=dist/${archive_root}.spdx.json" >> "$GITHUB_ENV"
+          echo "PACKAGE_ROOT=dist/${archive_root}" >> "$GITHUB_ENV"
+
+      - name: Install checksum-pinned Syft
+        shell: bash
+        env:
+          SYFT_SHA256: caeedb81fb0491615f1ebd1761e4145d41ee86dd2cc7bf80669f9f5ad9d6133d
+          SYFT_URL: https://github.com/anchore/syft/releases/download/v1.52.0/syft_1.52.0_linux_amd64.tar.gz
+        run: |
+          set -euo pipefail
+          curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location \
+            --output "${RUNNER_TEMP}/syft.tar.gz" "${SYFT_URL}"
+          echo "${SYFT_SHA256}  ${RUNNER_TEMP}/syft.tar.gz" | sha256sum --check --strict
+          install -d -m 0755 "${RUNNER_TEMP}/dbxctl-tools"
+          tar --extract --gzip --file "${RUNNER_TEMP}/syft.tar.gz" \
+            --directory "${RUNNER_TEMP}/dbxctl-tools" syft
+          chmod 0755 "${RUNNER_TEMP}/dbxctl-tools/syft"
+          echo "${RUNNER_TEMP}/dbxctl-tools" >> "$GITHUB_PATH"
+
+      - name: Generate SPDX SBOM
+        shell: bash
+        run: syft scan "dir:${PACKAGE_ROOT}" --output "spdx-json=${SBOM}"
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: ${{ env.ARCHIVE }}
+
+      - name: Attest SBOM to release archive
+        uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e # v4.1.0
+        with:
+          subject-path: ${{ env.ARCHIVE }}
+          sbom-path: ${{ env.SBOM }}
+
+      - name: Upload release bundle
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: dbxctl-${{ github.ref_name }}-x86_64-unknown-linux-gnu
+          path: |
+            ${{ env.ARCHIVE }}
+            ${{ env.ARCHIVE }}.sha256
+            ${{ env.SBOM }}
+          if-no-files-found: error
+          retention-days: 30

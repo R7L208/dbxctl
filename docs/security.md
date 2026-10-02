@@ -61,6 +61,34 @@ workflow so an accidental future `rustup` operation fails closed instead of
 downloading unpinned content. Both Linux container jobs explicitly select the
 toolchain already present in the digest-pinned image.
 
+## Release Evidence
+
+Pushing a version tag such as `v0.1.0` builds a locked Linux x86-64 release in
+the digest-pinned Rust container. The tag must exactly match the version in
+`Cargo.toml`. The workflow packages the binary with its license and Cargo
+manifests, records the archive's SHA-256 digest, and generates an SPDX JSON
+SBOM with checksum-pinned Syft 1.52.0.
+
+GitHub Artifact Attestations create two Sigstore-signed, tamper-evident records:
+
+- SLSA build provenance binding the workflow identity and source revision to
+  the release archive digest; and
+- an SBOM attestation binding the SPDX document to that same archive digest.
+
+After downloading the archive, verify both records with GitHub CLI:
+
+```console
+gh attestation verify dbxctl-0.1.0-x86_64-unknown-linux-gnu.tar.gz \
+  --repo R7L208/dbxctl
+gh attestation verify dbxctl-0.1.0-x86_64-unknown-linux-gnu.tar.gz \
+  --repo R7L208/dbxctl --predicate-type https://spdx.dev/Document/v2.3
+sha256sum --check dbxctl-0.1.0-x86_64-unknown-linux-gnu.tar.gz.sha256
+```
+
+The workflow uploads the archive, checksum, and standalone SBOM as a GitHub
+Actions artifact. Publishing those files as GitHub Release assets remains a
+separate release-management decision.
+
 ## Analysis
 
 `cargo-audit` checks the committed lockfile against the live RustSec advisory
@@ -84,9 +112,11 @@ vulnerabilities, and passed the advisory, ban, license, and source policies.
 - The live RustSec database is trusted as security data.
 - There is no automated workflow security scanner or policy preventing a
   future unpinned Action.
-- Releases do not yet include an SBOM, signed provenance, attestations, or
-  signed binaries.
-- No release workflow or controlled dependency-update procedure exists yet.
+- Release archives and SBOMs are not yet published as durable GitHub Release
+  assets; workflow artifacts expire after 30 days.
+- Release binaries themselves are not directly signed. Their digest is
+  covered by signed provenance, which requires an attestation-aware verifier.
+- No controlled dependency-update procedure exists yet.
 
 These gaps should be addressed individually so each trust decision and update
 mechanism can be reviewed independently.
