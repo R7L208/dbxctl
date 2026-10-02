@@ -93,8 +93,8 @@ upstream contract commands.
 CI uses full commit SHAs for GitHub Actions, checksum-pinned analysis tools,
 an OCI digest-pinned Linux build image, an ephemeral Cargo home, RustSec CVE
 analysis, and `cargo-deny` dependency policy enforcement. Version tags also
-produce an SPDX JSON SBOM and GitHub/Sigstore-signed build provenance and SBOM
-attestations for the Linux release archive.
+produce reproducible Linux, macOS, and Windows archives with SPDX JSON SBOMs
+and GitHub/Sigstore-signed build provenance and SBOM attestations.
 
 See [Security and supply chain](docs/security.md) for the trust model and known
 gaps. See [Project status](docs/status.md) for completed work and next steps.
