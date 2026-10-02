@@ -34,7 +34,9 @@ def digest(url: str) -> str:
     return hashlib.sha256(fetch(url)).hexdigest()
 
 
-def replace(pattern: str, replacement: str, files: list[Path] = FILES) -> None:
+def replace(pattern: str, replacement: str, files: list[Path] | None = None) -> None:
+    if files is None:
+        files = FILES
     count = 0
     for path in files:
         text = path.read_text()
@@ -47,7 +49,16 @@ def replace(pattern: str, replacement: str, files: list[Path] = FILES) -> None:
 
 
 def replace_value(name: str, value: str) -> None:
-    replace(rf"({re.escape(name)}:\s*)[0-9a-f]{{64}}", rf"\g<1>{value}")
+    pattern = rf"{re.escape(name)}:\s*([0-9a-f]{{64}})"
+    old_values = {
+        match.group(1)
+        for path in FILES
+        for match in re.finditer(pattern, path.read_text())
+    }
+    if not old_values:
+        raise RuntimeError(f"pin variable not found: {name}")
+    for old_value in old_values:
+        replace(re.escape(old_value), value)
 
 
 def github_release(repo: str, tag: str, token: str | None) -> dict:
@@ -131,6 +142,10 @@ def update_github_tools(args: argparse.Namespace) -> None:
             f"download/{args.deny}/cargo-deny-{args.deny}"
         )
         replace(version_pattern, replacement)
+    replace(r"cargo-audit-x86_64-unknown-linux-musl-v[0-9.]+\.tgz", f"cargo-audit-x86_64-unknown-linux-musl-v{args.audit}.tgz")
+    replace(r"(\| cargo-llvm-cov \| )[0-9.]+", rf"\g<1>{args.llvm_cov}")
+    replace(r"(\| cargo-audit \| )[0-9.]+", rf"\g<1>{args.audit}")
+    replace(r"(\| cargo-deny \| )[0-9.]+", rf"\g<1>{args.deny}")
 
     syft = github_release("anchore/syft", f"v{args.syft}", token)
     linux_asset = f"syft_{args.syft}_linux_amd64.tar.gz"
@@ -144,6 +159,7 @@ def update_github_tools(args: argparse.Namespace) -> None:
         )
     replace(r"syft_[0-9.]+_", f"syft_{args.syft}_")
     replace(r"syft/releases/download/v[0-9.]+", f"syft/releases/download/v{args.syft}")
+    replace(r"Syft [0-9]+(?:\.[0-9]+)+", f"Syft {args.syft}")
 
     db = github_release("databricks/cli", f"v{args.databricks}", token)
     db_asset = f"databricks_cli_{args.databricks}_linux_amd64.tar.gz"
