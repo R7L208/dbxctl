@@ -69,9 +69,8 @@ The implementation and Rust test fixture are platform-neutral. CI runs native
 tests on Linux, macOS, and Windows. Linux quality and security jobs execute in
 an OCI digest-pinned Rust container.
 
-Linux and macOS have been exercised locally. The Windows job is configured but
-still requires its first successful GitHub Actions run before Windows support
-is considered verified.
+Linux and macOS have been exercised locally. Linux, macOS, and Windows native
+test lanes have also completed successfully in GitHub Actions.
 
 ## Development
 
@@ -93,11 +92,16 @@ upstream contract commands.
 CI uses full commit SHAs for GitHub Actions, checksum-pinned analysis tools,
 an OCI digest-pinned Linux build image, an ephemeral Cargo home, RustSec CVE
 analysis, and `cargo-deny` dependency policy enforcement. Version tags also
-produce reproducible Linux, macOS, and Windows archives with SPDX JSON SBOMs
-and GitHub/Sigstore-signed build provenance and SBOM attestations.
+produce normalized Linux, macOS, and Windows archives with SPDX JSON SBOMs and
+GitHub/Sigstore-signed build provenance and SBOM attestations.
+
+These packages are currently stored as GitHub Actions workflow artifacts,
+which expire after 30 days. They are not yet published as durable assets on the
+repository's GitHub Releases page.
 
 See [Security and supply chain](docs/security.md) for the trust model and known
-gaps. See [Project status](docs/status.md) for completed work and next steps.
+gaps, [Release runbook](docs/releases.md) for the operator procedure, and
+[Project status](docs/status.md) for completed work and next steps.
 
 ## License
 

@@ -1,0 +1,67 @@
+name: Update supply-chain pins
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "37 15 * * 1"
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: update-supply-chain-pins
+  cancel-in-progress: false
+
+jobs:
+  update:
+    name: Discover updates and propose PR
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install pinned Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13.7"
+          check-latest: false
+      - name: Run updater regression tests
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: python -m unittest discover -s tests -p 'test_*.py' -v
+      - name: Discover latest stable versions
+        id: versions
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: scripts/discover-pin-versions.py --github-output "$GITHUB_OUTPUT"
+      - name: Refresh versions, hashes, and image digest
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          scripts/update-pins.py \
+            --rust "${{ steps.versions.outputs.rust }}" \
+            --rust-date "${{ steps.versions.outputs.rust_date }}" \
+            --llvm-cov "${{ steps.versions.outputs.llvm_cov }}" \
+            --audit "${{ steps.versions.outputs.audit }}" \
+            --deny "${{ steps.versions.outputs.deny }}" \
+            --syft "${{ steps.versions.outputs.syft }}" \
+            --databricks "${{ steps.versions.outputs.databricks }}"
+      - name: Validate generated changes
+        run: |
+          git diff --check
+          PYTHONDONTWRITEBYTECODE=1 python -m unittest discover -s tests -p 'test_*.py' -v
+      - name: Open reviewed update pull request
+        uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
+        with:
+          token: ${{ secrets.PIN_UPDATE_TOKEN || github.token }}
+          branch: automation/update-supply-chain-pins
+          delete-branch: true
+          commit-message: Update supply-chain pins
+          title: Update supply-chain pins
+          body: |
+            Automated refresh of Rust, downloaded-tool, OCI image, and
+            Databricks CLI pins. Review the upstream versions, computed
+            SHA-256 values, and full CI results before merging.
