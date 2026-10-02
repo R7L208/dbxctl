@@ -9,6 +9,7 @@ over HTTPS and hashed locally instead of trusting an unverified checksum value.
 import argparse
 import hashlib
 import json
+import os
 import re
 import urllib.parse
 import urllib.request
@@ -178,7 +179,7 @@ def main() -> None:
     parser.add_argument("--deny", required=True)
     parser.add_argument("--syft", required=True)
     parser.add_argument("--databricks", required=True)
-    parser.add_argument("--github-token")
+    parser.add_argument("--github-token", default=os.environ.get("GITHUB_TOKEN"))
     args = parser.parse_args()
     update_rust(args.rust, args.rust_date)
     update_github_tools(args)

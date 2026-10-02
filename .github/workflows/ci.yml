@@ -274,7 +274,7 @@ jobs:
           coverage_dir="${RUNNER_TEMP}/python-coverage"
           export PYTHONDONTWRITEBYTECODE=1
           python -m trace --count --missing --coverdir "${coverage_dir}" \
-            --module unittest -v tests.test_update_pins
+            --module unittest discover -s tests -p 'test_*.py' -v
           coverage_file="${coverage_dir}/scripts.update-pins.cover"
           test -s "${coverage_file}"
           awk -v minimum=95 '

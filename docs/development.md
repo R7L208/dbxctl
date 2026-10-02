@@ -72,7 +72,27 @@ suite. CI uses the pinned Python 3.13.7 interpreter and requires at least 95%
 line coverage of `scripts/update-pins.py`:
 
 ```console
-PYTHONDONTWRITEBYTECODE=1 python3 -m unittest -v tests.test_update_pins
+PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests -p 'test_*.py' -v
+```
+
+## Reviewed Pin Updates
+
+The `Update supply-chain pins` workflow runs every Monday and supports manual
+dispatch. It discovers stable upstream releases, calculates artifact hashes and
+the Linux x86-64 Rust image digest, runs the updater tests, and opens or refreshes
+one reviewable pull request. It never merges an update automatically.
+
+Configure a fine-grained `PIN_UPDATE_TOKEN` Actions secret with repository
+Contents and Pull requests read/write permissions. Pull requests created with
+that bot token trigger normal CI. Without the secret, the workflow falls back
+to `GITHUB_TOKEN`; GitHub permits the PR but suppresses workflows triggered by
+that token, so a maintainer must manually trigger CI before merging.
+
+Version discovery and update generation remain independently runnable:
+
+```console
+scripts/discover-pin-versions.py
+scripts/update-pins.py --help
 ```
 
 ## CI Platforms
