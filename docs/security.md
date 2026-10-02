@@ -30,6 +30,14 @@ verified. Current pinned tools are:
 | cargo-deny | 0.20.2, musl | `9f12ed4c49936e09b48bf862b595cde2fe64fcbd9d74dfacac6131ca824c8d5f` |
 | Databricks CLI | 0.296.0, Linux amd64 | `cd9fa9748878f35d3c1cdf6b99ac285ce3124117b8839b653a9513b2e87820e6` |
 
+Markdown formatting uses mdformat 1.0.0 with exact transitive versions and
+artifact hashes in `requirements/mdformat.txt`. Installation requires hashes,
+accepts binary distributions only, disables transitive resolution and the pip
+download cache, and runs inside an ignored local or ephemeral CI virtual
+environment. CI pins Python 3.13.7 and the `actions/setup-python` commit.
+Dependabot proposes reviewed updates to the formatter lock; it cannot merge
+them automatically.
+
 The Linux quality job also downloads the Rust 1.89.0 Clippy, LLVM tools, and
 Rustfmt component archives directly from the dated Rust distribution path.
 Their SHA-256 values are pinned in the workflow and verified before their
