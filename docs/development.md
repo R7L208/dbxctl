@@ -12,6 +12,23 @@ cargo build --locked
 The crate forbids unsafe Rust and enables the Clippy `all` and `pedantic` lint
 groups at deny level.
 
+## Markdown
+
+Markdown is formatted with mdformat 1.0.0. The local formatting loop installs
+the exact transitive dependency set from `requirements/mdformat.txt` into an
+ignored virtual environment:
+
+```console
+scripts/markdown.sh format
+scripts/markdown.sh check
+```
+
+The first invocation requires Python 3.11 or newer and network access to the
+configured Python package index. Installs require hashes and binary wheels;
+subsequent runs reuse `target/tools/mdformat`. CI uses Python 3.13.7 and checks
+all tracked Markdown files without modifying them. Local runs also include
+unignored, untracked Markdown so new documentation is covered before staging.
+
 ## Test Layers
 
 Unit tests cover argument parsing and Databricks version parsing. Wrapper
@@ -97,8 +114,8 @@ scripts/update-pins.py --help
 
 ## CI Platforms
 
-- Linux: formatting, Clippy, tests, coverage, analysis, upstream contract,
-  RustSec audit, and dependency policy
+- Linux: Rust and Markdown formatting, Clippy, tests, coverage, analysis,
+  upstream contract, RustSec audit, and dependency policy
 - macOS: native tests and analysis
 - Windows: native tests and analysis
 

@@ -1,0 +1,8 @@
+# Hash-locked runtime for Markdown formatting. Keep every transitive dependency
+# pinned so installation with --require-hashes fails closed.
+markdown-it-py==4.2.0 \
+    --hash=sha256:9f7ebbcd14fe59494226453aed97c1070d83f8d24b6fc3a3bcf9a38092641c4a
+mdformat==1.0.0 \
+    --hash=sha256:bca015d65a1d063a02e885a91daee303057bc7829c2cd37b2075a50dbb65944b
+mdurl==0.1.2 \
+    --hash=sha256:84008a41e51615a49fc9966191ff91509e3c40b939176e643fd50a5c2196b8f8

@@ -77,11 +77,17 @@ test lanes have also completed successfully in GitHub Actions.
 The primary local checks are:
 
 ```console
+scripts/markdown.sh check
 cargo fmt --all --check
 cargo clippy --locked --all-targets --all-features -- -D warnings
 cargo test --locked --all-features
 cargo check --locked --all-targets --all-features
 ```
+
+Run `scripts/markdown.sh format` to format every tracked or unignored Markdown
+file. The script creates an ignored virtual environment under `target/tools`,
+installs the hash-locked formatter dependencies, and reuses that environment
+on later runs. Set `PYTHON` to select a Python 3.11 or newer interpreter.
 
 Production line coverage is currently 96.79% on Linux, with a CI minimum of
 90%. See [Development and testing](docs/development.md) for coverage and
