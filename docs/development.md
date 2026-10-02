@@ -67,6 +67,14 @@ The most recent Linux measurement was:
 Coverage is evidence that code executed, not proof that all behavior is
 correct. Process-contract assertions remain the primary compatibility signal.
 
+The supply-chain pin updater has a separate standard-library-only Python test
+suite. CI uses the pinned Python 3.13.7 interpreter and requires at least 95%
+line coverage of `scripts/update-pins.py`:
+
+```console
+PYTHONDONTWRITEBYTECODE=1 python3 -m unittest -v tests.test_update_pins
+```
+
 ## CI Platforms
 
 - Linux: formatting, Clippy, tests, coverage, analysis, upstream contract,
@@ -76,4 +84,3 @@ correct. Process-contract assertions remain the primary compatibility signal.
 
 The Windows lane must complete successfully in GitHub Actions before the
 platform is considered verified.
-

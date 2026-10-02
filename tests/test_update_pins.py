@@ -74,6 +74,20 @@ class ReplacementTests(RepositoryFixture):
 
 
 class ApiTests(unittest.TestCase):
+    @mock.patch("urllib.request.urlopen")
+    def test_fetch_sets_headers_and_returns_response_body(self, urlopen):
+        urlopen.return_value = Response(b"body")
+
+        self.assertEqual(update_pins.fetch("https://example.test", "token"), b"body")
+        request = urlopen.call_args.args[0]
+        self.assertEqual(request.headers["Authorization"], "Bearer token")
+
+    @mock.patch.object(update_pins, "fetch", return_value=b"artifact")
+    def test_digest_hashes_downloaded_bytes(self, _fetch):
+        import hashlib
+
+        self.assertEqual(update_pins.digest("https://example.test/artifact"), hashlib.sha256(b"artifact").hexdigest())
+
     @mock.patch.object(update_pins, "fetch", return_value=b'{"assets": []}')
     def test_databricks_release_metadata_uses_public_unauthenticated_api(self, fetch):
         update_pins.github_release("databricks/cli", "v1.2.3", "secret-token")
@@ -100,6 +114,36 @@ class ApiTests(unittest.TestCase):
         urlopen.return_value = Response(json.dumps(index).encode())
 
         self.assertEqual(update_pins.rust_image_digest("1.99.0"), "wanted")
+
+    @mock.patch.object(update_pins, "fetch", return_value=b'{"token": "registry-token"}')
+    @mock.patch("urllib.request.urlopen")
+    def test_rust_image_fails_without_linux_amd64_manifest(self, urlopen, _fetch):
+        index = {"manifests": [{"digest": "sha256:arm", "platform": {"os": "linux", "architecture": "arm64"}}]}
+        urlopen.return_value = Response(json.dumps(index).encode())
+
+        with self.assertRaisesRegex(RuntimeError, "no linux/amd64"):
+            update_pins.rust_image_digest("1.99.0")
+
+
+class CommandTests(unittest.TestCase):
+    def test_main_dispatches_both_update_groups(self):
+        args = argparse_namespace(
+            rust="1.90.0",
+            rust_date="2025-09-18",
+            llvm_cov="1",
+            audit="1",
+            deny="1",
+            syft="1",
+            databricks="1",
+            github_token=None,
+        )
+        with mock.patch("argparse.ArgumentParser.parse_args", return_value=args), mock.patch.object(
+            update_pins, "update_rust"
+        ) as update_rust, mock.patch.object(update_pins, "update_github_tools") as update_tools:
+            update_pins.main()
+
+        update_rust.assert_called_once_with("1.90.0", "2025-09-18")
+        update_tools.assert_called_once_with(args)
 
 
 class RustUpdateTests(RepositoryFixture):

@@ -250,6 +250,44 @@ jobs:
           DATABRICKS_CLI_PATH: /tmp/databricks-cli/databricks
         run: cargo test --locked --test upstream_contract -- --ignored
 
+  pin-updater-tests:
+    name: Pin updater tests and coverage
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install pinned Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13.7"
+          check-latest: false
+      - name: Verify Python version
+        shell: bash
+        run: python --version | grep --fixed-strings --line-regexp 'Python 3.13.7'
+      - name: Run tests with line coverage
+        shell: bash
+        run: |
+          set -euo pipefail
+          coverage_dir="${RUNNER_TEMP}/python-coverage"
+          export PYTHONDONTWRITEBYTECODE=1
+          python -m trace --count --missing --coverdir "${coverage_dir}" \
+            --module unittest -v tests.test_update_pins
+          coverage_file="${coverage_dir}/scripts.update-pins.cover"
+          test -s "${coverage_file}"
+          awk -v minimum=95 '
+            /^[[:space:]]*[0-9]+:/ { hit++ }
+            /^>>>>>>/ { miss++ }
+            END {
+              total = hit + miss
+              percent = total ? (100 * hit / total) : 0
+              printf "update-pins.py line coverage: %d/%d (%.2f%%)\n", hit, total, percent
+              if (percent < minimum) exit 1
+            }
+          ' "${coverage_file}"
+
   supply-chain:
     name: CVEs, licenses, dependency policy
     runs-on: ubuntu-24.04
