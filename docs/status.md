@@ -1,6 +1,6 @@
 # Project Status
 
-Last updated: 2026-10-01
+Last updated: 2026-10-02
 
 ## Completed
 
@@ -25,8 +25,9 @@ Last updated: 2026-10-01
 - Replaced runtime `rustup` toolchain resolution on macOS and Windows with
   checksum-pinned Cargo, compiler, and standard-library archives for each
   supported runner architecture.
-- Added reproducible Linux release packaging with an SPDX JSON SBOM,
-  SHA-256 checksum, signed SLSA build provenance, and a signed SBOM attestation.
+- Added reproducible Linux, macOS, and Windows release packaging with SPDX JSON
+  SBOMs, SHA-256 checksums, signed SLSA build provenance, and signed SBOM
+  attestations.
 - Fixed a workflow startup failure: the workflow-level `env` referenced the
   `runner` context, which is unavailable there, so every run failed at startup
   before this fix. `CARGO_HOME` isolation now runs as a per-job step.
@@ -51,10 +52,9 @@ prevented any run from completing.
 ## Pending
 
 1. Add workflow security scanning and enforce Action SHA policy.
-2. Extend reproducible release packaging and attestations to macOS and Windows.
-3. Publish durable GitHub Release assets and decide whether release binaries
+2. Publish durable GitHub Release assets and decide whether release binaries
    also require direct signatures in addition to signed digest attestations.
-4. Document and automate reviewed updates for tool hashes, the Rust image
+3. Document and automate reviewed updates for tool hashes, the Rust image
    digest, and the Databricks CLI dependency.
 
 No release artifact has been published and no compatibility guarantee has been

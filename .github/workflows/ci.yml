@@ -124,6 +124,21 @@ jobs:
         run: cargo test --locked --all-features
       - name: Analyze all targets
         run: cargo check --locked --all-targets --all-features
+      - name: Check reproducible release packaging
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo build --locked
+          binary=target/debug/dbxctl
+          if [[ "${RUNNER_OS}" == Windows ]]; then
+            binary=target/debug/dbxctl.exe
+          fi
+          export SOURCE_DATE_EPOCH=1760000000
+          scripts/package-release.sh 0.1.0 "ci-${RUNNER_OS}" "${binary}"
+          mv dist first-dist
+          scripts/package-release.sh 0.1.0 "ci-${RUNNER_OS}" "${binary}"
+          cmp first-dist/*.tar.gz dist/*.tar.gz
+          tar --list --gzip --file dist/*.tar.gz >/dev/null
 
   quality:
     name: Format, lint, test
@@ -211,6 +226,16 @@ jobs:
         run: cargo check --locked --all-targets --all-features
       - name: Build dbxctl for upstream contract tests
         run: cargo build --locked
+      - name: Check reproducible release packaging
+        shell: bash
+        run: |
+          set -euo pipefail
+          export SOURCE_DATE_EPOCH=1760000000
+          scripts/package-release.sh 0.1.0 ci-Linux target/debug/dbxctl
+          mv dist first-dist
+          scripts/package-release.sh 0.1.0 ci-Linux target/debug/dbxctl
+          cmp first-dist/*.tar.gz dist/*.tar.gz
+          tar --list --gzip --file dist/*.tar.gz >/dev/null
       - name: Download pinned Databricks CLI
         run: |
           curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location \

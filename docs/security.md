@@ -63,11 +63,18 @@ toolchain already present in the digest-pinned image.
 
 ## Release Evidence
 
-Pushing a version tag such as `v0.1.0` builds a locked Linux x86-64 release in
-the digest-pinned Rust container. The tag must exactly match the version in
-`Cargo.toml`. The workflow packages the binary with its license and Cargo
-manifests, records the archive's SHA-256 digest, and generates an SPDX JSON
-SBOM with checksum-pinned Syft 1.52.0.
+Pushing a version tag such as `v0.1.0` builds locked native releases for Linux
+x86-64, macOS Arm64 or x86-64 (matching the hosted runner), and Windows x86-64.
+The tag must exactly match the version in `Cargo.toml`. Each job packages the
+binary with its license and Cargo manifests, records the archive's SHA-256
+digest, and generates an SPDX JSON SBOM with checksum-pinned Syft 1.52.0.
+
+All platforms use the same package layout and normalized `tar.gz` format.
+Archive entry order, timestamps, ownership, user names, and gzip metadata are
+fixed. Builds disable Cargo incremental compilation and remap the checkout
+path; macOS disables the random Mach-O UUID and Windows enables the linker's
+reproducible-build mode. CI packages each native debug binary twice and rejects
+different archive bytes.
 
 GitHub Artifact Attestations create two Sigstore-signed, tamper-evident records:
 
@@ -75,7 +82,7 @@ GitHub Artifact Attestations create two Sigstore-signed, tamper-evident records:
   the release archive digest; and
 - an SBOM attestation binding the SPDX document to that same archive digest.
 
-After downloading the archive, verify both records with GitHub CLI:
+After downloading an archive, verify both records with GitHub CLI:
 
 ```console
 gh attestation verify dbxctl-0.1.0-x86_64-unknown-linux-gnu.tar.gz \
@@ -85,9 +92,11 @@ gh attestation verify dbxctl-0.1.0-x86_64-unknown-linux-gnu.tar.gz \
 sha256sum --check dbxctl-0.1.0-x86_64-unknown-linux-gnu.tar.gz.sha256
 ```
 
-The workflow uploads the archive, checksum, and standalone SBOM as a GitHub
+The workflow uploads each archive, checksum, and standalone SBOM as a GitHub
 Actions artifact. Publishing those files as GitHub Release assets remains a
-separate release-management decision.
+separate release-management decision. The macOS and Windows system linkers and
+hosted runner images remain mutable trust boundaries even though the Rust
+compiler, standard library, and Cargo archives are checksum-pinned.
 
 ## Analysis
 
@@ -105,17 +114,18 @@ vulnerabilities, and passed the advisory, ban, license, and source policies.
 ## Remaining Trust Boundaries
 
 - GitHub's `ubuntu-24.04` runner remains the Docker host.
-- Native macOS and Windows runner images are mutable. The `macos-15` and
-  `windows-2025` labels select an OS generation, but GitHub does not expose
-  digest-pinned hosted images; removing this boundary would require controlled
-  self-hosted runners.
+- Native macOS and Windows runner images and system linkers are mutable. The
+  `macos-15` and `windows-2025` labels select an OS generation, but GitHub does
+  not expose digest-pinned hosted images; removing this boundary would require
+  controlled self-hosted runners.
 - The live RustSec database is trusted as security data.
 - There is no automated workflow security scanner or policy preventing a
   future unpinned Action.
 - Release archives and SBOMs are not yet published as durable GitHub Release
   assets; workflow artifacts expire after 30 days.
-- Release binaries themselves are not directly signed. Their digest is
-  covered by signed provenance, which requires an attestation-aware verifier.
+- Release binaries are not signed in their platform-native formats. Each
+  package digest is covered by signed provenance, which requires an
+  attestation-aware verifier.
 - No controlled dependency-update procedure exists yet.
 
 These gaps should be addressed individually so each trust decision and update

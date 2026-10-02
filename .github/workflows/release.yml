@@ -50,8 +50,12 @@ jobs:
             echo "Tag version ${tag_version} does not match Cargo.toml ${crate_version}" >&2
             exit 1
           fi
+          echo "SOURCE_DATE_EPOCH=$(git show -s --format=%ct HEAD)" >> "$GITHUB_ENV"
 
       - name: Build locked release binary
+        env:
+          CARGO_INCREMENTAL: "0"
+          RUSTFLAGS: --remap-path-prefix=${{ github.workspace }}=.
         run: cargo build --release --locked
 
       - name: Package reproducible release archive
@@ -59,19 +63,9 @@ jobs:
         run: |
           set -euo pipefail
           version="${GITHUB_REF_NAME#v}"
-          archive_root="dbxctl-${version}-x86_64-unknown-linux-gnu"
-          install -d -m 0755 "dist/${archive_root}"
-          install -m 0755 target/release/dbxctl "dist/${archive_root}/dbxctl"
-          install -m 0644 LICENSE README.md Cargo.toml Cargo.lock "dist/${archive_root}/"
-          SOURCE_DATE_EPOCH="$(git show -s --format=%ct HEAD)"
-          export SOURCE_DATE_EPOCH
-          tar --create --gzip --file "dist/${archive_root}.tar.gz" \
-            --sort=name --mtime="@${SOURCE_DATE_EPOCH}" --owner=0 --group=0 \
-            --numeric-owner --directory dist "${archive_root}"
-          (
-            cd dist
-            sha256sum "${archive_root}.tar.gz" > "${archive_root}.tar.gz.sha256"
-          )
+          target=x86_64-unknown-linux-gnu
+          archive_root="dbxctl-${version}-${target}"
+          scripts/package-release.sh "${version}" "${target}" target/release/dbxctl
           echo "ARCHIVE=dist/${archive_root}.tar.gz" >> "$GITHUB_ENV"
           echo "SBOM=dist/${archive_root}.spdx.json" >> "$GITHUB_ENV"
           echo "PACKAGE_ROOT=dist/${archive_root}" >> "$GITHUB_ENV"
@@ -94,7 +88,12 @@ jobs:
 
       - name: Generate SPDX SBOM
         shell: bash
-        run: syft scan "dir:${PACKAGE_ROOT}" --output "spdx-json=${SBOM}"
+        env:
+          SYFT_CHECK_FOR_APP_UPDATE: "false"
+        run: |
+          syft scan "${GITHUB_WORKSPACE}/${PACKAGE_ROOT}" \
+            --source-name dbxctl --source-version "${GITHUB_REF_NAME#v}" \
+            --output "spdx-json=${SBOM}"
 
       - name: Attest build provenance
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
@@ -111,6 +110,237 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: dbxctl-${{ github.ref_name }}-x86_64-unknown-linux-gnu
+          path: |
+            ${{ env.ARCHIVE }}
+            ${{ env.ARCHIVE }}.sha256
+            ${{ env.SBOM }}
+          if-no-files-found: error
+          retention-days: 30
+
+  native:
+    name: ${{ matrix.name }} artifact and attestations
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS
+            os: macos-15
+          - name: Windows
+            os: windows-2025
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - name: Isolate Cargo home in ephemeral storage
+        shell: bash
+        run: echo "CARGO_HOME=${RUNNER_TEMP}/cargo-home" >> "$GITHUB_ENV"
+
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install checksum-pinned Rust toolchain
+        shell: bash
+        env:
+          MACOS_ARM64_CARGO_SHA256: 545517d16ac76789aa6ce801cbc3eeecc9acaf43f3ccb63148c3577f2bb4b8d3
+          MACOS_ARM64_RUSTC_SHA256: 6d2cf6164bef00ff3d2c37ca0a0658ffb7c9c3178882a72d78e35abeba888860
+          MACOS_ARM64_STD_SHA256: 1f729f8ba21725618ab894f14cc38f01470f1d15ea76a81fac2da63291bed75c
+          MACOS_X64_CARGO_SHA256: 81fabf0d783af844c7dd74dfe10d0302dd063775789a914f29b33e3d46ee1cf0
+          MACOS_X64_RUSTC_SHA256: 04f3acf7ddfb998fa2713226fd8528e6157b9030f9a6ac6678133d82d5c099f9
+          MACOS_X64_STD_SHA256: 09780642e83b12085500ea78dcb46112a546467352cc4a4dd229f22e03d4a5f0
+          WINDOWS_X64_CARGO_SHA256: 8c0a40a5411746ff6600d93acd16652fef56702196bb25b940ff399d7e107f40
+          WINDOWS_X64_RUSTC_SHA256: 76f70bbd3dc8681ee189931bc5e270cd9524ff3d17738d87f609bba4980c466c
+          WINDOWS_X64_STD_SHA256: ba81500406fdf8a3a81078df2129bd6e4793b579c9e1a498563670bccad92611
+        run: |
+          set -euo pipefail
+
+          case "${RUNNER_OS}-$(uname -m)" in
+            macOS-arm64)
+              rust_target=aarch64-apple-darwin
+              cargo_sha256="${MACOS_ARM64_CARGO_SHA256}"
+              rustc_sha256="${MACOS_ARM64_RUSTC_SHA256}"
+              std_sha256="${MACOS_ARM64_STD_SHA256}"
+              syft_archive=syft_1.52.0_darwin_arm64.tar.gz
+              syft_sha256=014d561b6d13059124155f74a6c5a9a99501f5e209313638dd884f39eb418ee6
+              ;;
+            macOS-x86_64)
+              rust_target=x86_64-apple-darwin
+              cargo_sha256="${MACOS_X64_CARGO_SHA256}"
+              rustc_sha256="${MACOS_X64_RUSTC_SHA256}"
+              std_sha256="${MACOS_X64_STD_SHA256}"
+              syft_archive=syft_1.52.0_darwin_amd64.tar.gz
+              syft_sha256=56975f5d7ffa9846a1eaf64330647841b878097bc7e3730cb9325f93add96917
+              ;;
+            Windows-x86_64)
+              rust_target=x86_64-pc-windows-msvc
+              cargo_sha256="${WINDOWS_X64_CARGO_SHA256}"
+              rustc_sha256="${WINDOWS_X64_RUSTC_SHA256}"
+              std_sha256="${WINDOWS_X64_STD_SHA256}"
+              syft_archive=syft_1.52.0_windows_amd64.zip
+              syft_sha256=de787a374cf961c56fd7b206b2e183295abba32d0af3cb44d9aef2357ca9eda2
+              ;;
+            *)
+              echo "Unsupported runner architecture: ${RUNNER_OS}-$(uname -m)" >&2
+              exit 1
+              ;;
+          esac
+
+          runner_temp="${RUNNER_TEMP}"
+          if [[ "${RUNNER_OS}" == Windows ]]; then
+            runner_temp="$(cygpath -u "${RUNNER_TEMP}")"
+          fi
+
+          toolchain_root="${runner_temp}/rust-1.89.0-${rust_target}"
+          install -d -m 0755 "${toolchain_root}"
+
+          install_component() {
+            component_name="$1"
+            component_sha256="$2"
+            archive="${runner_temp}/${component_name}-1.89.0-${rust_target}.tar.xz"
+            component_dir="${runner_temp}/${component_name}-${rust_target}"
+            component_url="https://static.rust-lang.org/dist/2025-08-07/${component_name}-1.89.0-${rust_target}.tar.xz"
+
+            curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location \
+              --output "${archive}" "${component_url}"
+            if [[ "${RUNNER_OS}" == macOS ]]; then
+              echo "${component_sha256}  ${archive}" | shasum -a 256 --check
+            else
+              echo "${component_sha256}  ${archive}" | sha256sum --check --strict
+            fi
+            install -d -m 0755 "${component_dir}"
+            tar --extract --xz --file "${archive}" --directory "${component_dir}" \
+              --strip-components 1
+            sh "${component_dir}/install.sh" --prefix="${toolchain_root}" --disable-ldconfig
+          }
+
+          install_component rustc "${rustc_sha256}"
+          install_component cargo "${cargo_sha256}"
+          install_component rust-std "${std_sha256}"
+
+          export PATH="${toolchain_root}/bin:${PATH}"
+          if [[ "${RUNNER_OS}" == Windows ]]; then
+            cygpath -w "${toolchain_root}/bin" >> "${GITHUB_PATH}"
+          else
+            echo "${toolchain_root}/bin" >> "${GITHUB_PATH}"
+          fi
+          rustc_version="$(rustc --version --verbose)"
+          cargo_version="$(cargo --version --verbose)"
+          echo "${rustc_version}"
+          echo "${cargo_version}"
+          grep --fixed-strings --line-regexp 'release: 1.89.0' <<< "${rustc_version}"
+          grep --fixed-strings --line-regexp "host: ${rust_target}" <<< "${rustc_version}"
+          grep --fixed-strings --line-regexp 'release: 1.89.0' <<< "${cargo_version}"
+          grep --fixed-strings --line-regexp "host: ${rust_target}" <<< "${cargo_version}"
+
+          echo "RUST_TARGET=${rust_target}" >> "${GITHUB_ENV}"
+          echo "SYFT_ARCHIVE=${syft_archive}" >> "${GITHUB_ENV}"
+          echo "SYFT_SHA256=${syft_sha256}" >> "${GITHUB_ENV}"
+
+      - name: Validate release version
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag_version="${GITHUB_REF_NAME#v}"
+          crate_version="$(sed -n 's/^version = "\([^"]*\)"$/\1/p' Cargo.toml)"
+          test -n "${crate_version}"
+          if [[ "${tag_version}" != "${crate_version}" ]]; then
+            echo "Tag version ${tag_version} does not match Cargo.toml ${crate_version}" >&2
+            exit 1
+          fi
+          echo "SOURCE_DATE_EPOCH=$(git show -s --format=%ct HEAD)" >> "$GITHUB_ENV"
+
+      - name: Build locked release binary
+        shell: bash
+        env:
+          CARGO_INCREMENTAL: "0"
+        run: |
+          set -euo pipefail
+          case "${RUNNER_OS}" in
+            macOS)
+              export RUSTFLAGS="--remap-path-prefix=${GITHUB_WORKSPACE}=. -C link-arg=-Wl,-no_uuid"
+              ;;
+            Windows)
+              export RUSTFLAGS="--remap-path-prefix=${GITHUB_WORKSPACE}=. -C link-arg=/Brepro"
+              ;;
+          esac
+          cargo build --release --locked
+
+      - name: Package reproducible release archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          archive_root="dbxctl-${version}-${RUST_TARGET}"
+          binary=target/release/dbxctl
+          if [[ "${RUNNER_OS}" == Windows ]]; then
+            binary=target/release/dbxctl.exe
+          fi
+          scripts/package-release.sh "${version}" "${RUST_TARGET}" "${binary}"
+          echo "ARCHIVE=dist/${archive_root}.tar.gz" >> "$GITHUB_ENV"
+          echo "SBOM=dist/${archive_root}.spdx.json" >> "$GITHUB_ENV"
+          echo "PACKAGE_ROOT=dist/${archive_root}" >> "$GITHUB_ENV"
+
+      - name: Install checksum-pinned Syft
+        shell: bash
+        run: |
+          set -euo pipefail
+          runner_temp="${RUNNER_TEMP}"
+          if [[ "${RUNNER_OS}" == Windows ]]; then
+            runner_temp="$(cygpath -u "${RUNNER_TEMP}")"
+          fi
+          archive="${runner_temp}/${SYFT_ARCHIVE}"
+          curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location \
+            --output "${archive}" \
+            "https://github.com/anchore/syft/releases/download/v1.52.0/${SYFT_ARCHIVE}"
+          if [[ "${RUNNER_OS}" == macOS ]]; then
+            echo "${SYFT_SHA256}  ${archive}" | shasum -a 256 --check
+          else
+            echo "${SYFT_SHA256}  ${archive}" | sha256sum --check --strict
+          fi
+          install -d -m 0755 "${runner_temp}/dbxctl-tools"
+          if [[ "${RUNNER_OS}" == Windows ]]; then
+            powershell.exe -NoProfile -Command \
+              "Expand-Archive -LiteralPath '$(cygpath -w "${archive}")' -DestinationPath '$(cygpath -w "${runner_temp}/dbxctl-tools")'"
+            cygpath -w "${runner_temp}/dbxctl-tools" >> "${GITHUB_PATH}"
+          else
+            tar --extract --gzip --file "${archive}" \
+              --directory "${runner_temp}/dbxctl-tools" syft
+            chmod 0755 "${runner_temp}/dbxctl-tools/syft"
+            echo "${runner_temp}/dbxctl-tools" >> "${GITHUB_PATH}"
+          fi
+
+      - name: Generate SPDX SBOM
+        shell: bash
+        env:
+          SYFT_CHECK_FOR_APP_UPDATE: "false"
+        run: |
+          set -euo pipefail
+          scan_root="${GITHUB_WORKSPACE}/${PACKAGE_ROOT}"
+          if [[ "${RUNNER_OS}" == Windows ]]; then
+            scan_root="$(cygpath -w "$(pwd)/${PACKAGE_ROOT}")"
+          fi
+          syft scan "${scan_root}" --source-name dbxctl \
+            --source-version "${GITHUB_REF_NAME#v}" --output "spdx-json=${SBOM}"
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: ${{ env.ARCHIVE }}
+
+      - name: Attest SBOM to release archive
+        uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e # v4.1.0
+        with:
+          subject-path: ${{ env.ARCHIVE }}
+          sbom-path: ${{ env.SBOM }}
+
+      - name: Upload release bundle
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: dbxctl-${{ github.ref_name }}-${{ env.RUST_TARGET }}
           path: |
             ${{ env.ARCHIVE }}
             ${{ env.ARCHIVE }}.sha256
