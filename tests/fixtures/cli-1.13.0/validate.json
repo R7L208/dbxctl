@@ -1,27 +1,39 @@
 {
-  "valid": true,
-  "error_message": null,
-  "engine": "DBR_13.3",
-  "resource_configs": {
+  "bundle": {
+    "description": "Example analytics bundle with DLT pipeline and refresh job",
+    "name": "example-analytics",
+    "version": "0.1.0"
+  },
+  "resources": {
     "jobs": {
       "refresh_silver": {
-        "name": "refresh_silver",
         "description": "Refresh silver table from raw data",
+        "job_clusters": [
+          {
+            "job_cluster_key": "default",
+            "new_cluster": {
+              "node_type_id": "i3.xlarge",
+              "num_workers": 2,
+              "spark_version": "13.3.x-scala2.12"
+            }
+          }
+        ],
         "max_concurrent_runs": 1,
+        "name": "refresh_silver",
         "tasks": [
           {
-            "task_key": "refresh_task",
+            "job_cluster_key": "default",
             "notebook_task": {
               "notebook_path": "/Workspace/Users/user@example.test/projects/example/notebooks/silver"
-            }
+            },
+            "task_key": "refresh_task"
           }
         ]
       }
     },
     "pipelines": {
       "dlt_pipeline": {
-        "name": "dlt_pipeline",
-        "storage": "/Workspace/Users/user@example.test/projects/example/storage",
+        "channel": "CURRENT",
         "clusters": [
           {
             "label": "default",
@@ -38,18 +50,14 @@
               }
             ]
           }
-        }
+        },
+        "name": "dlt_pipeline",
+        "pipeline_type": "TRIGGERED",
+        "storage": "/Workspace/Users/user@example.test/projects/example/storage"
       }
     }
   },
-  "data_sources": {
-    "sql_files": [
-      "/Workspace/Users/user@example.test/projects/example/src/silver.sql",
-      "/Workspace/Users/user@example.test/projects/example/src/q.sql",
-      "/Workspace/Users/user@example.test/projects/example/src/gold/g.sql"
-    ],
-    "notebook_paths": [
-      "/Workspace/Users/user@example.test/projects/example/notebooks/silver"
-    ]
+  "workspace": {
+    "root_path": "/Workspace/Users/user@example.test/projects/example-dev"
   }
 }

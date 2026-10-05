@@ -33,7 +33,7 @@ RESPONSES: Dict[Tuple[str, str], Tuple[int, Dict[str, str], str]] = {
                 "object_type": "PIPELINE",
                 "object_id": "01a23b45c67d8901",
                 "name": "example-pipeline",
-                "creator_user_id": 1234567890,
+                "creator_user_id": 9876543210,
                 "created_at": 1698000000,
                 "updated_at": 1698100000,
                 "pipeline_type": "TRIGGERED",
@@ -75,8 +75,8 @@ RESPONSES: Dict[Tuple[str, str], Tuple[int, Dict[str, str], str]] = {
         json.dumps(
             {
                 "job_id": 123,
-                "creator_user_id": 1234567890,
-                "run_as_user_id": 1234567890,
+                "creator_user_id": 9876543210,
+                "run_as_user_id": 9876543210,
                 "run_as_principal_user_name": "user@example.test",
                 "created_time": 1698000000000,
                 "settings": {

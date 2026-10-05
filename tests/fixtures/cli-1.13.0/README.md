@@ -1,22 +1,26 @@
 # Databricks CLI 1.13.0 Test Fixtures
 
-Sanitized, synthetic fixtures from Databricks CLI 1.13.0 for testing without a real workspace.
-All values are internally consistent. No credentials, real hosts, workspace IDs, org IDs, pipeline IDs, emails, or user paths are present.
+Synthetic, internally consistent test fixtures designed for Databricks CLI 1.13.0 (the minimum
+supported version). These enable offline testing without a real workspace, credentials, or
+network access.
+
+All values are placeholders: no real credentials, hosts, workspace IDs, org IDs, pipeline IDs,
+emails, or user paths are present.
 
 ## Files
 
 | File | Scenario | How produced |
 | --- | --- | --- |
-| `api-debug-200.stdout` | Successful pipeline GET response (HTTP 200) | Synthesized based on CLI 1.13.0 schema |
+| `api-debug-200.stdout` | Successful pipeline GET response (HTTP 200) | Synthesized based on API response schema |
 | `api-debug-200.stderr` | Debug output from successful API call | Synthesized debug log format |
-| `api-debug-400.stderr` | Structured error response with `error_code` (HTTP 400) | Synthesized based on error format observed in #23 baseline |
-| `api-debug-404.stderr` | Resource not found error (HTTP 404) | Synthesized based on error format observed in #23 baseline |
-| `resources.json` | State file: resources with pipeline and job definitions | Synthesized; matches structure from #23 baseline |
-| `plan-create.json` | Terraform plan with create action | Synthesized; Terraform plan structure from #23 baseline |
-| `plan-mixed.json` | Terraform plan with create, update, and delete actions | Synthesized; demonstrates action vocabulary |
-| `plan-skip.json` | Terraform plan with no-op (skip) action | Synthesized; demonstrates skip behavior without source config |
-| `validate.json` | Bundle validate output with resource configs and data sources | Synthesized based on bundle validate schema |
-| `dot-databricks.gitignore` | Sample `.databricks/.gitignore` template | Synthesized best-practice gitignore pattern |
+| `api-debug-400.stderr` | Structured error response with `error_code` (HTTP 400) | Synthesized based on error format from #23 baseline |
+| `api-debug-404.stderr` | Resource not found error (HTTP 404) | Synthesized based on error format from #23 baseline |
+| `resources.json` | State file: resources with pipeline and job definitions. Flat-key structure: `resources.pipelines.dlt_pipeline/__id__` resolves via JSON pointer. | Synthesized; structure matches #23 baseline |
+| `plan-create.json` | CLI native plan output with create action. Keyed by resource (`jobs.refresh_silver`), with `action` and `config` fields. | Synthesized from CLI vocabulary; exact shape unverified on 1.13.0 |
+| `plan-mixed.json` | CLI native plan with create and update actions. | Synthesized from CLI vocabulary; exact shape unverified on 1.13.0 |
+| `plan-skip.json` | CLI native plan with skip action *without* source configuration. Probes must handle skip actions and consult `validate.json`. | Synthesized from CLI vocabulary; demonstrates baseline scenario |
+| `validate.json` | Bundle validate resolved output: expanded bundle configuration for the `dev` target with all variables resolved. | Synthesized; exact shape unverified on 1.13.0 |
+| `dot-databricks.gitignore` | Sample `.databricks/.gitignore` template | Synthesized best-practice pattern |
 | `bundle/databricks.yml` | Minimal bundle definition with pipeline and job | Synthesized example DAB |
 | `bundle/src/silver.sql` | Materialized view definitions | Synthesized SQL code |
 | `bundle/src/q.sql` | Query table definition | Synthesized SQL code |
@@ -25,30 +29,35 @@ All values are internally consistent. No credentials, real hosts, workspace IDs,
 
 ## Synthetic Placeholders
 
+Each placeholder is distinct and used consistently across all fixtures.
+
 - **Workspace hostname**: `https://example.cloud.databricks.test` (not a valid domain)
-- **Workspace ID**: `01a23b45c67d8901` (16-char hex ID format)
-- **Pipeline ID**: `abcd1234-ef56-7890-abcd-ef1234567890` (UUID format)
-- **Job ID**: `123`, `1234567890` (numeric)
-- **User ID**: `1234567890` (numeric)
+- **Workspace ID**: `aabbccddeeff0011` (16-char hex)
+- **Pipeline ID**: `01a23b45c67d8901` (16-char hex)
+- **Job ID**: `123` (numeric)
+- **User ID**: `9876543210` (numeric)
+- **Pipeline configuration ID**: `abcd1234-ef56-7890-abcd-ef1234567890` (UUID)
 - **Email**: `user@example.test`
 - **Paths**: `/Workspace/Users/user@example.test/projects/example`
 
-All IDs and paths follow conventions from the #23 baseline but are entirely fictional.
+All follow conventions from the #23 baseline but are entirely fictional.
 
-## Baseline Status on 1.13.0
+## Baseline Status (target 1.13.0)
 
-This table records which facts from the #23 baseline (observed on CLI 0.296.0) were confirmed or changed when checked against 1.13.0 fixtures.
+This table records observations made during fixture creation. Cells marked "Verified offline" were
+tested on CLI 1.19.0 (newer than the 1.13.0 pin, not yet confirmed on 1.13.0). Cells marked
+"Synthesized" represent unverified shapes. All entries will be re-verified during Phase 0 execution
+against a real 1.13.0 environment.
 
-| Fact | Status | Evidence | Notes |
+| Fact | Status | Observed on | Evidence |
 | --- | --- | --- | --- |
-| Required CLI surfaces exist | Verified offline | `databricks --version`, `databricks bundle schema` return successfully | CLI 1.13.0 installed at `/opt/homebrew/bin/databricks` (newer than pin, 1.19.0); verified surfaces without workspace contact |
-| `bundle validate` can emit JSON on stdout even when it exits 1 | Synthesized | `validate.json` includes both success and error fields | Unable to verify on 1.13.0 offline; schema matches #23 baseline expectation |
-| State pipeline IDs appear below `/state/resources.pipelines.<key>/__id__` | Verified | `resources.json` contains `"__id__": "01a23b45c67d8901"` under `state.resources.pipelines.dlt_pipeline` | Matches #23 baseline structure |
-| Rewritten plan actions contain source config | Synthesized | `plan-create.json` includes full `after` configuration | Synthesized based on Terraform plan schema; not directly verifiable offline |
-| Skip actions may lack source config and require validate output | Synthesized | `plan-skip.json` demonstrates `no-op` action; `validate.json` available as reference | Matches #23 baseline expectation |
-| Unknown experimental script keys are not rejected | Not yet verifiable offline | N/A | Requires workspace contact or bundle with experimental keys; deferred to #33 |
-| Offline `bundle schema` places table-update triggers under jobs | Verified offline | Ran `databricks bundle schema` successfully | Schema structure confirmed locally without workspace |
-| Unknown or changed shape becomes explicit finding, not panic | Designed by construction | All fixture shapes are explicit in this table | Probe code will report any deviation |
+| Required CLI surfaces exist | Verified offline | 1.19.0 | `databricks --version` and `databricks bundle schema` work without workspace contact |
+| `bundle validate` can emit JSON on stdout even when it exits 1 | Synthesized | (unverified) | `validate.json` structure; needs workspace test for error case on 1.13.0 |
+| State pipeline IDs at `/state/resources.pipelines.<key>/__id__` | Synthesized | (unverified) | `resources.json` structure matches #23 baseline expectations; needs verification on 1.13.0 |
+| CLI plan output keyed by resource with action and config fields | Synthesized | (unverified) | `plan-*.json` structure inferred from baseline; exact shape needs verification on 1.13.0 |
+| Skip actions may lack source configuration | Synthesized | (unverified) | `plan-skip.json` demonstrates; needs verification on 1.13.0 |
+| Offline `bundle schema` structure | Verified offline | 1.19.0 | `databricks bundle schema` runs successfully and produces schema with expected fields |
+| Unknown experimental script keys are not rejected | Deferred | — | Requires workspace contact or bundle with experimental keys; scheduled for #32 bundle probes |
 
 ## Mock Server
 
@@ -94,6 +103,16 @@ All JSON files have been validated and pretty-printed with stable key order:
 python3.12 -m json.tool <file>
 ```
 
+Baseline paths in `resources.json` have been verified to resolve correctly via JSON pointer:
+
+```python
+import json
+with open('resources.json') as f:
+    data = json.load(f)
+# /state/resources.pipelines.dlt_pipeline/__id__ resolves to: 01a23b45c67d8901
+# /state/resources.jobs.refresh_silver/__id__ resolves to: 123
+```
+
 ## Security Checklist
 
 - [x] No credentials (tokens, API keys, PATs) in any file
@@ -120,13 +139,8 @@ jobs -p | xargs kill
 
 # Run markdown formatter check
 scripts/markdown.sh check
-```
 
-## Cargo Tests
-
-Existing tests pass without modification:
-
-```console
+# Run Rust tests
 cargo test --locked --all-features
 ```
 
@@ -136,3 +150,5 @@ cargo test --locked --all-features
 - #25: Create these fixtures (this issue)
 - #28: Shared JSON layer (parallel work)
 - #29: Probe command (parallel work)
+- #30: Evidence model and minimal CLI check
+- #32: Bundle probes (will verify these fixtures on 1.13.0)

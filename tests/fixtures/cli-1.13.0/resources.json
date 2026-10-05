@@ -1,57 +1,50 @@
 {
   "state": {
-    "resources": {
-      "jobs": {
-        "refresh_silver": {
-          "id": "1234567890",
-          "name": "refresh_silver",
-          "description": "Refresh silver table from raw data",
-          "max_concurrent_runs": 1,
-          "tasks": [
+    "resources.jobs.refresh_silver": {
+      "__id__": "123",
+      "description": "Refresh silver table from raw data",
+      "max_concurrent_runs": 1,
+      "name": "refresh_silver",
+      "tasks": [
+        {
+          "notebook_task": {
+            "notebook_path": "/Workspace/Users/user@example.test/projects/example/notebooks/silver"
+          },
+          "task_key": "refresh_task"
+        }
+      ]
+    },
+    "resources.pipelines.dlt_pipeline": {
+      "__id__": "01a23b45c67d8901",
+      "channel": "CURRENT",
+      "clusters": [
+        {
+          "label": "default",
+          "node_type_id": "i3.xlarge",
+          "num_workers": 0,
+          "spark_conf": {
+            "spark.databricks.cluster.profile": "singleNode"
+          }
+        }
+      ],
+      "configuration": {
+        "query_table": {
+          "id": "abcd1234-ef56-7890-abcd-ef1234567890",
+          "tables": [
             {
-              "task_key": "refresh_task",
-              "notebook_task": {
-                "notebook_path": "/Workspace/Users/user@example.test/projects/example/notebooks/silver"
-              }
-            }
-          ],
-          "job_clusters": [
-            {
-              "job_cluster_key": "default",
-              "new_cluster": {
-                "spark_version": "13.3.x-scala2.12",
-                "node_type_id": "i3.xlarge",
-                "num_workers": 2
-              }
+              "name": "query_result"
             }
           ]
         }
       },
-      "pipelines": {
-        "dlt_pipeline": {
-          "__id__": "01a23b45c67d8901",
-          "name": "dlt_pipeline",
-          "storage": "/Workspace/Users/user@example.test/projects/example/storage",
-          "clusters": [
-            {
-              "label": "default",
-              "spark_conf": {
-                "spark.databricks.cluster.profile": "singleNode"
-              }
-            }
-          ],
-          "configuration": {
-            "query_table": {
-              "id": "abcd1234-ef56-7890-abcd-ef1234567890",
-              "tables": [
-                {
-                  "name": "query_result"
-                }
-              ]
-            }
-          }
-        }
-      }
+      "created_at": 1698000000,
+      "creator_user_id": 9876543210,
+      "name": "dlt_pipeline",
+      "object_id": "01a23b45c67d8901",
+      "object_type": "PIPELINE",
+      "pipeline_type": "TRIGGERED",
+      "storage": "/Workspace/Users/user@example.test/projects/example/storage",
+      "updated_at": 1698100000
     }
   }
 }
