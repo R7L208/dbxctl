@@ -35,13 +35,8 @@ Closes #
 <!--
 Optional. Include a Mermaid diagram when it clarifies a flow, dependency, or
 sequence (for example, the CLI calls a probe makes, or how modules depend on
-each other). Delete this section if it would not help.
-
-```mermaid
-flowchart LR
-  user[dbxctl probe run] --> orchestrator --> runner[databricks CLI]
-  orchestrator --> evidence[(run directory)]
-```
+each other). Put the diagram in a fenced code block with the `mermaid`
+language. Delete this section if it would not help.
 -->
 
 ## Test plan
@@ -142,4 +137,4 @@ must always keep this section.
 Example: `dbxctl probe report --from <dir>` regenerates findings from a saved run
 -->
 
-<Add a line to describe the change, else delete this section>
+_Add one line describing the change, or delete this section._
