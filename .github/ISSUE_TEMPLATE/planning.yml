@@ -1,0 +1,173 @@
+name: Planning
+description: Propose a design decision (DP<phase>-<n>) or plan a phase of work
+title: "[Plan] DP<phase>-<n>: "
+labels: ["planning", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: >
+        Planning issues follow the project's design nomenclature. Decisions are
+        named `DP<phase>-<n>` (for example, `DP0-1` for JSON handling and
+        `DP1-1` for graph construction). Accepted decisions are recorded in
+        `docs/mv-lineage/design/dp<phase>-<n>-<slug>.md`, or in the "Design
+        Decisions" section of `docs/security.md` when they concern
+        dependencies or trust boundaries. Each record has **Decision**,
+        **Rationale**, and **Revisit Conditions** sections.
+
+  - type: dropdown
+    id: kind
+    attributes:
+      label: Kind
+      options:
+        - Design decision
+        - Phase plan
+        - Proposal (exploratory, no decision yet)
+    validations:
+      required: true
+
+  - type: input
+    id: decision-id
+    attributes:
+      label: Decision ID
+      description: >
+        Next unused `DP<phase>-<n>` for this phase. Leave empty for a phase
+        plan or exploratory proposal.
+      placeholder: DP1-2
+    validations:
+      required: false
+
+  - type: dropdown
+    id: phase
+    attributes:
+      label: Phase
+      options:
+        - Phase 0 — probes
+        - Phase 1
+        - Phase 2
+        - Phase 3
+        - Phase 4
+        - Cross-cutting (CI, release, supply chain)
+    validations:
+      required: true
+
+  - type: textarea
+    id: eli5
+    attributes:
+      label: ELI5
+      description: In one or two plain sentences, what are we deciding or planning, and why does it matter?
+      placeholder: We need to pick how dbxctl stores the lineage graph so later features can answer "what breaks if I change this table?"
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: The context and the question to answer. Link related issues, findings, and design records.
+    validations:
+      required: true
+
+  - type: textarea
+    id: options
+    attributes:
+      label: Options considered
+      description: Each option with its trade-offs. Include the option of doing nothing when it is realistic.
+      placeholder: |
+        1. **Option A** — ...
+           - Pros: ...
+           - Cons: ...
+        2. **Option B** — ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: decision
+    attributes:
+      label: Proposed decision
+      description: The recommended option, stated so it could be copied into the record's **Decision** section.
+    validations:
+      required: true
+
+  - type: textarea
+    id: rationale
+    attributes:
+      label: Rationale
+      description: Why this option wins against the project's constraints (single signed binary, CLI-only workspace access, read-only by default, deterministic output, minimal dependencies).
+    validations:
+      required: true
+
+  - type: textarea
+    id: revisit
+    attributes:
+      label: Revisit conditions
+      description: What evidence or change in requirements would reopen this decision?
+      placeholder: |
+        - Graphs must persist across runs.
+        - Graph size grows by orders of magnitude.
+    validations:
+      required: true
+
+  - type: textarea
+    id: phasing
+    attributes:
+      label: Phasing and work order
+      description: For phase plans, the steps, their dependencies, and which can run in parallel. For decisions, the follow-up issues needed.
+      placeholder: |
+        | Step | Work | Blocked by | Parallel with |
+        | --- | --- | --- | --- |
+        | 1 | ... | — | 2 |
+    validations:
+      required: false
+
+  - type: textarea
+    id: diagram
+    attributes:
+      label: Diagram (optional)
+      description: >
+        Mermaid source, if a diagram makes the design or ordering clearer, such
+        as module boundaries, data flow, or the dependency graph of steps.
+        Leave empty otherwise.
+      render: mermaid
+      placeholder: |
+        flowchart TD
+          decide[Decide DP1-2] --> impl[Implement]
+          fixtures[Fixtures] --> impl
+          impl --> docs[Document]
+    validations:
+      required: false
+
+  - type: textarea
+    id: risks
+    attributes:
+      label: Risks and open questions
+    validations:
+      required: false
+
+  - type: textarea
+    id: out-of-scope
+    attributes:
+      label: Out of scope
+      description: What this plan or decision deliberately does not cover.
+    validations:
+      required: false
+
+  - type: textarea
+    id: done-when
+    attributes:
+      label: Done when
+      placeholder: |
+        - The decision is recorded in `docs/mv-lineage/design/dp<phase>-<n>-<slug>.md`.
+        - Follow-up issues exist for each implementation step.
+    validations:
+      required: true
+
+  - type: textarea
+    id: agent-notes
+    attributes:
+      label: For coding agents (optional)
+      description: >
+        Where to record the decision, files and policies it affects (for
+        example `deny.toml`, `Cargo.toml`, `docs/security.md`), and checks to
+        run.
+    validations:
+      required: false

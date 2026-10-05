@@ -1,0 +1,135 @@
+name: Feature Request
+description: Suggest a new feature or improvement
+title: "[Feature] "
+labels: ["enhancement", "needs-triage"]
+body:
+  - type: textarea
+    id: eli5
+    attributes:
+      label: ELI5
+      description: In one or two plain sentences, what would this let someone do that they can't today?
+      placeholder: Let me see which materialized views depend on a table before I change it.
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or use case
+      description: What problem are you trying to solve, or what use case would this enable?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposed-solution
+    attributes:
+      label: Proposed solution
+      description: How would you like this to work? Include example commands and output if you can.
+    validations:
+      required: false
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Any workarounds or alternative approaches you've thought about.
+    validations:
+      required: false
+
+  - type: textarea
+    id: done-when
+    attributes:
+      label: Done when
+      description: What has to be true for this to count as finished?
+      placeholder: |
+        - ...
+        - ...
+    validations:
+      required: false
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      multiple: true
+      options:
+        - doctor
+        - Databricks passthrough
+        - probe (lineage suite)
+        - MV lineage (Phases 1–4)
+        - Release packages / verification
+        - CI / supply chain
+        - Documentation
+        - Other
+    validations:
+      required: false
+
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      multiple: true
+      options:
+        - Not platform-specific
+        - macOS
+        - Linux
+        - Windows
+    validations:
+      required: false
+
+  - type: dropdown
+    id: design-decision
+    attributes:
+      label: Needs a design decision?
+      description: >
+        Choose Yes if this adds a runtime dependency, changes a trust boundary
+        (such as mutation, authentication, or workspace access), or picks
+        between architectural approaches. Those need a Planning issue first.
+      options:
+        - "No"
+        - "Yes"
+        - Not sure
+    validations:
+      required: false
+
+  - type: dropdown
+    id: impact
+    attributes:
+      label: Expected reach
+      options:
+        - Most users
+        - A substantial user segment
+        - Some users
+        - One narrow or edge case
+        - Unknown
+    validations:
+      required: false
+
+  - type: textarea
+    id: diagram
+    attributes:
+      label: Diagram (optional)
+      description: >
+        Mermaid source, if a diagram makes the idea easier to follow, such as
+        the user flow or how the feature fits existing commands. Leave empty
+        otherwise.
+      render: mermaid
+      placeholder: |
+        flowchart LR
+          table[(source table)] --> mv1[MV silver]
+          mv1 --> mv2[MV gold]
+          mv2 --> report[dbxctl lineage report]
+    validations:
+      required: false
+
+  - type: textarea
+    id: agent-notes
+    attributes:
+      label: For coding agents (optional)
+      description: >
+        Implementation details for an agent: likely modules, files to add,
+        tests to write, and constraints to respect (for example, workspace
+        access only through the `databricks` CLI, read-only by default, no new
+        runtime dependencies without a design decision).
+    validations:
+      required: false
