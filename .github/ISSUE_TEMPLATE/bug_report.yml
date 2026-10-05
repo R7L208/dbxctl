@@ -1,0 +1,174 @@
+name: Bug Report
+description: Report a bug or unexpected behavior in dbxctl
+title: "[Bug] "
+labels: ["bug", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: >
+        Thanks for the report. Before pasting any output, remove tokens,
+        workspace hosts, workspace or pipeline IDs, emails, and user-specific
+        paths.
+
+  - type: textarea
+    id: eli5
+    attributes:
+      label: ELI5
+      description: In one or two plain sentences, what is broken and who notices?
+      placeholder: "`dbxctl doctor` says my Databricks CLI is too old even though it is 0.296.0."
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: What happened? What did you expect to happen?
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro-steps
+    attributes:
+      label: Steps to reproduce
+      description: >
+        Give minimal steps to reproduce the issue. If direct steps aren't
+        available, provide other actionable evidence, such as a failing test,
+        diagnostics, or analysis of the failing code path. For an intermittent
+        failure, write "N/A — cannot reproduce reliably" and describe what you
+        observed and when.
+      placeholder: |
+        1. ...
+        2. ...
+        3. ...
+    validations:
+      required: true
+
+  - type: input
+    id: command
+    attributes:
+      label: Command
+      description: The exact `dbxctl` command you ran, with sensitive values replaced.
+      placeholder: dbxctl probe run --suite lineage --bundle-root ./bundle --target dev ...
+    validations:
+      required: false
+
+  - type: textarea
+    id: output
+    attributes:
+      label: Redacted output
+      description: Relevant stdout or stderr and the exit code. This is rendered as a code block.
+      render: shell
+    validations:
+      required: false
+
+  - type: input
+    id: version
+    attributes:
+      label: dbxctl version
+      description: Output of `dbxctl version`, or the commit or tag you built.
+      placeholder: e.g. 0.1.0 or abc1234
+    validations:
+      required: false
+
+  - type: input
+    id: databricks-cli-version
+    attributes:
+      label: Databricks CLI version
+      description: Output of `databricks --version`.
+      placeholder: e.g. Databricks CLI v0.296.0
+    validations:
+      required: false
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      multiple: true
+      options:
+        - doctor
+        - Databricks passthrough
+        - probe (lineage suite)
+        - Release packages / verification
+        - CI / supply chain
+        - Documentation
+        - Other
+    validations:
+      required: false
+
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      multiple: true
+      options:
+        - macOS (Apple silicon)
+        - macOS (Intel)
+        - Linux
+        - Windows
+        - Other
+    validations:
+      required: false
+
+  - type: dropdown
+    id: install-method
+    attributes:
+      label: Install method
+      options:
+        - Built from source
+        - Release package
+        - Other
+    validations:
+      required: false
+
+  - type: dropdown
+    id: impact
+    attributes:
+      label: Observed impact
+      options:
+        - Blocks all use
+        - Blocks one command or workflow
+        - Wrong or misleading output
+        - Security or data-exposure concern
+        - Cosmetic or minor
+        - Unknown
+    validations:
+      required: false
+
+  - type: textarea
+    id: diagram
+    attributes:
+      label: Diagram (optional)
+      description: >
+        Mermaid source, if a diagram makes the failure easier to follow, such
+        as the sequence of CLI calls before the error. Leave empty otherwise.
+      render: mermaid
+      placeholder: |
+        sequenceDiagram
+          participant U as User
+          participant D as dbxctl
+          participant C as databricks CLI
+          U->>D: dbxctl doctor
+          D->>C: databricks --version
+          C-->>D: Databricks CLI v0.296.0
+          D-->>U: error: unsupported version
+    validations:
+      required: false
+
+  - type: textarea
+    id: agent-notes
+    attributes:
+      label: For coding agents (optional)
+      description: >
+        Details that help an agent fix this: suspected files or functions, a
+        failing test to add, fixtures involved, and constraints to respect.
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: redaction
+    attributes:
+      label: Redaction
+      options:
+        - label: I removed credentials, hosts, workspace IDs, emails, and user-specific paths from this report.
+          required: true
