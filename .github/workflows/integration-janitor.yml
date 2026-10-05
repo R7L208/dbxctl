@@ -1,0 +1,44 @@
+name: Integration janitor
+
+on:
+  schedule:
+    - cron: "17 */6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: databricks-free-janitor
+  cancel-in-progress: false
+
+jobs:
+  sweep:
+    name: Delete stale workspace test resources
+    runs-on: ubuntu-24.04
+    environment: databricks-free
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Download pinned Databricks CLI
+        run: |
+          curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location \
+            --output /tmp/databricks-cli.tar.gz \
+            https://github.com/databricks/cli/releases/download/v0.296.0/databricks_cli_0.296.0_linux_amd64.tar.gz
+          echo 'cd9fa9748878f35d3c1cdf6b99ac285ce3124117b8839b653a9513b2e87820e6  /tmp/databricks-cli.tar.gz' \
+            | sha256sum --check --strict
+          mkdir /tmp/databricks-cli
+          tar --extract --gzip --file /tmp/databricks-cli.tar.gz --directory /tmp/databricks-cli
+      # Integration runs time out after 30 minutes, so six hours never
+      # selects resources an active run still owns.
+      - name: Delete test resources older than six hours
+        env:
+          DATABRICKS_CLI_PATH: /tmp/databricks-cli/databricks
+          DATABRICKS_AUTH_TYPE: oauth-m2m
+          DATABRICKS_HOST: ${{ vars.DATABRICKS_HOST }}
+          DATABRICKS_CLIENT_ID: ${{ secrets.DATABRICKS_CLIENT_ID }}
+          DATABRICKS_CLIENT_SECRET: ${{ secrets.DATABRICKS_CLIENT_SECRET }}
+        run: scripts/integration-janitor.sh --older-than-hours 6
