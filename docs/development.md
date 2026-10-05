@@ -29,6 +29,32 @@ subsequent runs reuse `target/tools/mdformat`. CI uses Python 3.13.7 and checks
 all tracked Markdown files without modifying them. Local runs also include
 unignored, untracked Markdown so new documentation is covered before staging.
 
+### Package Index
+
+The formatter installs from pypi.org by default. Where pypi.org is blocked, use
+one of these, in order of precedence:
+
+1. `PIP_INDEX_URL`, which pip honors directly. When it is set, the script uses
+   it unconditionally and skips the fallback below.
+1. `DBXCTL_PYPI_PROXY`, an index URL ending in `/simple/`, set in the
+   environment.
+1. The same `DBXCTL_PYPI_PROXY=<url>` line in a git-ignored `.dbxctl.local`
+   file at the repository root. Only that key is read; the file is not
+   sourced.
+
+```text
+# .dbxctl.local (not committed)
+DBXCTL_PYPI_PROXY=https://<your-internal-pypi-index>/simple/
+```
+
+A configured proxy is a fallback, not an override: the script checks pypi.org
+with a three-second timeout and uses the proxy only if pypi.org is unreachable.
+Without a proxy, no check runs and behavior is unchanged, which keeps CI on the
+public index. The proxy URL is never printed, so it may contain credentials.
+
+Whichever index is used, every file must match a hash in
+`requirements/mdformat.txt`, so a mirror cannot substitute different packages.
+
 ## Test Layers
 
 Unit tests cover argument parsing and Databricks version parsing. Wrapper

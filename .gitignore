@@ -12,6 +12,7 @@ debug/
 .DS_Store
 .env
 .isaac/
+.dbxctl.local
 
 # Personal learning notes (Claude teaching sessions)
 .learning/
