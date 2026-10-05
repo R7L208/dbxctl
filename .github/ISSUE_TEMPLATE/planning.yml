@@ -1,0 +1,194 @@
+name: Planning
+description: Propose a decision, verification question, requirement, or plan
+title: "[Plan] "
+labels: ["planning", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: >
+        Planning issues use the project's
+        [design nomenclature](https://github.com/R7L208/dbxctl/blob/main/docs/design-nomenclature-and-glossary.md).
+        Pick the [item family](https://github.com/R7L208/dbxctl/blob/main/docs/design-nomenclature-and-glossary.md#item-families)
+        that fits, give it the next unused identifier, and put that identifier
+        in the title (for example `[Plan] D3: ...` or `[Plan] V12: ...`).
+        Follow the
+        [identifier rules](https://github.com/R7L208/dbxctl/blob/main/docs/design-nomenclature-and-glossary.md#identifier-rules):
+        the canonical definition lives in version-controlled documentation, and
+        this issue tracks it and links back.
+
+  - type: dropdown
+    id: kind
+    attributes:
+      label: Item family
+      description: >
+        See [Item Families](https://github.com/R7L208/dbxctl/blob/main/docs/design-nomenclature-and-glossary.md#item-families)
+        for each family's meaning and canonical location.
+      options:
+        - D — product or architecture decision
+        - DP — decision proposal raised during a phase
+        - V — question or assumption to verify
+        - R — requirement
+        - T — implementation or operational task plan
+        - A — runtime assertion or hard gate
+        - Roadmap or phase plan
+        - Proposal (exploratory, no identifier yet)
+        - New identifier family (define it in the nomenclature first)
+    validations:
+      required: true
+
+  - type: input
+    id: identifier
+    attributes:
+      label: Identifier
+      description: >
+        The next unused identifier in its family, with case preserved. Leave
+        empty for an exploratory proposal.
+      placeholder: e.g. D3, DP0-2, V12, R4
+    validations:
+      required: false
+
+  - type: dropdown
+    id: phase
+    attributes:
+      label: Phase
+      description: >
+        See [Phases](https://github.com/R7L208/dbxctl/blob/main/docs/design-nomenclature-and-glossary.md#phases).
+        A `DP` identifier must name its phase.
+      options:
+        - Not phase-specific
+        - P0 — discovery and de-risking
+        - P1
+        - P2 or later
+    validations:
+      required: true
+
+  - type: input
+    id: area
+    attributes:
+      label: Feature or project area
+      description: The roadmap or design this belongs to, if any.
+      placeholder: e.g. CI and supply chain, release packaging
+    validations:
+      required: false
+
+  - type: textarea
+    id: eli5
+    attributes:
+      label: ELI5
+      description: In one or two plain sentences, what are we deciding or planning, and why does it matter?
+      placeholder: We need to decide how dbxctl reports errors from the Databricks CLI so users always know whether a failure was ours or upstream's.
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: The context and the question to answer. Link related issues, findings, and design documents.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: >
+        For a decision, the recommended choice, worded so it can be copied
+        into the design document's decisions section. For a `V` item, the
+        question and how it will be verified. For a requirement, the
+        requirement text. For a plan, the outcome it delivers.
+    validations:
+      required: true
+
+  - type: textarea
+    id: options
+    attributes:
+      label: Options considered
+      description: For decisions, each option with its trade-offs. Include doing nothing when it is realistic.
+      placeholder: |
+        1. **Option A** — ...
+           - Pros: ...
+           - Cons: ...
+        2. **Option B** — ...
+    validations:
+      required: false
+
+  - type: textarea
+    id: rationale
+    attributes:
+      label: Rationale
+      description: Why this proposal wins against the project's constraints (single signed binary, CLI-only workspace access, read-only by default, deterministic output, minimal dependencies).
+    validations:
+      required: false
+
+  - type: textarea
+    id: revisit
+    attributes:
+      label: Revisit conditions
+      description: For decisions, the evidence or change in requirements that would reopen this one.
+    validations:
+      required: false
+
+  - type: textarea
+    id: phasing
+    attributes:
+      label: Phasing and work order
+      description: For plans, the steps, their dependencies, and which can run in parallel. For decisions, the follow-up issues needed.
+      placeholder: |
+        | Step | Work | Blocked by | Parallel with |
+        | --- | --- | --- | --- |
+        | T1 | ... | — | T2 |
+    validations:
+      required: false
+
+  - type: textarea
+    id: diagram
+    attributes:
+      label: Diagram (optional)
+      description: >
+        Mermaid source, if a diagram makes the design or ordering clearer, such
+        as module boundaries, data flow, or the dependency graph of steps.
+        Leave empty otherwise.
+      render: mermaid
+      placeholder: |
+        flowchart TD
+          v[V1: verify assumption] --> d[D1: decide]
+          d --> t1[T1: implement]
+          t1 --> t2[T2: document]
+    validations:
+      required: false
+
+  - type: textarea
+    id: risks
+    attributes:
+      label: Risks and open questions
+    validations:
+      required: false
+
+  - type: textarea
+    id: out-of-scope
+    attributes:
+      label: Out of scope
+      description: What this plan or decision deliberately does not cover.
+    validations:
+      required: false
+
+  - type: textarea
+    id: done-when
+    attributes:
+      label: Done when
+      placeholder: |
+        - The item is recorded in its canonical location, as listed in the design nomenclature.
+        - Follow-up issues exist for each implementation step.
+    validations:
+      required: true
+
+  - type: textarea
+    id: agent-notes
+    attributes:
+      label: For coding agents (optional)
+      description: >
+        Where to record the item, files and policies it affects (for example
+        `deny.toml`, `Cargo.toml`, `docs/security.md`), and checks to run.
+    validations:
+      required: false
