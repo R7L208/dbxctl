@@ -1,4 +1,6 @@
+mod args;
 mod databricks;
+mod probe;
 
 use std::env;
 use std::ffi::{OsStr, OsString};
@@ -11,6 +13,7 @@ use databricks::{Version, resolve_binary};
 enum Cli {
     Doctor,
     Databricks(Vec<OsString>),
+    Probe(Vec<OsString>),
     Help,
     Version,
 }
@@ -20,6 +23,7 @@ fn parse_args(mut args: impl Iterator<Item = OsString>) -> Result<Cli, String> {
     match args.next().as_deref() {
         Some(command) if command == "doctor" => no_extra_args(args, Cli::Doctor),
         Some(command) if command == "databricks" => Ok(Cli::Databricks(args.collect())),
+        Some(command) if command == "probe" => Ok(Cli::Probe(args.collect())),
         Some(command) if command == "help" || command == "--help" || command == "-h" => {
             no_extra_args(args, Cli::Help)
         }
@@ -42,7 +46,7 @@ fn no_extra_args(mut args: impl Iterator<Item = OsString>, command: Cli) -> Resu
 
 fn print_help() {
     println!(
-        "dbxctl {}\n\nUSAGE:\n    dbxctl <COMMAND>\n\nCOMMANDS:\n    doctor                Show dependency status\n    databricks [ARGS]...  Run the Databricks CLI\n    help                  Print help\n    version               Print version",
+        "dbxctl {}\n\nUSAGE:\n    dbxctl <COMMAND>\n\nCOMMANDS:\n    doctor                Show dependency status\n    databricks [ARGS]...  Run the Databricks CLI\n    probe [ARGS]...       Probe workspace for lineage discovery\n    help                  Print help\n    version               Print version",
         env!("CARGO_PKG_VERSION")
     );
 }
@@ -64,6 +68,23 @@ fn run_with_binary(cli: Cli, binary: &OsStr) -> Result<ExitCode, String> {
         }
         Cli::Doctor => Ok(databricks::run_doctor(binary)),
         Cli::Databricks(args) => databricks::run_passthrough(binary, args),
+        Cli::Probe(args) => {
+            // Check if first arg is help
+            let is_help = if let Some(first_arg) = args.first() {
+                let s = first_arg.to_string_lossy();
+                s == "--help" || s == "-h" || s == "help"
+            } else {
+                false
+            };
+
+            if is_help {
+                probe::print_probe_help();
+                Ok(ExitCode::SUCCESS)
+            } else {
+                let command = probe::parse_probe(&args)?;
+                probe::run_probe(command)
+            }
+        }
     }
 }
 
@@ -203,5 +224,44 @@ mod tests {
             parse_args(args(&["dbxctl", "doctor", "extra"])).expect_err("extra argument must fail"),
             "unexpected argument extra"
         );
+    }
+
+    #[test]
+    fn parses_probe_command() {
+        let cli = parse_args(args(&[
+            "dbxctl",
+            "probe",
+            "run",
+            "--suite",
+            "lineage",
+            "--bundle-root",
+            "/tmp",
+            "--target",
+            "dev",
+        ]))
+        .expect("parse probe command");
+        assert!(matches!(cli, Cli::Probe(_)));
+    }
+
+    #[test]
+    fn preserves_all_probe_arguments() {
+        let cli = parse_args(args(&[
+            "dbxctl",
+            "probe",
+            "run",
+            "--suite",
+            "lineage",
+            "--bundle-root",
+            "/bundle",
+            "--target",
+            "mytarget",
+            "--only",
+            "cli,validate",
+        ]))
+        .expect("parse probe command");
+        let Cli::Probe(args) = cli else {
+            panic!("expected probe command");
+        };
+        assert!(!args.is_empty());
     }
 }
