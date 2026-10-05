@@ -18,6 +18,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 FILES = [
     ROOT / ".github/workflows/ci.yml",
+    ROOT / ".github/workflows/integration.yml",
+    ROOT / ".github/workflows/integration-janitor.yml",
     ROOT / ".github/workflows/release.yml",
     ROOT / "docs/security.md",
 ]

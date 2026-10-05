@@ -89,6 +89,56 @@ between direct and wrapped execution identifies a passthrough regression. A
 matching behavior change after updating the pinned dependency identifies an
 upstream change.
 
+### Workspace Integration Tests
+
+The workspace integration tests run the pinned Databricks CLI through
+`dbxctl` against a live workspace. They check that authenticated passthrough
+matches direct execution, create and remove a Unity Catalog schema and table,
+and round-trip a workspace file.
+
+Every resource is named from `DBXCTL_IT_PREFIX`, which must match
+`dbxctl_it_[a-z0-9_]+`. Schemas are created in `DBXCTL_IT_CATALOG` (default
+`workspace`) and files under `/Workspace/Users/<identity>/dbxctl-it/`. Each
+test deletes its own resources even when an assertion fails, and then confirms
+they are gone.
+
+Credentials are never passed to the tests. The Databricks CLI resolves them
+from its environment or profile. Locally, use an OAuth login so no token is
+stored in a configuration file:
+
+```console
+databricks auth login --host https://<workspace-host> --profile dbxctl-it
+DATABRICKS_CONFIG_PROFILE=dbxctl-it \
+  DATABRICKS_CLI_PATH="$(command -v databricks)" \
+  DBXCTL_IT_PREFIX="dbxctl_it_local_$(date +%s)" \
+  DBXCTL_IT_WAREHOUSE_ID=<warehouse-id> \
+  cargo test --locked --test workspace_integration -- --ignored
+```
+
+The `Integration` workflow runs on pushes to `main` and on manual dispatch,
+one run at a time. It reads credentials from the `databricks-free` GitHub
+Environment, which only protected branches can use:
+
+| Name | Kind | Value |
+| --- | --- | --- |
+| `DATABRICKS_HOST` | Variable | Workspace URL |
+| `DBXCTL_IT_WAREHOUSE_ID` | Variable | SQL warehouse the test identity can use |
+| `DATABRICKS_CLIENT_ID` | Secret | Test service principal application ID |
+| `DATABRICKS_CLIENT_SECRET` | Secret | Test service principal OAuth secret |
+
+The service principal needs `USE CATALOG` and `CREATE SCHEMA` on the test
+catalog and `CAN USE` on the warehouse. It should not be a workspace admin.
+
+After the tests, a separate job deletes anything left with the run's prefix.
+The `Integration janitor` workflow runs every six hours and deletes test
+resources older than six hours. Both use the same script, which can also be
+run locally:
+
+```console
+scripts/integration-janitor.sh --prefix dbxctl_it_local_1760000000
+scripts/integration-janitor.sh --older-than-hours 6
+```
+
 ## Coverage
 
 CI measures production Rust code and excludes test harness sources:

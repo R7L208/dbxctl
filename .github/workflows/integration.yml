@@ -1,0 +1,89 @@
+name: Integration
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: databricks-free-integration
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: "1"
+  RUSTUP_DIST_SERVER: https://rustup-downloads-disabled.invalid
+  DBXCTL_IT_PREFIX: dbxctl_it_${{ github.run_id }}_${{ github.run_attempt }}
+
+jobs:
+  workspace:
+    name: Workspace integration tests
+    runs-on: ubuntu-24.04
+    container:
+      image: rust:1.89.0-bookworm@sha256:c9ac3fa8945b61dede1e4500d25028aa8fd8a8fe46365fcf9c0422f8d999b9b0
+    environment: databricks-free
+    env:
+      RUSTUP_TOOLCHAIN: 1.89.0-x86_64-unknown-linux-gnu
+    timeout-minutes: 30
+    steps:
+      - name: Isolate Cargo home in ephemeral storage
+        shell: bash
+        run: echo "CARGO_HOME=${RUNNER_TEMP}/cargo-home" >> "$GITHUB_ENV"
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Download pinned Databricks CLI
+        run: |
+          curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location \
+            --output /tmp/databricks-cli.tar.gz \
+            https://github.com/databricks/cli/releases/download/v0.296.0/databricks_cli_0.296.0_linux_amd64.tar.gz
+          echo 'cd9fa9748878f35d3c1cdf6b99ac285ce3124117b8839b653a9513b2e87820e6  /tmp/databricks-cli.tar.gz' \
+            | sha256sum --check --strict
+          mkdir /tmp/databricks-cli
+          tar --extract --gzip --file /tmp/databricks-cli.tar.gz --directory /tmp/databricks-cli
+      # Compilation runs without workspace credentials in its environment.
+      - name: Build integration tests
+        run: cargo test --locked --test workspace_integration --no-run
+      - name: Run workspace integration tests
+        env:
+          DATABRICKS_CLI_PATH: /tmp/databricks-cli/databricks
+          DATABRICKS_AUTH_TYPE: oauth-m2m
+          DATABRICKS_HOST: ${{ vars.DATABRICKS_HOST }}
+          DATABRICKS_CLIENT_ID: ${{ secrets.DATABRICKS_CLIENT_ID }}
+          DATABRICKS_CLIENT_SECRET: ${{ secrets.DATABRICKS_CLIENT_SECRET }}
+          DBXCTL_IT_WAREHOUSE_ID: ${{ vars.DBXCTL_IT_WAREHOUSE_ID }}
+        run: cargo test --locked --test workspace_integration -- --ignored
+
+  cleanup:
+    name: Delete this run's workspace resources
+    needs: workspace
+    if: always()
+    runs-on: ubuntu-24.04
+    environment: databricks-free
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Download pinned Databricks CLI
+        run: |
+          curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location \
+            --output /tmp/databricks-cli.tar.gz \
+            https://github.com/databricks/cli/releases/download/v0.296.0/databricks_cli_0.296.0_linux_amd64.tar.gz
+          echo 'cd9fa9748878f35d3c1cdf6b99ac285ce3124117b8839b653a9513b2e87820e6  /tmp/databricks-cli.tar.gz' \
+            | sha256sum --check --strict
+          mkdir /tmp/databricks-cli
+          tar --extract --gzip --file /tmp/databricks-cli.tar.gz --directory /tmp/databricks-cli
+      - name: Delete resources with this run's prefix
+        env:
+          DATABRICKS_CLI_PATH: /tmp/databricks-cli/databricks
+          DATABRICKS_AUTH_TYPE: oauth-m2m
+          DATABRICKS_HOST: ${{ vars.DATABRICKS_HOST }}
+          DATABRICKS_CLIENT_ID: ${{ secrets.DATABRICKS_CLIENT_ID }}
+          DATABRICKS_CLIENT_SECRET: ${{ secrets.DATABRICKS_CLIENT_SECRET }}
+        run: scripts/integration-janitor.sh --prefix "${DBXCTL_IT_PREFIX}"

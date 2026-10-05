@@ -76,6 +76,21 @@ workflow so an accidental future `rustup` operation fails closed instead of
 downloading unpinned content. Both Linux container jobs explicitly select the
 toolchain already present in the digest-pinned image.
 
+## Workspace Credentials
+
+Workspace integration tests authenticate as a dedicated service principal
+with OAuth machine-to-machine credentials. The principal is not a workspace
+admin and holds only the catalog and warehouse grants the tests need. Its
+client ID and secret exist only as secrets in the `databricks-free` GitHub
+Environment, which is restricted to protected branches. The integration
+workflows do not run for pull requests, so fork code never receives them.
+
+Secrets are injected only into the steps that call the workspace, not into
+checkout, tool download, or compilation. They reach the Databricks CLI through
+its standard environment variables and never appear in command arguments,
+configuration files, or test output. Neither `dbxctl` nor the test harness
+reads them.
+
 ## Release Evidence
 
 Pushing a version tag such as `v0.1.0` builds locked native packages for Linux
@@ -160,6 +175,10 @@ license, source, or supported-Rust-version policies.
   not expose digest-pinned hosted images; removing this boundary would require
   controlled self-hosted runners.
 - The live RustSec database is trusted as security data.
+- The integration service principal uses a long-lived OAuth secret. Databricks
+  Free Edition has no account console, so GitHub OIDC workload identity
+  federation, which removes stored secrets entirely, is unavailable. The
+  secret must be rotated before it expires and revoked if exposed.
 - There is no automated workflow security scanner or policy preventing a
   future unpinned Action.
 - Release archives and SBOMs are not yet published as durable GitHub Release
