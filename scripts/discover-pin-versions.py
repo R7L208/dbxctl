@@ -12,6 +12,7 @@ import importlib.util
 
 
 UPDATER_PATH = Path(__file__).with_name("update-pins.py")
+CI_WORKFLOW = Path(__file__).parents[1] / ".github" / "workflows" / "ci.yml"
 SPEC = importlib.util.spec_from_file_location("update_pins", UPDATER_PATH)
 update_pins = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(update_pins)
@@ -33,6 +34,16 @@ def latest_audit_version(token: str | None) -> str:
     raise RuntimeError("no cargo-audit release found")
 
 
+def pinned_databricks_version(workflow: Path = CI_WORKFLOW) -> str:
+    # The Databricks CLI pin is held deliberately because it is also dbxctl's
+    # minimum supported version. Report the committed pin rather than the
+    # latest release; raising it is a manual change (see docs/development.md).
+    match = re.search(r"databricks/cli/releases/download/v([0-9]+(?:\.[0-9]+)+)/", workflow.read_text())
+    if not match:
+        raise RuntimeError(f"no Databricks CLI pin found in {workflow}")
+    return match.group(1)
+
+
 def stable_rust() -> tuple[str, str]:
     manifest = update_pins.fetch("https://static.rust-lang.org/dist/channel-rust-stable.toml").decode()
     date = re.search(r'^date = "([0-9-]+)"$', manifest, re.MULTILINE)
@@ -52,7 +63,7 @@ def discover(token: str | None) -> dict[str, str]:
         "audit": latest_audit_version(token),
         "deny": latest_release_tag("EmbarkStudios/cargo-deny", token).removeprefix("v"),
         "syft": latest_release_tag("anchore/syft", token).removeprefix("v"),
-        "databricks": latest_release_tag("databricks/cli", token).removeprefix("v"),
+        "databricks": pinned_databricks_version(),
     }
 
 

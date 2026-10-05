@@ -37,7 +37,9 @@ class DiscoveryTests(unittest.TestCase):
     def test_discover_normalizes_version_prefixes(self):
         with mock.patch.object(discover, "stable_rust", return_value=("1.99.0", "2026-01-01")), mock.patch.object(
             discover, "latest_audit_version", return_value="0.24.0"
-        ), mock.patch.object(discover, "latest_release_tag", side_effect=["v0.10.0", "0.22.0", "v2.0.0", "v1.20.0"]):
+        ), mock.patch.object(discover, "latest_release_tag", side_effect=["v0.10.0", "0.22.0", "v2.0.0"]), mock.patch.object(
+            discover, "pinned_databricks_version", return_value="1.13.0"
+        ):
             versions = discover.discover("token")
         self.assertEqual(
             versions,
@@ -48,9 +50,27 @@ class DiscoveryTests(unittest.TestCase):
                 "audit": "0.24.0",
                 "deny": "0.22.0",
                 "syft": "2.0.0",
-                "databricks": "1.20.0",
+                "databricks": "1.13.0",
             },
         )
+
+    def test_databricks_pin_is_held_at_the_committed_version(self):
+        with tempfile.TemporaryDirectory() as directory:
+            workflow = Path(directory) / "ci.yml"
+            workflow.write_text(
+                "https://github.com/databricks/cli/releases/download/v1.13.0/databricks_cli_1.13.0_linux_amd64.tar.gz\n"
+            )
+            self.assertEqual(discover.pinned_databricks_version(workflow), "1.13.0")
+
+    def test_databricks_pin_fails_closed_when_missing(self):
+        with tempfile.TemporaryDirectory() as directory:
+            workflow = Path(directory) / "ci.yml"
+            workflow.write_text("no pin here\n")
+            with self.assertRaisesRegex(RuntimeError, "no Databricks CLI pin"):
+                discover.pinned_databricks_version(workflow)
+
+    def test_committed_ci_workflow_pins_databricks_1_13_0(self):
+        self.assertEqual(discover.pinned_databricks_version(), "1.13.0")
 
     def test_main_appends_github_outputs(self):
         with tempfile.TemporaryDirectory() as directory:

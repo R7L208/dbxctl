@@ -15,7 +15,7 @@ body:
     attributes:
       label: ELI5
       description: In one or two plain sentences, what is broken and who notices?
-      placeholder: "`dbxctl doctor` says my Databricks CLI is too old even though it is 0.296.0."
+      placeholder: "`dbxctl doctor` says my Databricks CLI is too old even though it is 1.13.0."
     validations:
       required: true
 
@@ -76,7 +76,7 @@ body:
     attributes:
       label: Databricks CLI version
       description: Output of `databricks --version`.
-      placeholder: e.g. Databricks CLI v0.296.0
+      placeholder: e.g. Databricks CLI v1.13.0
     validations:
       required: false
 
@@ -150,7 +150,7 @@ body:
           participant C as databricks CLI
           U->>D: dbxctl doctor
           D->>C: databricks --version
-          C-->>D: Databricks CLI v0.296.0
+          C-->>D: Databricks CLI v1.13.0
           D-->>U: error: unsupported version
     validations:
       required: false

@@ -92,8 +92,8 @@ mod tests {
     #[test]
     fn parses_current_cli_version() {
         assert_eq!(
-            Version::parse("Databricks CLI v0.296.0\n"),
-            Some(Version::new(0, 296, 0))
+            Version::parse("Databricks CLI v1.13.0\n"),
+            Some(Version::new(1, 13, 0))
         );
     }
 
@@ -113,8 +113,8 @@ mod tests {
     #[test]
     fn ignores_unrelated_numbers_before_the_banner() {
         assert_eq!(
-            Version::parse("build 12345\nDatabricks CLI v0.296.0\n"),
-            Some(Version::new(0, 296, 0))
+            Version::parse("build 12345\nDatabricks CLI v1.13.0\n"),
+            Some(Version::new(1, 13, 0))
         );
     }
 

@@ -29,7 +29,10 @@ verified. Current pinned tools are:
 | cargo-llvm-cov | 0.9.1 | `b3f68e625481fed9b16444174f3fa5ebcdbde4a1878803a35eabe2dcefcdc41a` |
 | cargo-audit | 0.22.2, musl | `7fb9497f8594b389e5fce5ef9b92db08432996895b2e0c5a0167a69ed445c428` |
 | cargo-deny | 0.20.2, musl | `9f12ed4c49936e09b48bf862b595cde2fe64fcbd9d74dfacac6131ca824c8d5f` |
-| Databricks CLI | 0.296.0, Linux amd64 | `cd9fa9748878f35d3c1cdf6b99ac285ce3124117b8839b653a9513b2e87820e6` |
+| Databricks CLI | 1.13.0, Linux amd64 | `0a94deffe3c9f1109020c91ac744a25bf45dc833ac302f8192892779e25b3df7` |
+
+The Databricks CLI pin equals the minimum supported version and is not raised
+by the automated updater; see [Reviewed Pin Updates](development.md#reviewed-pin-updates).
 
 Markdown formatting uses mdformat 1.0.0 with exact transitive versions and
 artifact hashes in `requirements/mdformat.txt`. Installation requires hashes,
