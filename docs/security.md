@@ -2,8 +2,9 @@
 
 ## Current Controls
 
-The Rust application has no third-party crate dependencies. `Cargo.lock` is
-committed, CI uses `--locked`, and unsafe Rust is forbidden.
+The current Rust application has no third-party crate dependencies.
+`Cargo.lock` is committed, CI uses `--locked`, and unsafe Rust is forbidden.
+Phase 0 will add `serde_json` under the dependency controls described below.
 
 The Linux quality and supply-chain jobs run inside this platform-specific OCI
 manifest:
@@ -129,6 +130,25 @@ warnings as errors.
 
 The most recent container validation loaded 1,246 RustSec advisories, found no
 vulnerabilities, and passed the advisory, ban, license, and source policies.
+
+## Design Decisions
+
+### DP0-1: JSON handling
+
+Phase 0 will use `serde_json`, wrapped by a crate-private `json.rs` API. CLI
+output is untrusted input, and using the mature parser avoids owning a custom
+implementation of Unicode escapes, number parsing, nesting limits, malformed
+input handling, and deterministic serialization. Callers must not depend on
+serde types directly; the wrapper remains the boundary for defensive access
+and stable output ordering.
+
+This is the first approved third-party Rust runtime dependency. It must be
+version-locked in `Cargo.lock`, come from the allowed crates.io registry, pass
+`cargo audit` and `cargo deny check`, and use an approved license. The rejected
+alternative was a standard-library-only parser: it preserved the empty
+dependency graph but created substantially more parser and maintenance risk.
+Revisit this choice if the dependency cannot satisfy the project's audit,
+license, source, or supported-Rust-version policies.
 
 ## Remaining Trust Boundaries
 
