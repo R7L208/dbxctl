@@ -1,5 +1,4 @@
 mod databricks;
-mod json;
 
 use std::env;
 use std::ffi::{OsStr, OsString};
