@@ -29,6 +29,29 @@ subsequent runs reuse `target/tools/mdformat`. CI uses Python 3.13.7 and checks
 all tracked Markdown files without modifying them. Local runs also include
 unignored, untracked Markdown so new documentation is covered before staging.
 
+### PyPI Index Configuration
+
+By default, pip installs from pypi.org. For environments that cannot reach the
+public index (corporate networks, sandboxes), three override options exist in
+precedence order:
+
+1. Explicit `PIP_INDEX_URL` environment variable (if set, the script skips all
+   fallback logic; pip respects this standard variable unconditionally).
+2. `DBXCTL_PYPI_PROXY` environment variable (an index URL ending in `/simple/`).
+3. `.dbxctl.local` local file in the repository root (a `KEY=value` file; git
+   will ignore it). Only the `DBXCTL_PYPI_PROXY=` key is parsed; the file is
+   never sourced.
+
+When neither option 1 nor option 2 is set, the script probes pypi.org with a
+3-second timeout. If unreachable and option 3 provides a proxy, it falls back to
+that index for the install only and prints a notice to stderr. If pypi.org is
+reachable, or neither option is available, the script proceeds with the default
+index unchanged.
+
+Regardless of the index used, pip requires all installed packages to match
+hashes from `requirements/mdformat.txt`, preventing substitution of different
+artifacts even if the index is compromised or mirrors untrusted content.
+
 ## Test Layers
 
 Unit tests cover argument parsing and Databricks version parsing. Wrapper

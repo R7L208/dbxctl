@@ -37,7 +37,10 @@ accepts binary distributions only, disables transitive resolution and the pip
 download cache, and runs inside an ignored local or ephemeral CI virtual
 environment. CI pins Python 3.13.7 and the `actions/setup-python` commit.
 Dependabot proposes reviewed updates to the formatter lock; it cannot merge
-them automatically.
+them automatically. The package index is configurable for environments that
+cannot reach pypi.org via `PIP_INDEX_URL`, `DBXCTL_PYPI_PROXY`, or
+`.dbxctl.local` (see development.md); regardless of source, all installs are
+verified against pinned hashes and no internal index URL is committed.
 
 The Linux quality job also downloads the Rust 1.89.0 Clippy, LLVM tools, and
 Rustfmt component archives directly from the dated Rust distribution path.
