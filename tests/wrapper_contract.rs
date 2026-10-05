@@ -1,6 +1,9 @@
 mod common;
 
 use std::path::Path;
+use std::process::Stdio;
+use std::thread;
+use std::time::{Duration, Instant};
 
 use common::{dbxctl, fake_databricks};
 
@@ -146,6 +149,33 @@ fn doctor_accepts_supported_databricks_cli() {
         .arg("doctor")
         .output()
         .expect("run dbxctl");
+    assert!(output.status.success());
+    assert!(String::from_utf8_lossy(&output.stdout).contains("Databricks CLI 0.296.0"));
+}
+
+#[test]
+fn doctor_does_not_share_its_stdin_with_databricks() {
+    // The fake CLI reads stdin to EOF. dbxctl's own stdin is an open pipe that
+    // never closes, so the check only finishes if the CLI gets an empty stdin.
+    let mut child = dbxctl()
+        .env("DATABRICKS_CLI_PATH", fake_databricks())
+        .env("READ_STDIN", "1")
+        .arg("doctor")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .expect("run dbxctl");
+    let _open_stdin = child.stdin.take();
+
+    let started = Instant::now();
+    while child.try_wait().expect("poll dbxctl").is_none() {
+        if started.elapsed() > Duration::from_secs(10) {
+            child.kill().expect("kill hung dbxctl");
+            panic!("doctor waited on stdin shared with the Databricks CLI");
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+    let output = child.wait_with_output().expect("collect dbxctl output");
     assert!(output.status.success());
     assert!(String::from_utf8_lossy(&output.stdout).contains("Databricks CLI 0.296.0"));
 }

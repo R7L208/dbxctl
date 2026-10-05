@@ -4,11 +4,16 @@ use std::fmt;
 use std::io::Read;
 use std::path::PathBuf;
 use std::process::{Child, Command, ExitCode, ExitStatus, Stdio};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::thread;
 use std::time::{Duration, Instant};
 
 const MINIMUM_DATABRICKS_VERSION: Version = Version::new(0, 200, 0);
 const POLL_INTERVAL: Duration = Duration::from_millis(10);
+// How long to wait for the output pipes to close after the process is gone. A
+// descendant that inherited them (for example Terraform under `databricks
+// bundle`) can keep them open after the CLI exits or is killed.
+const PIPE_CLOSE_GRACE: Duration = Duration::from_secs(1);
 const VERSION_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Debug)]
@@ -86,23 +91,26 @@ pub(crate) fn run_captured(
 fn run_captured_command(command: &mut Command, timeout: Duration) -> Result<Captured, String> {
     let display = command.get_program().display().to_string();
     let mut child = command
+        .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|error| format!("could not execute {display}: {error}"))?;
     let stdout = child.stdout.take().ok_or_else(|| {
-        let _ = child.kill();
+        terminate(&mut child);
         format!("could not capture stdout from {display}")
     })?;
     let stderr = child.stderr.take().ok_or_else(|| {
-        let _ = child.kill();
+        terminate(&mut child);
         format!("could not capture stderr from {display}")
     })?;
 
     // Drain both pipes concurrently. Waiting before reading can deadlock when
-    // either pipe fills its operating-system buffer.
-    let stdout_reader = thread::spawn(move || read_all(stdout));
-    let stderr_reader = thread::spawn(move || read_all(stderr));
+    // either pipe fills its operating-system buffer. The readers report through
+    // a channel so that collecting their output can be bounded by a deadline.
+    let (sender, output) = mpsc::channel();
+    spawn_reader(Stream::Stdout, stdout, sender.clone());
+    spawn_reader(Stream::Stderr, stderr, sender);
     let started = Instant::now();
 
     let status = loop {
@@ -110,46 +118,86 @@ fn run_captured_command(command: &mut Command, timeout: Duration) -> Result<Capt
             Ok(Some(status)) => break status,
             Ok(None) if started.elapsed() >= timeout => {
                 terminate(&mut child);
-                let stdout = join_reader(stdout_reader, "stdout")?;
-                let stderr = join_reader(stderr_reader, "stderr")?;
+                let captured = match collect(&output, Instant::now() + PIPE_CLOSE_GRACE) {
+                    Ok((stdout, stderr)) => format!(
+                        "captured {} stdout bytes and {} stderr bytes",
+                        stdout.len(),
+                        stderr.len()
+                    ),
+                    Err(problem) => problem,
+                };
                 return Err(format!(
-                    "{display} timed out after {} ms (captured {} stdout bytes and {} stderr bytes)",
-                    timeout.as_millis(),
-                    stdout.len(),
-                    stderr.len()
+                    "{display} timed out after {} ms ({captured})",
+                    timeout.as_millis()
                 ));
             }
             Ok(None) => thread::sleep(POLL_INTERVAL.min(timeout.saturating_sub(started.elapsed()))),
             Err(error) => {
                 terminate(&mut child);
-                let _ = join_reader(stdout_reader, "stdout");
-                let _ = join_reader(stderr_reader, "stderr");
                 return Err(format!("could not wait for {display}: {error}"));
             }
         }
     };
 
+    let deadline = (started + timeout).max(Instant::now()) + PIPE_CLOSE_GRACE;
+    let (stdout, stderr) =
+        collect(&output, deadline).map_err(|problem| format!("{display} exited, but {problem}"))?;
     Ok(Captured {
-        stdout: join_reader(stdout_reader, "stdout")?,
-        stderr: join_reader(stderr_reader, "stderr")?,
+        stdout,
+        stderr,
         status,
     })
 }
 
-fn read_all(mut stream: impl Read) -> std::io::Result<Vec<u8>> {
-    let mut bytes = Vec::new();
-    stream.read_to_end(&mut bytes)?;
-    Ok(bytes)
+#[derive(Clone, Copy)]
+enum Stream {
+    Stdout,
+    Stderr,
 }
 
-fn join_reader(
-    reader: thread::JoinHandle<std::io::Result<Vec<u8>>>,
-    stream: &str,
-) -> Result<Vec<u8>, String> {
-    reader
-        .join()
-        .map_err(|_| format!("{stream} capture thread panicked"))?
-        .map_err(|error| format!("could not read captured {stream}: {error}"))
+type ReaderResult = (Stream, std::io::Result<Vec<u8>>);
+
+fn spawn_reader(
+    stream: Stream,
+    mut pipe: impl Read + Send + 'static,
+    sender: mpsc::Sender<ReaderResult>,
+) {
+    // The handle is dropped: a reader blocked on a pipe held open by a
+    // descendant is abandoned at the deadline and ends when that pipe closes.
+    thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let result = pipe.read_to_end(&mut bytes).map(|_| bytes);
+        let _ = sender.send((stream, result));
+    });
+}
+
+fn collect(
+    output: &Receiver<ReaderResult>,
+    deadline: Instant,
+) -> Result<(Vec<u8>, Vec<u8>), String> {
+    let mut stdout = None;
+    let mut stderr = None;
+    while stdout.is_none() || stderr.is_none() {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        let (stream, result) = match output.recv_timeout(remaining) {
+            Ok(message) => message,
+            Err(RecvTimeoutError::Timeout) => {
+                return Err(format!(
+                    "its output pipes stayed open for more than {} ms; a child process may still be holding them",
+                    PIPE_CLOSE_GRACE.as_millis()
+                ));
+            }
+            Err(RecvTimeoutError::Disconnected) => {
+                return Err("an output capture thread stopped unexpectedly".to_owned());
+            }
+        };
+        let (name, slot) = match stream {
+            Stream::Stdout => ("stdout", &mut stdout),
+            Stream::Stderr => ("stderr", &mut stderr),
+        };
+        *slot = Some(result.map_err(|error| format!("could not read captured {name}: {error}"))?);
+    }
+    Ok((stdout.unwrap_or_default(), stderr.unwrap_or_default()))
 }
 
 fn terminate(child: &mut Child) {
@@ -157,12 +205,12 @@ fn terminate(child: &mut Child) {
     let _ = child.wait();
 }
 
-fn installed_version(binary: &OsStr) -> Result<Version, String> {
+fn installed_version(binary: &OsStr, timeout: Duration) -> Result<Version, String> {
     let Captured {
         stdout,
         stderr,
         status,
-    } = run_captured(binary, &[OsString::from("version")], VERSION_TIMEOUT)?;
+    } = run_captured(binary, &[OsString::from("version")], timeout)?;
 
     if !status.success() {
         return Err(format!(
@@ -179,8 +227,8 @@ fn installed_version(binary: &OsStr) -> Result<Version, String> {
         .ok_or_else(|| format!("could not parse Databricks CLI version from {stdout:?}"))
 }
 
-fn validate(binary: &OsStr) -> Result<Version, String> {
-    let version = installed_version(binary)?;
+fn validate(binary: &OsStr, timeout: Duration) -> Result<Version, String> {
+    let version = installed_version(binary, timeout)?;
     if version < MINIMUM_DATABRICKS_VERSION {
         return Err(format!(
             "Databricks CLI {version} is unsupported; install {MINIMUM_DATABRICKS_VERSION} or newer"
@@ -191,7 +239,7 @@ fn validate(binary: &OsStr) -> Result<Version, String> {
 
 pub(crate) fn run_doctor(binary: &OsStr) -> ExitCode {
     println!("dbxctl {}", env!("CARGO_PKG_VERSION"));
-    match validate(binary) {
+    match validate(binary, VERSION_TIMEOUT) {
         Ok(version) => {
             println!("Databricks CLI {version} ({})", binary.display());
             ExitCode::SUCCESS
@@ -231,9 +279,17 @@ mod tests {
     use std::path::{Path, PathBuf};
     use std::process::Command;
     use std::sync::OnceLock;
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
-    use super::{run_captured, run_captured_command};
+    use super::{run_captured, run_captured_command, validate};
+
+    // Generous bound for "returned promptly" on slow CI runners; every case
+    // below would otherwise take at least five seconds.
+    const PROMPT: Duration = Duration::from_secs(3);
+    // The held-pipe cases use a one-second timeout so the fixture has time to
+    // start its descendant, then wait one more second for the pipes to close.
+    // Without the bound they would take the descendant's full ten seconds.
+    const HELD_PIPES_BOUND: Duration = Duration::from_secs(5);
 
     #[test]
     fn run_captured_collects_output() {
@@ -264,10 +320,73 @@ mod tests {
     #[test]
     fn times_out_and_kills_the_child() {
         let mut command = Command::new(fake_databricks());
-        command.env("SLEEP_MS", "500");
-        let error = run_captured_command(&mut command, Duration::from_millis(25))
+        command.env("SLEEP_MS", "5000");
+        let started = Instant::now();
+        let error = run_captured_command(&mut command, Duration::from_millis(100))
             .expect_err("sleeping CLI must time out");
-        assert!(error.contains("timed out after 25 ms"), "{error}");
+        assert!(error.contains("timed out after 100 ms"), "{error}");
+        assert!(started.elapsed() < PROMPT, "took {:?}", started.elapsed());
+    }
+
+    #[test]
+    fn timeout_is_bounded_when_a_descendant_holds_the_pipes() {
+        let mut command = Command::new(fake_databricks());
+        command
+            .env("SLEEP_MS", "10000")
+            .env("HOLD_PIPES_MS", "10000");
+        let started = Instant::now();
+        let error = run_captured_command(&mut command, Duration::from_secs(1))
+            .expect_err("sleeping CLI must time out");
+        assert!(error.contains("timed out after 1000 ms"), "{error}");
+        assert!(error.contains("may still be holding them"), "{error}");
+        assert!(
+            started.elapsed() < HELD_PIPES_BOUND,
+            "took {:?}",
+            started.elapsed()
+        );
+    }
+
+    #[test]
+    fn exit_is_bounded_when_a_descendant_holds_the_pipes() {
+        let mut command = Command::new(fake_databricks());
+        command.env("HOLD_PIPES_MS", "10000");
+        let started = Instant::now();
+        let error = run_captured_command(&mut command, Duration::from_secs(1))
+            .expect_err("held pipes must not block past the deadline");
+        assert!(error.contains("exited, but"), "{error}");
+        assert!(error.contains("may still be holding them"), "{error}");
+        assert!(
+            started.elapsed() < HELD_PIPES_BOUND,
+            "took {:?}",
+            started.elapsed()
+        );
+    }
+
+    #[test]
+    fn child_gets_an_empty_stdin() {
+        let mut command = Command::new(fake_databricks());
+        command.env("READ_STDIN", "1");
+        let captured =
+            run_captured_command(&mut command, Duration::from_secs(5)).expect("capture fake CLI");
+        assert!(captured.status.success());
+        assert_eq!(captured.stderr, b"stdin bytes: 0\n");
+    }
+
+    #[test]
+    fn version_check_honors_its_timeout() {
+        let directory = std::env::temp_dir().join(format!("dbxctl-slow-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).expect("create slow fixture directory");
+        let slow = directory.join(format!(
+            "fake-databricks-slow{}",
+            std::env::consts::EXE_SUFFIX
+        ));
+        std::fs::copy(fake_databricks(), &slow).expect("copy fixture");
+
+        let started = Instant::now();
+        let error = validate(slow.as_os_str(), Duration::from_millis(100))
+            .expect_err("hung version command must time out");
+        assert!(error.contains("timed out after 100 ms"), "{error}");
+        assert!(started.elapsed() < PROMPT, "took {:?}", started.elapsed());
     }
 
     #[test]
