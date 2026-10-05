@@ -1,45 +1,49 @@
 name: Planning
-description: Propose a design decision (DP<phase>-<n>) or plan a phase of work
-title: "[Plan] DP<phase>-<n>: "
+description: Propose a decision, verification question, requirement, or plan
+title: "[Plan] "
 labels: ["planning", "needs-triage"]
 body:
   - type: markdown
     attributes:
       value: >
-        Planning issues follow the project's design nomenclature. Decisions are
-        named `DP<phase>-<n>`, for example
-        [DP0-1: JSON handling](https://github.com/R7L208/dbxctl/blob/main/docs/security.md#dp0-1-json-handling)
-        and
-        [DP1-1: Lineage Graph Construction](https://github.com/R7L208/dbxctl/blob/main/docs/mv-lineage/design/dp1-1-graph-construction.md).
-        Accepted decisions are recorded in
-        [`docs/mv-lineage/design/`](https://github.com/R7L208/dbxctl/tree/main/docs/mv-lineage/design)
-        as `dp<phase>-<n>-<slug>.md`, or in the
-        [Design Decisions](https://github.com/R7L208/dbxctl/blob/main/docs/security.md#design-decisions)
-        section of `docs/security.md` when they concern dependencies or trust
-        boundaries. Follow the structure of
-        [DP1-1](https://github.com/R7L208/dbxctl/blob/main/docs/mv-lineage/design/dp1-1-graph-construction.md):
-        **Decision**, **Rationale**, and **Revisit Conditions**.
+        Planning issues use the project's
+        [design nomenclature](https://github.com/R7L208/dbxctl/blob/main/docs/design-nomenclature-and-glossary.md).
+        Pick the [item family](https://github.com/R7L208/dbxctl/blob/main/docs/design-nomenclature-and-glossary.md#item-families)
+        that fits, give it the next unused identifier, and put that identifier
+        in the title (for example `[Plan] D3: ...` or `[Plan] V12: ...`).
+        Follow the
+        [identifier rules](https://github.com/R7L208/dbxctl/blob/main/docs/design-nomenclature-and-glossary.md#identifier-rules):
+        the canonical definition lives in version-controlled documentation, and
+        this issue tracks it and links back.
 
   - type: dropdown
     id: kind
     attributes:
-      label: Kind
+      label: Item family
+      description: >
+        See [Item Families](https://github.com/R7L208/dbxctl/blob/main/docs/design-nomenclature-and-glossary.md#item-families)
+        for each family's meaning and canonical location.
       options:
-        - Design decision
-        - Phase plan
-        - Proposal (exploratory, no decision yet)
+        - D — product or architecture decision
+        - DP — decision proposal raised during a phase
+        - V — question or assumption to verify
+        - R — requirement
+        - T — implementation or operational task plan
+        - A — runtime assertion or hard gate
+        - Roadmap or phase plan
+        - Proposal (exploratory, no identifier yet)
+        - New identifier family (define it in the nomenclature first)
     validations:
       required: true
 
   - type: input
-    id: decision-id
+    id: identifier
     attributes:
-      label: Decision ID
+      label: Identifier
       description: >
-        Next unused `DP<phase>-<n>` for this phase. Check existing IDs in
-        docs/mv-lineage/design/ and the Design Decisions section of
-        docs/security.md. Leave empty for a phase plan or exploratory proposal.
-      placeholder: DP1-2
+        The next unused identifier in its family, with case preserved. Leave
+        empty for an exploratory proposal.
+      placeholder: e.g. D3, DP0-2, V12, R4
     validations:
       required: false
 
@@ -47,22 +51,32 @@ body:
     id: phase
     attributes:
       label: Phase
+      description: >
+        See [Phases](https://github.com/R7L208/dbxctl/blob/main/docs/design-nomenclature-and-glossary.md#phases).
+        A `DP` identifier must name its phase.
       options:
-        - Phase 0 — probes
-        - Phase 1
-        - Phase 2
-        - Phase 3
-        - Phase 4
-        - Cross-cutting (CI, release, supply chain)
+        - Not phase-specific
+        - P0 — discovery and de-risking
+        - P1
+        - P2 or later
     validations:
       required: true
+
+  - type: input
+    id: area
+    attributes:
+      label: Feature or project area
+      description: The roadmap or design this belongs to, if any.
+      placeholder: e.g. CI and supply chain, release packaging
+    validations:
+      required: false
 
   - type: textarea
     id: eli5
     attributes:
       label: ELI5
       description: In one or two plain sentences, what are we deciding or planning, and why does it matter?
-      placeholder: We need to pick how dbxctl stores the lineage graph so later features can answer "what breaks if I change this table?"
+      placeholder: We need to decide how dbxctl reports errors from the Databricks CLI so users always know whether a failure was ours or upstream's.
     validations:
       required: true
 
@@ -70,7 +84,19 @@ body:
     id: problem
     attributes:
       label: Problem
-      description: The context and the question to answer. Link related issues, findings, and design records.
+      description: The context and the question to answer. Link related issues, findings, and design documents.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: >
+        For a decision, the recommended choice, worded so it can be copied
+        into the design document's decisions section. For a `V` item, the
+        question and how it will be verified. For a requirement, the
+        requirement text. For a plan, the outcome it delivers.
     validations:
       required: true
 
@@ -78,58 +104,40 @@ body:
     id: options
     attributes:
       label: Options considered
-      description: Each option with its trade-offs. Include the option of doing nothing when it is realistic.
+      description: For decisions, each option with its trade-offs. Include doing nothing when it is realistic.
       placeholder: |
         1. **Option A** — ...
            - Pros: ...
            - Cons: ...
         2. **Option B** — ...
     validations:
-      required: true
-
-  - type: textarea
-    id: decision
-    attributes:
-      label: Proposed decision
-      description: >
-        The recommended option, stated so it could be copied into the record's
-        **Decision** section. See
-        [DP1-1](https://github.com/R7L208/dbxctl/blob/main/docs/mv-lineage/design/dp1-1-graph-construction.md#decision)
-        for an example.
-    validations:
-      required: true
+      required: false
 
   - type: textarea
     id: rationale
     attributes:
       label: Rationale
-      description: Why this option wins against the project's constraints (single signed binary, CLI-only workspace access, read-only by default, deterministic output, minimal dependencies).
+      description: Why this proposal wins against the project's constraints (single signed binary, CLI-only workspace access, read-only by default, deterministic output, minimal dependencies).
     validations:
-      required: true
+      required: false
 
   - type: textarea
     id: revisit
     attributes:
       label: Revisit conditions
-      description: >
-        What evidence or change in requirements would reopen this decision? See
-        [DP1-1](https://github.com/R7L208/dbxctl/blob/main/docs/mv-lineage/design/dp1-1-graph-construction.md#revisit-conditions)
-        for an example.
-      placeholder: |
-        - Graphs must persist across runs.
-        - Graph size grows by orders of magnitude.
+      description: For decisions, the evidence or change in requirements that would reopen this one.
     validations:
-      required: true
+      required: false
 
   - type: textarea
     id: phasing
     attributes:
       label: Phasing and work order
-      description: For phase plans, the steps, their dependencies, and which can run in parallel. For decisions, the follow-up issues needed.
+      description: For plans, the steps, their dependencies, and which can run in parallel. For decisions, the follow-up issues needed.
       placeholder: |
         | Step | Work | Blocked by | Parallel with |
         | --- | --- | --- | --- |
-        | 1 | ... | — | 2 |
+        | T1 | ... | — | T2 |
     validations:
       required: false
 
@@ -144,9 +152,9 @@ body:
       render: mermaid
       placeholder: |
         flowchart TD
-          decide[Decide DP1-2] --> impl[Implement]
-          fixtures[Fixtures] --> impl
-          impl --> docs[Document]
+          v[V1: verify assumption] --> d[D1: decide]
+          d --> t1[T1: implement]
+          t1 --> t2[T2: document]
     validations:
       required: false
 
@@ -170,7 +178,7 @@ body:
     attributes:
       label: Done when
       placeholder: |
-        - The decision is recorded in `docs/mv-lineage/design/dp<phase>-<n>-<slug>.md`.
+        - The item is recorded in its canonical location, as listed in the design nomenclature.
         - Follow-up issues exist for each implementation step.
     validations:
       required: true
@@ -180,8 +188,7 @@ body:
     attributes:
       label: For coding agents (optional)
       description: >
-        Where to record the decision, files and policies it affects (for
-        example `deny.toml`, `Cargo.toml`, `docs/security.md`), and checks to
-        run.
+        Where to record the item, files and policies it affects (for example
+        `deny.toml`, `Cargo.toml`, `docs/security.md`), and checks to run.
     validations:
       required: false

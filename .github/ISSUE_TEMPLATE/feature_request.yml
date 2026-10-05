@@ -56,7 +56,7 @@ body:
         - doctor
         - Databricks passthrough
         - probe (lineage suite)
-        - MV lineage (Phases 1–4)
+        - MV lineage
         - Release packages / verification
         - CI / supply chain
         - Documentation
@@ -86,7 +86,8 @@ body:
         (such as mutation, authentication, or workspace access), or picks
         between architectural approaches. Those need a
         [Planning issue](https://github.com/R7L208/dbxctl/issues/new?template=planning.yml)
-        first, named with the `DP<phase>-<n>` design-decision nomenclature.
+        first, named using the
+        [design nomenclature](https://github.com/R7L208/dbxctl/blob/main/docs/design-nomenclature-and-glossary.md).
       options:
         - "No"
         - "Yes"

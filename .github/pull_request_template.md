@@ -2,7 +2,7 @@
 For AI-written descriptions:
 - Follow this template (Related issue, Summary, Diagram, Test plan, Evidence,
   Type of change, Test coverage, Coverage notes, Checks, Safety and supply
-  chain, Design decisions, Release notes, Changelog).
+  chain, Design items, Release notes, Changelog).
 - Keep it concise; explain the cause, fix, and proof once, in plain language.
 - Always fill in the ELI5. Add a diagram only when it makes a flow,
   relationship, or ordering easier to follow; otherwise delete that section.
@@ -107,17 +107,15 @@ needed. Line coverage must stay at or above 90%.
 - [ ] Fixtures, logs, and examples contain no credentials, hosts, workspace IDs, or user paths
 - [ ] New or changed GitHub Actions and downloaded tools are pinned by full SHA or SHA-256
 
-## Design decisions
+## Design items
 
 <!--
-List any design decision this PR records or implements by its DP<phase>-<n>
-ID, with a link to its record. Write "None" if not applicable.
+List any design item this PR records or implements (decisions, verification
+questions, requirements, tasks) by its identifier, with case preserved, and a
+link to its canonical location. Write "None" if not applicable.
 
-Nomenclature and existing records:
-- DP0-1: https://github.com/R7L208/dbxctl/blob/main/docs/security.md#dp0-1-json-handling
-- DP1-1: https://github.com/R7L208/dbxctl/blob/main/docs/mv-lineage/design/dp1-1-graph-construction.md
-- All design records: https://github.com/R7L208/dbxctl/tree/main/docs/mv-lineage/design
-- Propose a new decision: https://github.com/R7L208/dbxctl/issues/new?template=planning.yml
+- Identifiers and canonical locations: https://github.com/R7L208/dbxctl/blob/main/docs/design-nomenclature-and-glossary.md#item-families
+- Propose a new item: https://github.com/R7L208/dbxctl/issues/new?template=planning.yml
 -->
 
 ## Release notes
