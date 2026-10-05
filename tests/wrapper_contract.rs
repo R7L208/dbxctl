@@ -94,7 +94,11 @@ fn enforces_minimum_databricks_version() {
         .output()
         .expect("run dbxctl");
     assert!(!output.status.success());
-    assert!(String::from_utf8_lossy(&output.stdout).contains("unsupported"));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("Databricks CLI 1.12.0 is unsupported; install 1.13.0 or newer"),
+        "{stdout}"
+    );
 }
 
 #[cfg(unix)]
@@ -150,7 +154,7 @@ fn doctor_accepts_supported_databricks_cli() {
         .output()
         .expect("run dbxctl");
     assert!(output.status.success());
-    assert!(String::from_utf8_lossy(&output.stdout).contains("Databricks CLI 0.296.0"));
+    assert!(String::from_utf8_lossy(&output.stdout).contains("Databricks CLI 1.13.0"));
 }
 
 #[test]
@@ -177,5 +181,5 @@ fn doctor_does_not_share_its_stdin_with_databricks() {
     }
     let output = child.wait_with_output().expect("collect dbxctl output");
     assert!(output.status.success());
-    assert!(String::from_utf8_lossy(&output.stdout).contains("Databricks CLI 0.296.0"));
+    assert!(String::from_utf8_lossy(&output.stdout).contains("Databricks CLI 1.13.0"));
 }

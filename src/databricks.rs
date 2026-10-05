@@ -8,7 +8,7 @@ use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::thread;
 use std::time::{Duration, Instant};
 
-const MINIMUM_DATABRICKS_VERSION: Version = Version::new(0, 200, 0);
+const MINIMUM_DATABRICKS_VERSION: Version = Version::new(1, 13, 0);
 const POLL_INTERVAL: Duration = Duration::from_millis(10);
 // How long to wait for the output pipes to close after the process is gone. A
 // descendant that inherited them (for example Terraform under `databricks
@@ -281,7 +281,9 @@ mod tests {
     use std::sync::OnceLock;
     use std::time::{Duration, Instant};
 
-    use super::{run_captured, run_captured_command, validate};
+    use super::{
+        MINIMUM_DATABRICKS_VERSION, Version, run_captured, run_captured_command, validate,
+    };
 
     // Generous bound for "returned promptly" on slow CI runners; every case
     // below would otherwise take at least five seconds.
@@ -290,6 +292,15 @@ mod tests {
     // start its descendant, then wait one more second for the pipes to close.
     // Without the bound they would take the descendant's full ten seconds.
     const HELD_PIPES_BOUND: Duration = Duration::from_secs(5);
+
+    #[test]
+    fn minimum_version_is_1_13_0() {
+        assert_eq!(MINIMUM_DATABRICKS_VERSION, Version::new(1, 13, 0));
+        assert!(Version::new(1, 12, 99) < MINIMUM_DATABRICKS_VERSION);
+        assert!(Version::new(0, 296, 0) < MINIMUM_DATABRICKS_VERSION);
+        assert!(Version::new(1, 13, 0) >= MINIMUM_DATABRICKS_VERSION);
+        assert!(Version::new(1, 19, 0) >= MINIMUM_DATABRICKS_VERSION);
+    }
 
     #[test]
     fn run_captured_collects_output() {

@@ -14,7 +14,7 @@ The current release has no third-party Rust dependencies. Phase 0 will add
 
 ## Requirements
 
-- Databricks CLI 0.200.0 or newer
+- Databricks CLI 1.13.0 or newer
 - Rust 1.89.0 for source builds
 - Databricks authentication configured for commands that access a workspace
 

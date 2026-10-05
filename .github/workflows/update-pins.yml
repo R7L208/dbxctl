@@ -62,6 +62,8 @@ jobs:
           commit-message: Update supply-chain pins
           title: Update supply-chain pins
           body: |
-            Automated refresh of Rust, downloaded-tool, OCI image, and
-            Databricks CLI pins. Review the upstream versions, computed
-            SHA-256 values, and full CI results before merging.
+            Automated refresh of Rust, downloaded-tool, and OCI image pins.
+            The Databricks CLI pin is held at dbxctl's minimum supported
+            version and only its checksum is re-verified. Review the
+            upstream versions, computed SHA-256 values, and full CI results
+            before merging.

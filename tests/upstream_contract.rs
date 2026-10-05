@@ -40,7 +40,7 @@ fn doctor_accepts_the_pinned_databricks_cli() {
     let binary = env::var_os("DATABRICKS_CLI_PATH")
         .expect("DATABRICKS_CLI_PATH must identify the pinned upstream binary");
 
-    // The version the real CLI reports, e.g. "Databricks CLI v0.296.0".
+    // The version the real CLI reports, e.g. "Databricks CLI v1.13.0".
     let direct = run_direct(Path::new(&binary), &["version"]);
     let banner = String::from_utf8(direct.stdout).expect("UTF-8 version output");
     let version = banner
