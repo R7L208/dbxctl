@@ -6,6 +6,8 @@ use std::process::{Command, Output};
 
 use common::{assert_same_process_result, run_direct, run_wrapped};
 
+const PROBE_TEXT: &str = "dbxctl integration probe";
+/// Base64 of `PROBE_TEXT` followed by a newline, as the import API requires.
 const PROBE_TEXT_BASE64: &str = "ZGJ4Y3RsIGludGVncmF0aW9uIHByb2JlCg==";
 
 /// Live-workspace settings. Credentials are never read here: the Databricks
@@ -197,10 +199,12 @@ fn workspace_file_round_trips_and_is_removed() {
     expect_success(&imported, "import the probe file");
 
     let exported = workspace.wrapped(&["workspace", "export", &file, "--format", "AUTO"]);
+    // Text output decodes the exported content.
     let content = expect_success(&exported, "export the probe file");
-    assert!(
-        content.contains(PROBE_TEXT_BASE64),
-        "exported probe file content differs: {content}"
+    assert_eq!(
+        content.trim_end(),
+        PROBE_TEXT,
+        "exported probe file content differs"
     );
 
     drop(guard);
