@@ -96,17 +96,15 @@ impl<'a> Parser<'a> {
         }
 
         // Now consume all occurrences
-        let mut first_consumed = false;
         while let Some(arg) = self.peek() {
             if arg == full_option.as_str() {
+                self.next(); // Consume the option flag
+                // Always skip the value (whether it's the first or repeated)
                 self.next();
-                if !first_consumed {
-                    // Skip the value too
-                    self.next();
-                    first_consumed = true;
-                }
             } else if arg.to_string_lossy().starts_with("--") {
                 break;
+            } else {
+                break; // Non-option argument; stop consuming options
             }
         }
 
