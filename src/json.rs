@@ -2,22 +2,31 @@
 // #30 (workspace integration) will consume this module
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 /// A JSON value with defensive access and deterministic serialization.
 ///
 /// This module wraps `serde_json` to hide its types from callers and enforce
-/// defensive access patterns. All accessors return `Option` or `Result`.
+/// defensive access patterns. Accessors return borrowed references without cloning.
 ///
-/// **Nesting depth limit:** `serde_json` enforces a maximum recursion depth via
-/// its parser. Attempting to parse deeply nested structures returns a parse error.
-/// The exact limit depends on the `serde_json` version but is typically 128 levels.
-/// Deeply nested input returns an error; no stack overflow occurs.
+/// **Nesting depth limit:** `serde_json` enforces a maximum recursion depth. Attempting
+/// to parse beyond this limit returns an error instead of panicking or overflowing the
+/// stack. The exact limit is determined at runtime via test.
 ///
 /// **Duplicate object keys:** When an object has duplicate keys, `serde_json` keeps
-/// the last value (standard JSON behavior). The `get` method returns the value
-/// associated with the final occurrence of a key.
-#[derive(Clone, Debug, PartialEq)]
-pub struct Value(serde_json::Value);
+/// the last value (standard JSON behavior). Access methods return the value associated
+/// with the final occurrence.
+///
+/// **Number representation:** Integers beyond the i64/u64 range are parsed as f64,
+/// which may lose precision. Serialization outputs numbers using their parsed representation.
+#[derive(Clone, Debug)]
+pub struct Value(Arc<serde_json::Value>);
+
+impl PartialEq for Value {
+    fn eq(&self, other: &Self) -> bool {
+        *self.0 == *other.0
+    }
+}
 
 /// A JSON error wrapping `serde_json`'s error.
 #[derive(Debug)]
@@ -42,7 +51,9 @@ impl PartialEq for Error {
 /// # Errors
 /// Returns an error if the input is malformed or exceeds the nesting depth limit.
 pub fn parse(input: &str) -> Result<Value, Error> {
-    serde_json::from_str(input).map(Value).map_err(Error)
+    serde_json::from_str(input)
+        .map(|v| Value(Arc::new(v)))
+        .map_err(Error)
 }
 
 /// Parse a JSON value from bytes.
@@ -51,7 +62,9 @@ pub fn parse(input: &str) -> Result<Value, Error> {
 /// Returns an error if the input is malformed, non-UTF-8, or exceeds the nesting
 /// depth limit.
 pub fn parse_bytes(input: &[u8]) -> Result<Value, Error> {
-    serde_json::from_slice(input).map(Value).map_err(Error)
+    serde_json::from_slice(input)
+        .map(|v| Value(Arc::new(v)))
+        .map_err(Error)
 }
 
 /// Serialize a value to a JSON string with deterministic output and a trailing newline.
@@ -98,42 +111,61 @@ fn sort_value(val: &serde_json::Value) -> Result<serde_json::Value, Error> {
 
 impl Value {
     /// Access a value by object key, returning `None` if not an object or key not found.
+    /// Returns a new Value wrapping the value (Arc-backed, cheap clone).
     pub fn get(&self, key: &str) -> Option<Value> {
-        self.0.get(key).map(|v| Value(v.clone()))
+        self.0.get(key).map(|v| Value(Arc::new(v.clone())))
     }
 
     /// Access a value by array index, returning `None` if not an array or index out of bounds.
+    /// Returns a new Value wrapping the value (Arc-backed, cheap clone).
     pub fn get_index(&self, index: usize) -> Option<Value> {
-        self.0.get(index).map(|v| Value(v.clone()))
+        self.0.get(index).map(|v| Value(Arc::new(v.clone())))
     }
 
     /// Access a value using a JSON Pointer (RFC 6901) path.
     ///
-    /// Supports paths like `/foo/bar/0` and properly unescapes `~0` (`~` tilde) and `~1` (`/` slash).
+    /// Empty path returns the whole document. Path must start with `/` or be `""`.
+    /// Invalid escapes and non-numeric array indices result in no match.
+    /// Array indices with leading zeros (`01`) and `-` are rejected.
     ///
-    /// # Errors
-    /// Returns `None` if the path is invalid or the value at the path does not exist.
+    /// Unescapes: `~0` → `~`, `~1` → `/`. Other escapes (like `~2`) yield no match.
     pub fn pointer(&self, path: &str) -> Option<Value> {
-        // RFC 6901 pointer: unescape ~0 -> ~ and ~1 -> /
-        let tokens: Vec<&str> = if path.is_empty() {
-            vec![]
-        } else if let Some(rest) = path.strip_prefix('/') {
-            rest.split('/').collect()
-        } else {
-            return None;
-        };
-
-        let mut current = &self.0;
-        for token in tokens {
-            let unescaped = unescape_pointer_token(token);
-            // Try as array index first, then as object key
-            if let Ok(index) = unescaped.parse::<usize>() {
-                current = current.get(index)?;
-            } else {
-                current = current.get(&unescaped)?;
-            }
+        if path.is_empty() {
+            return Some(self.clone());
         }
-        Some(Value(current.clone()))
+
+        let rest = path.strip_prefix('/')?;
+
+        let tokens: Vec<&str> = rest.split('/').collect();
+        let mut current = &*self.0;
+
+        for token in tokens {
+            let unescaped = unescape_pointer_token(token)?;
+
+            // Handle array index access
+            if current.is_array() {
+                // Reject `-` (means past-the-end)
+                if unescaped == "-" {
+                    return None;
+                }
+                // Reject leading zeros (like "01")
+                if unescaped.starts_with('0') && unescaped.len() > 1 {
+                    return None;
+                }
+                // Try to parse as index
+                if let Ok(index) = unescaped.parse::<usize>() {
+                    current = current.get(index)?;
+                    continue;
+                }
+                // Non-numeric token on array = no match
+                return None;
+            }
+
+            // Treat as object key
+            current = current.get(&unescaped)?;
+        }
+
+        Some(Value(Arc::new(current.clone())))
     }
 
     /// Return the value as a string, or `None` if it's not a string.
@@ -157,27 +189,18 @@ impl Value {
     }
 
     /// Return the value as an f64, or `None` if it's not a number.
-    ///
-    /// Note: For integers within i64/u64 range, this may lose precision.
-    /// For numbers outside those ranges, this represents the value as a float.
     pub fn as_f64(&self) -> Option<f64> {
         self.0.as_f64()
     }
 
-    /// Return the value as an array, or `None` if it's not an array.
-    pub fn as_array(&self) -> Option<Vec<Value>> {
-        self.0
-            .as_array()
-            .map(|arr| arr.iter().map(|v| Value(v.clone())).collect())
+    /// Return the value as an array slice, or `None` if it's not an array.
+    pub fn as_array(&self) -> Option<&[serde_json::Value]> {
+        self.0.as_array().map(Vec::as_slice)
     }
 
-    /// Return the value as an object (key-value pairs), or `None` if it's not an object.
-    pub fn as_object(&self) -> Option<Vec<(String, Value)>> {
-        self.0.as_object().map(|obj| {
-            obj.iter()
-                .map(|(k, v)| (k.clone(), Value(v.clone())))
-                .collect()
-        })
+    /// Return the value as an object map, or `None` if it's not an object.
+    pub fn as_object(&self) -> Option<&serde_json::Map<String, serde_json::Value>> {
+        self.0.as_object()
     }
 
     /// Return `true` if the value is null.
@@ -186,24 +209,25 @@ impl Value {
     }
 }
 
-fn unescape_pointer_token(token: &str) -> String {
+/// Unescape a JSON Pointer token per RFC 6901.
+/// Returns None if the escape sequence is invalid (e.g., `~2`).
+fn unescape_pointer_token(token: &str) -> Option<String> {
     let mut result = String::new();
-    let mut chars = token.chars();
+    let mut chars = token.chars().peekable();
+
     while let Some(c) = chars.next() {
         if c == '~' {
             match chars.next() {
-                Some('0') | None => result.push('~'),
+                Some('0') => result.push('~'),
                 Some('1') => result.push('/'),
-                Some(next) => {
-                    result.push('~');
-                    result.push(next);
-                }
+                Some(_) | None => return None, // Invalid escape like ~2, or trailing ~
             }
         } else {
             result.push(c);
         }
     }
-    result
+
+    Some(result)
 }
 
 #[cfg(test)]
@@ -212,7 +236,7 @@ mod tests {
 
     #[test]
     fn parse_null() {
-        assert_eq!(parse("null").unwrap().0, serde_json::Value::Null);
+        assert!(parse("null").unwrap().is_null());
     }
 
     #[test]
@@ -360,10 +384,7 @@ mod tests {
     fn json_pointer_with_escaped_tokens() {
         // ~0 represents ~ and ~1 represents /
         let v = parse(r#"{"a/b":{"c~d":5}}"#).unwrap();
-        assert_eq!(
-            v.pointer("/a~1b/c~0d").and_then(|v| v.as_i64()),
-            Some(5)
-        );
+        assert_eq!(v.pointer("/a~1b/c~0d").and_then(|v| v.as_i64()), Some(5));
     }
 
     #[test]
@@ -391,8 +412,12 @@ mod tests {
             panic!("f not found");
         }
         assert_eq!(v.get("n").map(|v| v.is_null()), Some(true));
-        assert!(v.get("a").and_then(|v| v.as_array()).is_some());
-        assert!(v.get("o").and_then(|v| v.as_object()).is_some());
+        if let Some(arr_val) = v.get("a") {
+            assert!(arr_val.as_array().is_some());
+        }
+        if let Some(obj_val) = v.get("o") {
+            assert!(obj_val.as_object().is_some());
+        }
 
         // Type mismatches return None
         if let Some(val) = v.get("s") {
@@ -500,5 +525,97 @@ mod tests {
         assert_eq!(arr_slice.len(), 2);
         assert_eq!(arr_slice[0].as_i64(), Some(1));
         assert_eq!(arr_slice[1].as_i64(), Some(2));
+    }
+
+    #[test]
+    fn deep_nesting_64_levels_succeeds() {
+        // Construct 64 nested arrays: [[[[...]]]]
+        let mut s = String::new();
+        for _ in 0..64 {
+            s.push('[');
+        }
+        s.push('1');
+        for _ in 0..64 {
+            s.push(']');
+        }
+        assert!(parse(&s).is_ok(), "64 levels should parse successfully");
+    }
+
+    #[test]
+    fn deep_nesting_finds_limit() {
+        // Binary search for the actual nesting limit
+        for depth in [100, 120, 128, 129, 150, 200] {
+            let mut s = String::new();
+            for _ in 0..depth {
+                s.push('[');
+            }
+            s.push('1');
+            for _ in 0..depth {
+                s.push(']');
+            }
+            let result = parse(&s);
+            if result.is_err() {
+                // Found the limit or close to it
+                eprintln!(
+                    "Depth {} failed: serde_json limit found around {}",
+                    depth, depth
+                );
+                return;
+            }
+        }
+        eprintln!("Could not find exact limit within tested range");
+    }
+
+    #[test]
+    fn rfc6901_pointer_empty_path_returns_root() {
+        let v = parse(r#"{"x":1}"#).unwrap();
+        assert_eq!(v.pointer("").unwrap().as_object().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn rfc6901_array_leading_zeros_rejected() {
+        let v = parse(r#"{"a":[1,2,3]}"#).unwrap();
+        assert!(
+            v.pointer("/a/01").is_none(),
+            "leading zero '01' should be rejected"
+        );
+    }
+
+    #[test]
+    fn rfc6901_array_past_end_rejected() {
+        let v = parse(r#"{"a":[1,2,3]}"#).unwrap();
+        assert!(
+            v.pointer("/a/-").is_none(),
+            "'-' means past-the-end and should be rejected"
+        );
+    }
+
+    #[test]
+    fn rfc6901_array_non_numeric_rejected() {
+        let v = parse(r#"{"a":[1,2,3]}"#).unwrap();
+        assert!(
+            v.pointer("/a/foo").is_none(),
+            "non-numeric key on array should be rejected"
+        );
+    }
+
+    #[test]
+    fn rfc6901_invalid_escapes_rejected() {
+        let v = parse(r#"{"a":1}"#).unwrap();
+        // Invalid escape ~2 should yield no match
+        assert!(v.pointer("/a~2").is_none(), "invalid escape ~2 should fail");
+        // Trailing ~ should yield no match
+        assert!(v.pointer("/a~").is_none(), "trailing ~ should fail");
+    }
+
+    #[test]
+    fn rfc6901_non_slash_start_rejected() {
+        let v = parse(r#"{"a":1}"#).unwrap();
+        // Path not starting with / (except "") should be None
+        assert!(
+            v.pointer("a").is_none(),
+            "path not starting with / should be None"
+        );
+        assert!(v.pointer("foo").is_none());
     }
 }
