@@ -29,28 +29,31 @@ subsequent runs reuse `target/tools/mdformat`. CI uses Python 3.13.7 and checks
 all tracked Markdown files without modifying them. Local runs also include
 unignored, untracked Markdown so new documentation is covered before staging.
 
-### PyPI Index Configuration
+### Package Index
 
-By default, pip installs from pypi.org. For environments that cannot reach the
-public index (corporate networks, sandboxes), three override options exist in
-precedence order:
+The formatter installs from pypi.org by default. Where pypi.org is blocked, use
+one of these, in order of precedence:
 
-1. Explicit `PIP_INDEX_URL` environment variable (if set, the script skips all
-   fallback logic; pip respects this standard variable unconditionally).
-2. `DBXCTL_PYPI_PROXY` environment variable (an index URL ending in `/simple/`).
-3. `.dbxctl.local` local file in the repository root (a `KEY=value` file; git
-   will ignore it). Only the `DBXCTL_PYPI_PROXY=` key is parsed; the file is
-   never sourced.
+1. `PIP_INDEX_URL`, which pip honors directly. When it is set, the script uses
+   it unconditionally and skips the fallback below.
+2. `DBXCTL_PYPI_PROXY`, an index URL ending in `/simple/`, set in the
+   environment.
+3. The same `DBXCTL_PYPI_PROXY=<url>` line in a git-ignored `.dbxctl.local`
+   file at the repository root. Only that key is read; the file is not
+   sourced.
 
-When neither option 1 nor option 2 is set, the script probes pypi.org with a
-3-second timeout. If unreachable and option 3 provides a proxy, it falls back to
-that index for the install only and prints a notice to stderr. If pypi.org is
-reachable, or neither option is available, the script proceeds with the default
-index unchanged.
+```text
+# .dbxctl.local (not committed)
+DBXCTL_PYPI_PROXY=https://<your-internal-pypi-index>/simple/
+```
 
-Regardless of the index used, pip requires all installed packages to match
-hashes from `requirements/mdformat.txt`, preventing substitution of different
-artifacts even if the index is compromised or mirrors untrusted content.
+A configured proxy is a fallback, not an override: the script checks pypi.org
+with a three-second timeout and uses the proxy only if pypi.org is unreachable.
+Without a proxy, no check runs and behavior is unchanged, which keeps CI on the
+public index. The proxy URL is never printed, so it may contain credentials.
+
+Whichever index is used, every file must match a hash in
+`requirements/mdformat.txt`, so a mirror cannot substitute different packages.
 
 ## Test Layers
 
