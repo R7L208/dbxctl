@@ -36,9 +36,9 @@ one of these, in order of precedence:
 
 1. `PIP_INDEX_URL`, which pip honors directly. When it is set, the script uses
    it unconditionally and skips the fallback below.
-2. `DBXCTL_PYPI_PROXY`, an index URL ending in `/simple/`, set in the
+1. `DBXCTL_PYPI_PROXY`, an index URL ending in `/simple/`, set in the
    environment.
-3. The same `DBXCTL_PYPI_PROXY=<url>` line in a git-ignored `.dbxctl.local`
+1. The same `DBXCTL_PYPI_PROXY=<url>` line in a git-ignored `.dbxctl.local`
    file at the repository root. Only that key is read; the file is not
    sourced.
 
