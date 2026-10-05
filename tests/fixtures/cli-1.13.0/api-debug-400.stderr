@@ -1,0 +1,11 @@
+2024/10/23 10:30:46 POST /api/2.1/jobs/create HTTP/1.1
+2024/10/23 10:30:46 "Authorization: Bearer [REDACTED]"
+2024/10/23 10:30:46 "User-Agent: databricks-cli/1.13.0"
+2024/10/23 10:30:46 < HTTP/1.1 400 Bad Request
+2024/10/23 10:30:46 < Content-Type: application/json
+2024/10/23 10:30:46 < Date: Tue, 23 Oct 2024 10:30:46 GMT
+Error: Invalid request
+{
+  "error_code": "INVALID_PARAMETER_VALUE",
+  "message": "The provided task is invalid. Reason: cluster_key_pair is required"
+}

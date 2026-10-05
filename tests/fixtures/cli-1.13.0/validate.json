@@ -1,0 +1,55 @@
+{
+  "valid": true,
+  "error_message": null,
+  "engine": "DBR_13.3",
+  "resource_configs": {
+    "jobs": {
+      "refresh_silver": {
+        "name": "refresh_silver",
+        "description": "Refresh silver table from raw data",
+        "max_concurrent_runs": 1,
+        "tasks": [
+          {
+            "task_key": "refresh_task",
+            "notebook_task": {
+              "notebook_path": "/Workspace/Users/user@example.test/projects/example/notebooks/silver"
+            }
+          }
+        ]
+      }
+    },
+    "pipelines": {
+      "dlt_pipeline": {
+        "name": "dlt_pipeline",
+        "storage": "/Workspace/Users/user@example.test/projects/example/storage",
+        "clusters": [
+          {
+            "label": "default",
+            "spark_conf": {
+              "spark.databricks.cluster.profile": "singleNode"
+            }
+          }
+        ],
+        "configuration": {
+          "query_table": {
+            "tables": [
+              {
+                "name": "query_result"
+              }
+            ]
+          }
+        }
+      }
+    }
+  },
+  "data_sources": {
+    "sql_files": [
+      "/Workspace/Users/user@example.test/projects/example/src/silver.sql",
+      "/Workspace/Users/user@example.test/projects/example/src/q.sql",
+      "/Workspace/Users/user@example.test/projects/example/src/gold/g.sql"
+    ],
+    "notebook_paths": [
+      "/Workspace/Users/user@example.test/projects/example/notebooks/silver"
+    ]
+  }
+}

@@ -1,0 +1,56 @@
+bundle:
+  name: example-analytics
+  description: Example analytics bundle with DLT pipeline and refresh job
+  version: 0.1.0
+
+workspace:
+  root_path: /Workspace/Users/user@example.test/projects/example
+
+resources:
+  jobs:
+    refresh_silver:
+      name: refresh_silver
+      description: Refresh silver table from raw data
+      max_concurrent_runs: 1
+      tasks:
+        - task_key: refresh_task
+          notebook_task:
+            notebook_path: ${workspace.root_path}/notebooks/silver
+          job_cluster_key: default
+      job_clusters:
+        - job_cluster_key: default
+          new_cluster:
+            spark_version: "13.3.x-scala2.12"
+            node_type_id: i3.xlarge
+            num_workers: 2
+
+  pipelines:
+    dlt_pipeline:
+      name: dlt_pipeline
+      storage: ${workspace.root_path}/storage
+      clusters:
+        - label: default
+          spark_conf:
+            spark.databricks.cluster.profile: singleNode
+      configuration:
+        query_table:
+          tables:
+            - name: query_result
+
+  workspace_files:
+    source_files:
+      path: ./src
+      workspace_path: ${workspace.root_path}/src
+
+targets:
+  dev:
+    workspace:
+      root_path: /Workspace/Users/user@example.test/projects/example-dev
+
+  prod:
+    workspace:
+      root_path: /Workspace/Shared/projects/example-prod
+    resources:
+      jobs:
+        refresh_silver:
+          max_concurrent_runs: 3

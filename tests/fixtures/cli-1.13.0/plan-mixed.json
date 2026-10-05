@@ -1,0 +1,88 @@
+{
+  "resource_changes": [
+    {
+      "address": "databricks_job.refresh_silver",
+      "type": "databricks_job",
+      "mode": "managed",
+      "name": "refresh_silver",
+      "provider_name": "registry.terraform.io/databricks/databricks",
+      "change": {
+        "actions": [
+          "create"
+        ],
+        "before": null,
+        "after": {
+          "name": "refresh_silver",
+          "description": "Refresh silver table",
+          "tasks": [
+            {
+              "task_key": "refresh_task",
+              "notebook_task": {
+                "notebook_path": "/Workspace/Users/user@example.test/projects/example/notebooks/silver"
+              }
+            }
+          ]
+        },
+        "after_unknown": {},
+        "before_sensitive": false,
+        "after_sensitive": {}
+      }
+    },
+    {
+      "address": "databricks_pipeline.dlt_pipeline",
+      "type": "databricks_pipeline",
+      "mode": "managed",
+      "name": "dlt_pipeline",
+      "provider_name": "registry.terraform.io/databricks/databricks",
+      "change": {
+        "actions": [
+          "update"
+        ],
+        "before": {
+          "name": "dlt_pipeline",
+          "storage": "/Workspace/Users/user@example.test/projects/example/storage",
+          "clusters": [
+            {
+              "label": "default",
+              "spark_conf": {}
+            }
+          ]
+        },
+        "after": {
+          "name": "dlt_pipeline",
+          "storage": "/Workspace/Users/user@example.test/projects/example/storage",
+          "clusters": [
+            {
+              "label": "default",
+              "spark_conf": {
+                "spark.databricks.cluster.profile": "singleNode"
+              }
+            }
+          ]
+        },
+        "after_unknown": {},
+        "before_sensitive": false,
+        "after_sensitive": {}
+      }
+    },
+    {
+      "address": "databricks_workspace_file.old_config",
+      "type": "databricks_workspace_file",
+      "mode": "managed",
+      "name": "old_config",
+      "provider_name": "registry.terraform.io/databricks/databricks",
+      "change": {
+        "actions": [
+          "delete"
+        ],
+        "before": {
+          "path": "/Workspace/Users/user@example.test/projects/example/old_config.json"
+        },
+        "after": null,
+        "after_unknown": {},
+        "before_sensitive": false,
+        "after_sensitive": false
+      }
+    }
+  ]
+}

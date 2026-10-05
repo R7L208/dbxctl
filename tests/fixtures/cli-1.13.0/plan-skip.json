@@ -1,0 +1,43 @@
+{
+  "resource_changes": [
+    {
+      "address": "databricks_job.refresh_silver",
+      "type": "databricks_job",
+      "mode": "managed",
+      "name": "refresh_silver",
+      "provider_name": "registry.terraform.io/databricks/databricks",
+      "change": {
+        "actions": [
+          "no-op"
+        ],
+        "before": {
+          "name": "refresh_silver",
+          "description": "Refresh silver table",
+          "tasks": [
+            {
+              "task_key": "refresh_task",
+              "notebook_task": {
+                "notebook_path": "/Workspace/Users/user@example.test/projects/example/notebooks/silver"
+              }
+            }
+          ]
+        },
+        "after": {
+          "name": "refresh_silver",
+          "description": "Refresh silver table",
+          "tasks": [
+            {
+              "task_key": "refresh_task",
+              "notebook_task": {
+                "notebook_path": "/Workspace/Users/user@example.test/projects/example/notebooks/silver"
+              }
+            }
+          ]
+        },
+        "after_unknown": {},
+        "before_sensitive": false,
+        "after_sensitive": {}
+      }
+    }
+  ]
+}

@@ -1,0 +1,36 @@
+{
+  "object_type": "PIPELINE",
+  "object_id": "01a23b45c67d8901",
+  "name": "example-pipeline",
+  "creator_user_id": 1234567890,
+  "created_at": 1698000000,
+  "updated_at": 1698100000,
+  "pipeline_type": "TRIGGERED",
+  "clusters": [
+    {
+      "label": "default",
+      "spark_conf": {
+        "spark.databricks.cluster.profile": "singleNode"
+      },
+      "node_type_id": "i3.xlarge",
+      "num_workers": 0,
+      "aws_attributes": {
+        "availability": "SPOT",
+        "zone_id": "us-west-2b"
+      }
+    }
+  ],
+  "storage": "/Workspace/Users/user@example.test/projects/example",
+  "configuration": {
+    "q": {
+      "id": "abcd1234-ef56-7890-abcd-ef1234567890",
+      "storage": "/Workspace/Users/user@example.test/projects/example/dlt_config",
+      "notebooks": [
+        {
+          "path": "/Workspace/Users/user@example.test/projects/example/notebooks/query"
+        }
+      ]
+    }
+  },
+  "channel": "CURRENT"
+}

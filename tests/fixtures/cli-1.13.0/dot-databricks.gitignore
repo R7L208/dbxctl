@@ -1,0 +1,25 @@
+# Databricks credentials and configuration
+.databricks
+!.databricks/.gitkeep
+
+# Terraform state files
+*.tfstate
+*.tfstate.*
+
+# Environment files with credentials
+.env
+.env.local
+
+# dbxctl probe artifacts
+.dbxctl/
+
+# IDE and editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
