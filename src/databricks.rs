@@ -362,6 +362,10 @@ mod tests {
         );
     }
 
+    // Checks only that the child reaches end-of-input immediately. This would
+    // also pass if stdin were inherited from an already-empty test stdin (as in
+    // CI); `doctor_does_not_share_its_stdin_with_databricks` in the wrapper
+    // contract is the regression guard, because it gives dbxctl an open stdin.
     #[test]
     fn child_gets_an_empty_stdin() {
         let mut command = Command::new(fake_databricks());
