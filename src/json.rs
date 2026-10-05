@@ -1,0 +1,504 @@
+#![cfg_attr(not(test), allow(dead_code))]
+// #30 (workspace integration) will consume this module
+
+use std::collections::BTreeMap;
+
+/// A JSON value with defensive access and deterministic serialization.
+///
+/// This module wraps `serde_json` to hide its types from callers and enforce
+/// defensive access patterns. All accessors return `Option` or `Result`.
+///
+/// **Nesting depth limit:** `serde_json` enforces a maximum recursion depth via
+/// its parser. Attempting to parse deeply nested structures returns a parse error.
+/// The exact limit depends on the `serde_json` version but is typically 128 levels.
+/// Deeply nested input returns an error; no stack overflow occurs.
+///
+/// **Duplicate object keys:** When an object has duplicate keys, `serde_json` keeps
+/// the last value (standard JSON behavior). The `get` method returns the value
+/// associated with the final occurrence of a key.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Value(serde_json::Value);
+
+/// A JSON error wrapping `serde_json`'s error.
+#[derive(Debug)]
+pub struct Error(serde_json::error::Error);
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "JSON error: {}", self.0)
+    }
+}
+
+impl std::error::Error for Error {}
+
+impl PartialEq for Error {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.to_string() == other.0.to_string()
+    }
+}
+
+/// Parse a JSON value from a string.
+///
+/// # Errors
+/// Returns an error if the input is malformed or exceeds the nesting depth limit.
+pub fn parse(input: &str) -> Result<Value, Error> {
+    serde_json::from_str(input).map(Value).map_err(Error)
+}
+
+/// Parse a JSON value from bytes.
+///
+/// # Errors
+/// Returns an error if the input is malformed, non-UTF-8, or exceeds the nesting
+/// depth limit.
+pub fn parse_bytes(input: &[u8]) -> Result<Value, Error> {
+    serde_json::from_slice(input).map(Value).map_err(Error)
+}
+
+/// Serialize a value to a JSON string with deterministic output and a trailing newline.
+pub fn to_string(value: &Value) -> Result<String, Error> {
+    let sorted = sort_value(&value.0)?;
+    let mut s = serde_json::to_string(&sorted).map_err(Error)?;
+    if !s.ends_with('\n') {
+        s.push('\n');
+    }
+    Ok(s)
+}
+
+/// Serialize a value to pretty-printed JSON with deterministic output and a trailing newline.
+pub fn to_string_pretty(value: &Value) -> Result<String, Error> {
+    let sorted = sort_value(&value.0)?;
+    let mut s = serde_json::to_string_pretty(&sorted).map_err(Error)?;
+    if !s.ends_with('\n') {
+        s.push('\n');
+    }
+    Ok(s)
+}
+
+/// Sort object keys recursively for deterministic output.
+fn sort_value(val: &serde_json::Value) -> Result<serde_json::Value, Error> {
+    match val {
+        serde_json::Value::Object(obj) => {
+            let mut sorted = BTreeMap::new();
+            for (k, v) in obj {
+                sorted.insert(k.clone(), sort_value(v)?);
+            }
+            Ok(serde_json::Value::Object(
+                sorted
+                    .into_iter()
+                    .collect::<serde_json::map::Map<String, serde_json::Value>>(),
+            ))
+        }
+        serde_json::Value::Array(arr) => {
+            let sorted_arr: Result<Vec<_>, _> = arr.iter().map(sort_value).collect();
+            Ok(serde_json::Value::Array(sorted_arr?))
+        }
+        other => Ok(other.clone()),
+    }
+}
+
+impl Value {
+    /// Access a value by object key, returning `None` if not an object or key not found.
+    pub fn get(&self, key: &str) -> Option<Value> {
+        self.0.get(key).map(|v| Value(v.clone()))
+    }
+
+    /// Access a value by array index, returning `None` if not an array or index out of bounds.
+    pub fn get_index(&self, index: usize) -> Option<Value> {
+        self.0.get(index).map(|v| Value(v.clone()))
+    }
+
+    /// Access a value using a JSON Pointer (RFC 6901) path.
+    ///
+    /// Supports paths like `/foo/bar/0` and properly unescapes `~0` (`~` tilde) and `~1` (`/` slash).
+    ///
+    /// # Errors
+    /// Returns `None` if the path is invalid or the value at the path does not exist.
+    pub fn pointer(&self, path: &str) -> Option<Value> {
+        // RFC 6901 pointer: unescape ~0 -> ~ and ~1 -> /
+        let tokens: Vec<&str> = if path.is_empty() {
+            vec![]
+        } else if let Some(rest) = path.strip_prefix('/') {
+            rest.split('/').collect()
+        } else {
+            return None;
+        };
+
+        let mut current = &self.0;
+        for token in tokens {
+            let unescaped = unescape_pointer_token(token);
+            // Try as array index first, then as object key
+            if let Ok(index) = unescaped.parse::<usize>() {
+                current = current.get(index)?;
+            } else {
+                current = current.get(&unescaped)?;
+            }
+        }
+        Some(Value(current.clone()))
+    }
+
+    /// Return the value as a string, or `None` if it's not a string.
+    pub fn as_str(&self) -> Option<&str> {
+        self.0.as_str()
+    }
+
+    /// Return the value as a bool, or `None` if it's not a bool.
+    pub fn as_bool(&self) -> Option<bool> {
+        self.0.as_bool()
+    }
+
+    /// Return the value as an i64, or `None` if it's not an integer within that range.
+    pub fn as_i64(&self) -> Option<i64> {
+        self.0.as_i64()
+    }
+
+    /// Return the value as a u64, or `None` if it's not an integer within that range.
+    pub fn as_u64(&self) -> Option<u64> {
+        self.0.as_u64()
+    }
+
+    /// Return the value as an f64, or `None` if it's not a number.
+    ///
+    /// Note: For integers within i64/u64 range, this may lose precision.
+    /// For numbers outside those ranges, this represents the value as a float.
+    pub fn as_f64(&self) -> Option<f64> {
+        self.0.as_f64()
+    }
+
+    /// Return the value as an array, or `None` if it's not an array.
+    pub fn as_array(&self) -> Option<Vec<Value>> {
+        self.0
+            .as_array()
+            .map(|arr| arr.iter().map(|v| Value(v.clone())).collect())
+    }
+
+    /// Return the value as an object (key-value pairs), or `None` if it's not an object.
+    pub fn as_object(&self) -> Option<Vec<(String, Value)>> {
+        self.0.as_object().map(|obj| {
+            obj.iter()
+                .map(|(k, v)| (k.clone(), Value(v.clone())))
+                .collect()
+        })
+    }
+
+    /// Return `true` if the value is null.
+    pub fn is_null(&self) -> bool {
+        self.0.is_null()
+    }
+}
+
+fn unescape_pointer_token(token: &str) -> String {
+    let mut result = String::new();
+    let mut chars = token.chars();
+    while let Some(c) = chars.next() {
+        if c == '~' {
+            match chars.next() {
+                Some('0') | None => result.push('~'),
+                Some('1') => result.push('/'),
+                Some(next) => {
+                    result.push('~');
+                    result.push(next);
+                }
+            }
+        } else {
+            result.push(c);
+        }
+    }
+    result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_null() {
+        assert_eq!(parse("null").unwrap().0, serde_json::Value::Null);
+    }
+
+    #[test]
+    fn parse_bool() {
+        assert_eq!(parse("true").unwrap().as_bool(), Some(true));
+        assert_eq!(parse("false").unwrap().as_bool(), Some(false));
+    }
+
+    #[test]
+    fn parse_integer() {
+        assert_eq!(parse("42").unwrap().as_i64(), Some(42));
+        assert_eq!(parse("-17").unwrap().as_i64(), Some(-17));
+        assert_eq!(parse("0").unwrap().as_i64(), Some(0));
+    }
+
+    #[test]
+    #[allow(clippy::approx_constant)]
+    fn parse_float() {
+        let v = parse("3.14").unwrap();
+        let f = v.as_f64().unwrap();
+        let pi_approx = 3.14;
+        assert!((f - pi_approx).abs() < 0.001);
+    }
+
+    #[test]
+    fn parse_scientific_notation() {
+        let v = parse("1e10").unwrap();
+        let f = v.as_f64().unwrap();
+        assert!((f - 1e10).abs() < f64::EPSILON);
+
+        let v = parse("1.5e-5").unwrap();
+        let f = v.as_f64().unwrap();
+        assert!((f - 1.5e-5).abs() < 1e-10);
+    }
+
+    #[test]
+    fn parse_string() {
+        assert_eq!(parse(r#""hello""#).unwrap().as_str(), Some("hello"));
+    }
+
+    #[test]
+    fn parse_string_with_escapes() {
+        assert_eq!(
+            parse(r#""hello\"world""#).unwrap().as_str(),
+            Some("hello\"world")
+        );
+        assert_eq!(
+            parse(r#""line1\nline2""#).unwrap().as_str(),
+            Some("line1\nline2")
+        );
+    }
+
+    #[test]
+    fn parse_unicode_escapes() {
+        assert_eq!(parse(r#""A""#).unwrap().as_str(), Some("A"));
+        // Surrogate pair (emoji)
+        let v = parse(r#""😀""#).unwrap();
+        assert_eq!(v.as_str(), Some("😀"));
+    }
+
+    #[test]
+    fn parse_array() {
+        let empty = parse("[]").unwrap();
+        assert!(empty.as_array().unwrap().is_empty());
+
+        let arr = parse("[1,2,3]").unwrap();
+        let arr_slice = arr.as_array().unwrap();
+        assert_eq!(arr_slice.len(), 3);
+        assert_eq!(arr_slice[0].as_i64(), Some(1));
+        assert_eq!(arr_slice[1].as_i64(), Some(2));
+        assert_eq!(arr_slice[2].as_i64(), Some(3));
+    }
+
+    #[test]
+    fn parse_nested_array() {
+        let v = parse("[[1,2],[3,4]]").unwrap();
+        let arr = v.as_array().unwrap();
+        assert_eq!(arr.len(), 2);
+        assert!(arr[0].as_array().is_some());
+        assert!(arr[1].as_array().is_some());
+    }
+
+    #[test]
+    fn parse_object() {
+        let v = parse(r#"{"name":"Alice","age":30}"#).unwrap();
+        let obj = v.as_object().unwrap();
+        assert_eq!(obj.len(), 2);
+        // Keys are in the order serde_json provides them
+        assert!(obj.iter().any(|(k, _)| k == "name"));
+        assert!(obj.iter().any(|(k, _)| k == "age"));
+    }
+
+    #[test]
+    fn parse_object_with_duplicate_keys() {
+        // serde_json keeps the last value for duplicate keys
+        let v = parse(r#"{"key":"first","key":"second"}"#).unwrap();
+        if let Some(val) = v.get("key") {
+            assert_eq!(val.as_str(), Some("second"));
+        } else {
+            panic!("key not found");
+        }
+    }
+
+    #[test]
+    fn parse_malformed_input() {
+        assert!(parse("").is_err());
+        assert!(parse("{").is_err());
+        assert!(parse("[").is_err());
+        assert!(parse(r#""unterminated"#).is_err());
+        assert!(parse("tru").is_err());
+        assert!(parse("nul").is_err());
+    }
+
+    #[test]
+    fn parse_invalid_utf8() {
+        let invalid = b"\"hello\xff\"";
+        assert!(parse_bytes(invalid).is_err());
+    }
+
+    #[test]
+    fn access_by_key() {
+        let v = parse(r#"{"x":10,"y":20}"#).unwrap();
+        assert_eq!(v.get("x").and_then(|v| v.as_i64()), Some(10));
+        assert_eq!(v.get("y").and_then(|v| v.as_i64()), Some(20));
+        assert_eq!(v.get("z"), None);
+    }
+
+    #[test]
+    fn access_by_index() {
+        let v = parse("[10,20,30]").unwrap();
+        assert_eq!(v.get_index(0).and_then(|v| v.as_i64()), Some(10));
+        assert_eq!(v.get_index(2).and_then(|v| v.as_i64()), Some(30));
+        assert_eq!(v.get_index(5), None);
+    }
+
+    #[test]
+    fn access_by_json_pointer() {
+        let v = parse(r#"{"a":{"b":[1,2,3]}}"#).unwrap();
+        assert_eq!(v.pointer("/a/b/1").and_then(|v| v.as_i64()), Some(2));
+        assert_eq!(v.pointer("/a/b/10"), None);
+        assert_eq!(v.pointer("/x"), None);
+    }
+
+    #[test]
+    fn json_pointer_with_escaped_tokens() {
+        // ~0 represents ~ and ~1 represents /
+        let v = parse(r#"{"a/b":{"c~d":5}}"#).unwrap();
+        assert_eq!(
+            v.pointer("/a~1b/c~0d").and_then(|v| v.as_i64()),
+            Some(5)
+        );
+    }
+
+    #[test]
+    fn typed_getters() {
+        let v = parse(r#"{"s":"text","b":true,"i":42,"f":3.14,"n":null,"a":[],"o":{}}"#).unwrap();
+
+        if let Some(val) = v.get("s") {
+            assert_eq!(val.as_str(), Some("text"));
+        } else {
+            panic!("s not found");
+        }
+        if let Some(val) = v.get("b") {
+            assert_eq!(val.as_bool(), Some(true));
+        } else {
+            panic!("b not found");
+        }
+        if let Some(val) = v.get("i") {
+            assert_eq!(val.as_i64(), Some(42));
+        } else {
+            panic!("i not found");
+        }
+        if let Some(val) = v.get("f") {
+            assert!(val.as_i64().is_none());
+        } else {
+            panic!("f not found");
+        }
+        assert_eq!(v.get("n").map(|v| v.is_null()), Some(true));
+        assert!(v.get("a").and_then(|v| v.as_array()).is_some());
+        assert!(v.get("o").and_then(|v| v.as_object()).is_some());
+
+        // Type mismatches return None
+        if let Some(val) = v.get("s") {
+            assert_eq!(val.as_bool(), None);
+        }
+        if let Some(val) = v.get("b") {
+            assert_eq!(val.as_str(), None);
+        }
+    }
+
+    #[test]
+    fn serialization_determinism() {
+        let v = parse(r#"{"z":3,"a":1,"m":2}"#).unwrap();
+        let s1 = to_string(&v).unwrap();
+        let s2 = to_string(&v).unwrap();
+        assert_eq!(s1, s2);
+
+        // Keys are sorted in output
+        assert!(s1.find("\"a\"").unwrap() < s1.find("\"m\"").unwrap());
+        assert!(s1.find("\"m\"").unwrap() < s1.find("\"z\"").unwrap());
+    }
+
+    #[test]
+    fn serialization_has_trailing_newline() {
+        let v = parse("{}").unwrap();
+        let s = to_string(&v).unwrap();
+        assert!(s.ends_with('\n'));
+    }
+
+    #[test]
+    fn pretty_serialization() {
+        let v = parse(r#"{"a":1,"b":[2,3]}"#).unwrap();
+        let s = to_string_pretty(&v).unwrap();
+        assert!(s.contains('\n'));
+        assert!(s.ends_with('\n'));
+    }
+
+    #[test]
+    fn round_trip() {
+        let original = r#"{"name":"Alice","age":30,"tags":["a","b"]}"#;
+        let v = parse(original).unwrap();
+        let serialized = to_string(&v).unwrap();
+        let v2 = parse(&serialized).unwrap();
+        // Compare the actual JSON structure
+        assert_eq!(v.get("name"), v2.get("name"));
+        assert_eq!(v.get("age"), v2.get("age"));
+    }
+
+    #[test]
+    fn option_chaining() {
+        let v = parse(r#"{"x":{"y":10}}"#).unwrap();
+        assert_eq!(
+            v.get("x").and_then(|x| x.get("y")).and_then(|y| y.as_i64()),
+            Some(10)
+        );
+        assert_eq!(
+            v.get("x").and_then(|x| x.get("z")).and_then(|z| z.as_i64()),
+            None
+        );
+    }
+
+    #[test]
+    fn large_numbers() {
+        // i64::MAX
+        let v = parse("9223372036854775807").unwrap();
+        assert_eq!(v.as_i64(), Some(i64::MAX));
+
+        // u64::MAX - represented as f64 with potential precision loss
+        let v = parse("18446744073709551615").unwrap();
+        assert!(v.as_f64().is_some());
+    }
+
+    #[test]
+    fn negative_numbers() {
+        let v = parse("-42").unwrap();
+        assert_eq!(v.as_i64(), Some(-42));
+        assert_eq!(v.as_u64(), None); // Negative, can't be u64
+    }
+
+    #[test]
+    fn error_no_panic_on_invalid_input() {
+        // These should all return errors, never panic
+        let invalid_inputs = vec![
+            "",
+            "{",
+            "[",
+            "tru",
+            "nul",
+            r#""incomplete"#,
+            "{\"key\":}",
+            "[1,,2]",
+        ];
+
+        for input in invalid_inputs {
+            let result = parse(input);
+            assert!(result.is_err(), "should error on: {input}");
+        }
+    }
+
+    #[test]
+    fn parse_whitespace() {
+        assert!(parse("  null  ").unwrap().is_null());
+        let arr = parse("  [  1  ,  2  ]  ").unwrap();
+        let arr_slice = arr.as_array().unwrap();
+        assert_eq!(arr_slice.len(), 2);
+        assert_eq!(arr_slice[0].as_i64(), Some(1));
+        assert_eq!(arr_slice[1].as_i64(), Some(2));
+    }
+}
