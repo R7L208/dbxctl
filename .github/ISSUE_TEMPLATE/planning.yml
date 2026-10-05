@@ -7,12 +7,18 @@ body:
     attributes:
       value: >
         Planning issues follow the project's design nomenclature. Decisions are
-        named `DP<phase>-<n>` (for example, `DP0-1` for JSON handling and
-        `DP1-1` for graph construction). Accepted decisions are recorded in
-        `docs/mv-lineage/design/dp<phase>-<n>-<slug>.md`, or in the "Design
-        Decisions" section of `docs/security.md` when they concern
-        dependencies or trust boundaries. Each record has **Decision**,
-        **Rationale**, and **Revisit Conditions** sections.
+        named `DP<phase>-<n>`, for example
+        [DP0-1: JSON handling](https://github.com/R7L208/dbxctl/blob/main/docs/security.md#dp0-1-json-handling)
+        and
+        [DP1-1: Lineage Graph Construction](https://github.com/R7L208/dbxctl/blob/main/docs/mv-lineage/design/dp1-1-graph-construction.md).
+        Accepted decisions are recorded in
+        [`docs/mv-lineage/design/`](https://github.com/R7L208/dbxctl/tree/main/docs/mv-lineage/design)
+        as `dp<phase>-<n>-<slug>.md`, or in the
+        [Design Decisions](https://github.com/R7L208/dbxctl/blob/main/docs/security.md#design-decisions)
+        section of `docs/security.md` when they concern dependencies or trust
+        boundaries. Follow the structure of
+        [DP1-1](https://github.com/R7L208/dbxctl/blob/main/docs/mv-lineage/design/dp1-1-graph-construction.md):
+        **Decision**, **Rationale**, and **Revisit Conditions**.
 
   - type: dropdown
     id: kind
@@ -30,8 +36,9 @@ body:
     attributes:
       label: Decision ID
       description: >
-        Next unused `DP<phase>-<n>` for this phase. Leave empty for a phase
-        plan or exploratory proposal.
+        Next unused `DP<phase>-<n>` for this phase. Check existing IDs in
+        docs/mv-lineage/design/ and the Design Decisions section of
+        docs/security.md. Leave empty for a phase plan or exploratory proposal.
       placeholder: DP1-2
     validations:
       required: false
@@ -84,7 +91,11 @@ body:
     id: decision
     attributes:
       label: Proposed decision
-      description: The recommended option, stated so it could be copied into the record's **Decision** section.
+      description: >
+        The recommended option, stated so it could be copied into the record's
+        **Decision** section. See
+        [DP1-1](https://github.com/R7L208/dbxctl/blob/main/docs/mv-lineage/design/dp1-1-graph-construction.md#decision)
+        for an example.
     validations:
       required: true
 
@@ -100,7 +111,10 @@ body:
     id: revisit
     attributes:
       label: Revisit conditions
-      description: What evidence or change in requirements would reopen this decision?
+      description: >
+        What evidence or change in requirements would reopen this decision? See
+        [DP1-1](https://github.com/R7L208/dbxctl/blob/main/docs/mv-lineage/design/dp1-1-graph-construction.md#revisit-conditions)
+        for an example.
       placeholder: |
         - Graphs must persist across runs.
         - Graph size grows by orders of magnitude.

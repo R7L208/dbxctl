@@ -84,7 +84,9 @@ body:
       description: >
         Choose Yes if this adds a runtime dependency, changes a trust boundary
         (such as mutation, authentication, or workspace access), or picks
-        between architectural approaches. Those need a Planning issue first.
+        between architectural approaches. Those need a
+        [Planning issue](https://github.com/R7L208/dbxctl/issues/new?template=planning.yml)
+        first, named with the `DP<phase>-<n>` design-decision nomenclature.
       options:
         - "No"
         - "Yes"

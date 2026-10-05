@@ -110,9 +110,14 @@ needed. Line coverage must stay at or above 90%.
 ## Design decisions
 
 <!--
-List any design decision this PR records or implements, e.g. `DP0-1` or
-`DP1-1`, with a link to its document under `docs/mv-lineage/design/` or
-`docs/security.md`. Write "None" if not applicable.
+List any design decision this PR records or implements by its DP<phase>-<n>
+ID, with a link to its record. Write "None" if not applicable.
+
+Nomenclature and existing records:
+- DP0-1: https://github.com/R7L208/dbxctl/blob/main/docs/security.md#dp0-1-json-handling
+- DP1-1: https://github.com/R7L208/dbxctl/blob/main/docs/mv-lineage/design/dp1-1-graph-construction.md
+- All design records: https://github.com/R7L208/dbxctl/tree/main/docs/mv-lineage/design
+- Propose a new decision: https://github.com/R7L208/dbxctl/issues/new?template=planning.yml
 -->
 
 ## Release notes
