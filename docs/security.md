@@ -4,7 +4,8 @@
 
 The current Rust application has no third-party crate dependencies.
 `Cargo.lock` is committed, CI uses `--locked`, and unsafe Rust is forbidden.
-Phase 0 will add `serde_json` under the dependency controls described below.
+Phase 0 adds a crate-private JSON parser (`src/json.rs`) with no external
+dependencies; see [JSON handling](#dp0-1-json-handling) below.
 
 The Linux quality and supply-chain jobs run inside this platform-specific OCI
 manifest:
@@ -140,20 +141,21 @@ vulnerabilities, and passed the advisory, ban, license, and source policies.
 
 ### DP0-1: JSON handling
 
-Phase 0 will use `serde_json`, wrapped by a crate-private `json.rs` API. CLI
-output is untrusted input, and using the mature parser avoids owning a custom
-implementation of Unicode escapes, number parsing, nesting limits, malformed
-input handling, and deterministic serialization. Callers must not depend on
-serde types directly; the wrapper remains the boundary for defensive access
-and stable output ordering.
+Phase 0 implements a crate-private JSON parser and serialization layer in `src/json.rs`.
+This custom implementation avoids external dependencies while providing:
 
-This is the first approved third-party Rust runtime dependency. It must be
-version-locked in `Cargo.lock`, come from the allowed crates.io registry, pass
-`cargo audit` and `cargo deny check`, and use an approved license. The rejected
-alternative was a standard-library-only parser: it preserved the empty
-dependency graph but created substantially more parser and maintenance risk.
-Revisit this choice if the dependency cannot satisfy the project's audit,
-license, source, or supported-Rust-version policies.
+- Safe parsing from bytes/strings with clear error handling (no panics on input)
+- Defensive access by key, index, and RFC 6901 JSON Pointer paths
+- Deterministic serialization with sorted object keys, stable number formatting,
+  and a trailing newline policy
+- Nesting depth limit (128) to prevent stack overflow
+- Typed accessors (string, boolean, i64, u64, array, object) with no silent coercion
+- Preservation of large integer representations (up to u64::MAX)
+- Round-trip fidelity with consistent key ordering
+
+Callers interact only with the public `Value` enum and error types; the parser
+implementation is opaque. This approach preserves the empty third-party dependency
+graph while providing the same safety guarantees that an external parser would offer.
 
 ## Remaining Trust Boundaries
 
