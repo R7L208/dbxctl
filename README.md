@@ -15,7 +15,7 @@ access and deterministic output; see the recorded
 
 ## Requirements
 
-- Databricks CLI 1.13.0 or newer
+- Databricks CLI 1.13.0 or newer; 1.13.0 is also the tested version
 - Rust 1.89.0 for source builds
 - Databricks authentication configured for commands that access a workspace
 
@@ -40,6 +40,15 @@ Check the installed dependency:
 
 ```console
 dbxctl doctor
+```
+
+`doctor` fails for a Databricks CLI older than the minimum, 1.13.0. CI tests
+exactly the pinned tested version, also 1.13.0. A newer CLI is accepted, and
+`doctor` still exits 0, but it prints a warning to stderr because newer
+releases can change command output:
+
+```text
+warning: Databricks CLI 1.19.0 is newer than the tested version 1.13.0; output shapes may differ
 ```
 
 Pass a command to the Databricks CLI:
