@@ -1,9 +1,16 @@
 #!/usr/bin/env python3
 """Refresh downloaded-tool hashes and versions in the repository.
 
-The script intentionally edits tracked files only; callers review its diff and
-run CI before merging. GitHub release assets and Rust archives are downloaded
-over HTTPS and hashed locally instead of trusting an unverified checksum value.
+Every supply-chain pin lives in `.github/pins.json`, which the CI and release
+workflows read at run time. The updater rewrites that file and the
+human-facing tables in the docs. It never edits `.github/workflows/`, so the
+token that opens the update pull request does not need permission to change
+workflows. Callers review the diff and run CI before merging. GitHub release
+assets and Rust archives are downloaded over HTTPS and hashed locally instead
+of trusting an unverified checksum value.
+
+`--emit-github-output PATH` validates the pins file and writes it, and the
+derived Rust image reference, as step outputs for the workflows' `pins` job.
 """
 
 import argparse
@@ -16,11 +23,63 @@ import urllib.request
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-FILES = [
-    ROOT / ".github/workflows/ci.yml",
-    ROOT / ".github/workflows/release.yml",
-    ROOT / "docs/security.md",
-]
+PINS = ROOT / ".github/pins.json"
+DOCS = [ROOT / "docs/security.md"]
+
+HEX = re.compile(r"[0-9a-f]{64}")
+VERSION = re.compile(r"[0-9]+(?:\.[0-9]+)+")
+DATE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
+RUST_COMPONENTS = ("clippy", "llvm-tools", "rustfmt")
+RUST_TARGETS = ("aarch64-apple-darwin", "x86_64-apple-darwin", "x86_64-pc-windows-msvc")
+STANDALONE = ("cargo", "rust-std", "rustc")
+SYFT_PLATFORMS = ("darwin_amd64", "darwin_arm64", "linux_amd64", "windows_amd64")
+TOOLS = ("cargo-audit", "cargo-deny", "cargo-llvm-cov")
+
+# The exact shape of the pins file. Leaves name the pattern their value must match.
+SCHEMA = {
+    "databricks_cli": {"sha256": HEX, "version": VERSION},
+    "rust": {
+        "components": dict.fromkeys(RUST_COMPONENTS, HEX),
+        "dist_date": DATE,
+        "image_digest": HEX,
+        "standalone": {target: dict.fromkeys(STANDALONE, HEX) for target in RUST_TARGETS},
+        "version": VERSION,
+    },
+    "syft": {"sha256": dict.fromkeys(SYFT_PLATFORMS, HEX), "version": VERSION},
+    "tools": {tool: {"sha256": HEX, "version": VERSION} for tool in TOOLS},
+}
+
+
+def validate(value, schema=SCHEMA, path="pins") -> None:
+    if isinstance(schema, dict):
+        if not isinstance(value, dict) or set(value) != set(schema):
+            raise RuntimeError(f"{path} must have exactly the keys {sorted(schema)}")
+        for key, child in schema.items():
+            validate(value[key], child, f"{path}.{key}")
+    elif not isinstance(value, str) or not schema.fullmatch(value):
+        raise RuntimeError(f"{path} is not a valid pin: {value!r}")
+
+
+def load_pins() -> dict:
+    pins = json.loads(PINS.read_text())
+    validate(pins)
+    return pins
+
+
+def save_pins(pins: dict) -> None:
+    validate(pins)
+    PINS.write_text(json.dumps(pins, indent=2, sort_keys=True) + "\n")
+
+
+def rust_image(pins: dict) -> str:
+    return f"rust:{pins['rust']['version']}-bookworm@sha256:{pins['rust']['image_digest']}"
+
+
+def emit_github_output(path: Path) -> None:
+    pins = load_pins()
+    with path.open("a") as output:
+        output.write(f"json={json.dumps(pins, sort_keys=True, separators=(',', ':'))}\n")
+        output.write(f"rust_image={rust_image(pins)}\n")
 
 
 def fetch(url: str, token: str | None = None) -> bytes:
@@ -37,7 +96,7 @@ def digest(url: str) -> str:
 
 def replace(pattern: str, replacement: str, files: list[Path] | None = None) -> None:
     if files is None:
-        files = FILES
+        files = DOCS
     count = 0
     for path in files:
         text = path.read_text()
@@ -49,17 +108,16 @@ def replace(pattern: str, replacement: str, files: list[Path] | None = None) -> 
         raise RuntimeError(f"pin pattern not found: {pattern}")
 
 
-def replace_value(name: str, value: str) -> None:
-    pattern = rf"{re.escape(name)}:\s*([0-9a-f]{{64}})"
-    old_values = {
-        match.group(1)
-        for path in FILES
-        for match in re.finditer(pattern, path.read_text())
-    }
-    if not old_values:
-        raise RuntimeError(f"pin variable not found: {name}")
-    for old_value in old_values:
-        replace(re.escape(old_value), value)
+def replace_hash(old: str, new: str) -> None:
+    """Keep documented checksums in step with the pins file.
+
+    The docs list only some checksums, so a checksum that isn't documented is
+    not an error; the pins file remains the source of truth.
+    """
+    for path in DOCS:
+        text = path.read_text()
+        if old in text:
+            path.write_text(text.replace(old, new))
 
 
 def github_release(repo: str, tag: str, token: str | None) -> dict:
@@ -98,91 +156,91 @@ def rust_image_digest(version: str) -> str:
     raise RuntimeError("rust image has no linux/amd64 manifest")
 
 
-def update_rust(version: str, date: str) -> None:
+def update_rust(pins: dict, version: str, date: str) -> None:
+    rust = pins["rust"]
     base = f"https://static.rust-lang.org/dist/{date}"
-    components = {
-        "CLIPPY_SHA256": f"clippy-{version}-x86_64-unknown-linux-gnu.tar.xz",
-        "LLVM_TOOLS_SHA256": f"llvm-tools-{version}-x86_64-unknown-linux-gnu.tar.xz",
-        "RUSTFMT_SHA256": f"rustfmt-{version}-x86_64-unknown-linux-gnu.tar.xz",
-        "MACOS_ARM64_CARGO_SHA256": f"cargo-{version}-aarch64-apple-darwin.tar.xz",
-        "MACOS_ARM64_RUSTC_SHA256": f"rustc-{version}-aarch64-apple-darwin.tar.xz",
-        "MACOS_ARM64_STD_SHA256": f"rust-std-{version}-aarch64-apple-darwin.tar.xz",
-        "MACOS_X64_CARGO_SHA256": f"cargo-{version}-x86_64-apple-darwin.tar.xz",
-        "MACOS_X64_RUSTC_SHA256": f"rustc-{version}-x86_64-apple-darwin.tar.xz",
-        "MACOS_X64_STD_SHA256": f"rust-std-{version}-x86_64-apple-darwin.tar.xz",
-        "WINDOWS_X64_CARGO_SHA256": f"cargo-{version}-x86_64-pc-windows-msvc.tar.xz",
-        "WINDOWS_X64_RUSTC_SHA256": f"rustc-{version}-x86_64-pc-windows-msvc.tar.xz",
-        "WINDOWS_X64_STD_SHA256": f"rust-std-{version}-x86_64-pc-windows-msvc.tar.xz",
-    }
-    for variable, archive in components.items():
-        value = fetch(f"{base}/{archive}.sha256").decode().split()[0]
-        replace_value(variable, value)
 
-    current = re.search(r'channel = "([0-9.]+)"', (ROOT / "rust-toolchain.toml").read_text()).group(1)
-    current_date = re.search(r"static\.rust-lang\.org/dist/([0-9-]+)/", FILES[0].read_text()).group(1)
-    for path in [*FILES, ROOT / "rust-toolchain.toml", ROOT / "Cargo.toml", ROOT / "README.md", ROOT / "docs/development.md"]:
-        text = path.read_text().replace(current, version).replace(current_date, date)
-        path.write_text(text)
+    def archive_hash(component: str, target: str) -> str:
+        return fetch(f"{base}/{component}-{version}-{target}.tar.xz.sha256").decode().split()[0]
+
+    for component in RUST_COMPONENTS:
+        new = archive_hash(component, "x86_64-unknown-linux-gnu")
+        replace_hash(rust["components"][component], new)
+        rust["components"][component] = new
+    for target in RUST_TARGETS:
+        for component in STANDALONE:
+            new = archive_hash(component, target)
+            replace_hash(rust["standalone"][target][component], new)
+            rust["standalone"][target][component] = new
+
     image_digest = rust_image_digest(version)
     replace(r"(rust:[0-9.]+-bookworm@sha256:)[0-9a-f]{64}", rf"\g<1>{image_digest}")
+    rust["image_digest"] = image_digest
+
+    current, current_date = rust["version"], rust["dist_date"]
+    for path in [*DOCS, ROOT / "rust-toolchain.toml", ROOT / "README.md", ROOT / "docs/development.md"]:
+        text = path.read_text().replace(current, version).replace(current_date, date)
+        path.write_text(text)
+    rust["version"], rust["dist_date"] = version, date
 
 
-def update_github_tools(args: argparse.Namespace) -> None:
+def update_github_tools(pins: dict, args: argparse.Namespace) -> None:
     token = args.github_token
     tools = [
-        ("taiki-e/cargo-llvm-cov", f"v{args.llvm_cov}", "TOOL_SHA256", "cargo-llvm-cov-x86_64-unknown-linux-gnu.tar.gz", r"v[0-9.]+/cargo-llvm-cov"),
-        ("rustsec/rustsec", f"cargo-audit/v{args.audit}", "AUDIT_SHA256", f"cargo-audit-x86_64-unknown-linux-musl-v{args.audit}.tgz", r"cargo-audit/v[0-9.]+/cargo-audit"),
-        ("EmbarkStudios/cargo-deny", args.deny, "DENY_SHA256", f"cargo-deny-{args.deny}-x86_64-unknown-linux-musl.tar.gz", r"download/[0-9.]+/cargo-deny-[0-9.]+"),
+        ("cargo-llvm-cov", "taiki-e/cargo-llvm-cov", f"v{args.llvm_cov}", args.llvm_cov,
+         "cargo-llvm-cov-x86_64-unknown-linux-gnu.tar.gz"),
+        ("cargo-audit", "rustsec/rustsec", f"cargo-audit/v{args.audit}", args.audit,
+         f"cargo-audit-x86_64-unknown-linux-musl-v{args.audit}.tgz"),
+        ("cargo-deny", "EmbarkStudios/cargo-deny", args.deny, args.deny,
+         f"cargo-deny-{args.deny}-x86_64-unknown-linux-musl.tar.gz"),
     ]
-    for repo, tag, variable, asset, version_pattern in tools:
-        release = github_release(repo, tag, token)
-        replace_value(variable, digest(asset_url(release, asset)))
-        replacement = (
-            f"v{args.llvm_cov}/cargo-llvm-cov" if variable == "TOOL_SHA256" else
-            f"cargo-audit/v{args.audit}/cargo-audit" if variable == "AUDIT_SHA256" else
-            f"download/{args.deny}/cargo-deny-{args.deny}"
-        )
-        replace(version_pattern, replacement)
-    replace(r"cargo-audit-x86_64-unknown-linux-musl-v[0-9.]+\.tgz", f"cargo-audit-x86_64-unknown-linux-musl-v{args.audit}.tgz")
-    replace(r"(\| cargo-llvm-cov \| )[0-9.]+", rf"\g<1>{args.llvm_cov}")
-    replace(r"(\| cargo-audit \| )[0-9.]+", rf"\g<1>{args.audit}")
-    replace(r"(\| cargo-deny \| )[0-9.]+", rf"\g<1>{args.deny}")
+    for name, repo, tag, version, asset in tools:
+        new = digest(asset_url(github_release(repo, tag, token), asset))
+        replace_hash(pins["tools"][name]["sha256"], new)
+        replace(rf"(\| {re.escape(name)} \| )[0-9.]+", rf"\g<1>{version}")
+        pins["tools"][name] = {"sha256": new, "version": version}
 
     syft = github_release("anchore/syft", f"v{args.syft}", token)
-    linux_asset = f"syft_{args.syft}_linux_amd64.tar.gz"
-    replace_value("SYFT_SHA256", digest(asset_url(syft, linux_asset)))
-    for platform in ("darwin_arm64", "darwin_amd64", "windows_amd64"):
-        asset = f"syft_{args.syft}_{platform}." + ("zip" if platform.startswith("windows") else "tar.gz")
-        value = digest(asset_url(syft, asset))
-        replace(
-            rf"(syft_archive=syft_[0-9.]+_{platform}\.(?:tar\.gz|zip)\n\s+syft_sha256=)[0-9a-f]{{64}}",
-            rf"\g<1>{value}",
-        )
-    replace(r"syft_[0-9.]+_", f"syft_{args.syft}_")
-    replace(r"syft/releases/download/v[0-9.]+", f"syft/releases/download/v{args.syft}")
+    for platform in SYFT_PLATFORMS:
+        extension = "zip" if platform.startswith("windows") else "tar.gz"
+        pins["syft"]["sha256"][platform] = digest(asset_url(syft, f"syft_{args.syft}_{platform}.{extension}"))
     replace(r"Syft [0-9]+(?:\.[0-9]+)+", f"Syft {args.syft}")
+    pins["syft"]["version"] = args.syft
 
     db = github_release("databricks/cli", f"v{args.databricks}", token)
-    db_asset = f"databricks_cli_{args.databricks}_linux_amd64.tar.gz"
-    db_hash = digest(asset_url(db, db_asset))
-    replace(r"databricks/cli/releases/download/v[0-9.]+/databricks_cli_[0-9.]+_linux_amd64", f"databricks/cli/releases/download/v{args.databricks}/databricks_cli_{args.databricks}_linux_amd64")
-    replace(r"(?m)^\s*echo '[0-9a-f]{64}  /tmp/databricks-cli\.tar\.gz'", f"          echo '{db_hash}  /tmp/databricks-cli.tar.gz'")
-    replace(r"Databricks CLI \| [0-9.]+, Linux amd64 \| `[0-9a-f]{64}`", f"Databricks CLI | {args.databricks}, Linux amd64 | `{db_hash}`")
+    db_hash = digest(asset_url(db, f"databricks_cli_{args.databricks}_linux_amd64.tar.gz"))
+    replace(
+        r"Databricks CLI \| [0-9.]+, Linux amd64 \| `[0-9a-f]{64}`",
+        f"Databricks CLI | {args.databricks}, Linux amd64 | `{db_hash}`",
+    )
+    pins["databricks_cli"] = {"sha256": db_hash, "version": args.databricks}
+
+
+VERSION_ARGUMENTS = ("rust", "rust_date", "llvm_cov", "audit", "deny", "syft", "databricks")
 
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--rust", required=True)
-    parser.add_argument("--rust-date", required=True)
-    parser.add_argument("--llvm-cov", required=True)
-    parser.add_argument("--audit", required=True)
-    parser.add_argument("--deny", required=True)
-    parser.add_argument("--syft", required=True)
-    parser.add_argument("--databricks", required=True)
+    parser.add_argument("--emit-github-output", type=Path, help="validate the pins and write workflow step outputs")
+    parser.add_argument("--rust")
+    parser.add_argument("--rust-date")
+    parser.add_argument("--llvm-cov")
+    parser.add_argument("--audit")
+    parser.add_argument("--deny")
+    parser.add_argument("--syft")
+    parser.add_argument("--databricks")
     parser.add_argument("--github-token", default=os.environ.get("GITHUB_TOKEN"))
     args = parser.parse_args()
-    update_rust(args.rust, args.rust_date)
-    update_github_tools(args)
+    if args.emit_github_output:
+        emit_github_output(args.emit_github_output)
+        return
+    missing = [name for name in VERSION_ARGUMENTS if not getattr(args, name)]
+    if missing:
+        parser.error("missing required arguments: " + ", ".join("--" + name.replace("_", "-") for name in missing))
+    pins = load_pins()
+    update_rust(pins, args.rust, args.rust_date)
+    update_github_tools(pins, args)
+    save_pins(pins)
 
 
 if __name__ == "__main__":

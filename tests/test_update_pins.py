@@ -1,16 +1,22 @@
+import copy
+import hashlib
 import importlib.util
 import io
 import json
+import re
 import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
 
 
-SCRIPT = Path(__file__).parents[1] / "scripts" / "update-pins.py"
+REPOSITORY = Path(__file__).parents[1]
+SCRIPT = REPOSITORY / "scripts" / "update-pins.py"
 SPEC = importlib.util.spec_from_file_location("update_pins", SCRIPT)
 update_pins = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(update_pins)
+
+REAL_PINS = json.loads((REPOSITORY / ".github/pins.json").read_text())
 
 
 class Response(io.BytesIO):
@@ -21,19 +27,63 @@ class Response(io.BytesIO):
         self.close()
 
 
+def leaves(value):
+    if isinstance(value, dict):
+        for child in value.values():
+            yield from leaves(child)
+    else:
+        yield value
+
+
+def hashlib_for(value):
+    return hashlib.sha256(value.encode()).hexdigest()
+
+
+def argparse_namespace(**values):
+    class Namespace:
+        pass
+
+    result = Namespace()
+    for name, value in values.items():
+        setattr(result, name, value)
+    return result
+
+
 class RepositoryFixture(unittest.TestCase):
+    """A scratch repository with the real pins and docs that mention them."""
+
     def setUp(self):
         self.temporary_directory = tempfile.TemporaryDirectory()
         self.root = Path(self.temporary_directory.name)
-        (self.root / ".github/workflows").mkdir(parents=True)
-        (self.root / "docs").mkdir()
-        self.ci = self.root / ".github/workflows/ci.yml"
-        self.release = self.root / ".github/workflows/release.yml"
+        for directory in (".github/workflows", "docs"):
+            (self.root / directory).mkdir(parents=True)
+        self.pins_file = self.root / ".github/pins.json"
         self.security = self.root / "docs/security.md"
-        self.files = [self.ci, self.release, self.security]
+        self.pins = copy.deepcopy(REAL_PINS)
+        self.pins_file.write_text(json.dumps(self.pins, indent=2, sort_keys=True) + "\n")
+        rust, tools = self.pins["rust"], self.pins["tools"]
+        self.security.write_text(
+            f"rust:{rust['version']}-bookworm@sha256:{rust['image_digest']}\n"
+            f"| cargo-llvm-cov | {tools['cargo-llvm-cov']['version']} | `{tools['cargo-llvm-cov']['sha256']}` |\n"
+            f"| cargo-audit | {tools['cargo-audit']['version']}, musl | `{tools['cargo-audit']['sha256']}` |\n"
+            f"| cargo-deny | {tools['cargo-deny']['version']}, musl | `{tools['cargo-deny']['sha256']}` |\n"
+            f"| Databricks CLI | {self.pins['databricks_cli']['version']}, Linux amd64 | "
+            f"`{self.pins['databricks_cli']['sha256']}` |\n"
+            f"| Clippy | `{rust['components']['clippy']}` |\n"
+            f"| x86_64-apple-darwin | `{rust['standalone']['x86_64-apple-darwin']['cargo']}` |\n"
+            f"Rust {rust['version']} archives from {rust['dist_date']}; checksum-pinned "
+            f"Syft {self.pins['syft']['version']}.\n"
+        )
+        (self.root / "rust-toolchain.toml").write_text(f'[toolchain]\nchannel = "{rust["version"]}"\n')
+        (self.root / "README.md").write_text(f"- Rust {rust['version']} for source builds\n")
+        (self.root / "docs/development.md").write_text(f"Rust {rust['version']} is pinned.\n")
+        # A workflow that mentions every pin. The updater must leave it alone.
+        self.workflow = self.root / ".github/workflows/ci.yml"
+        self.workflow.write_text("\n".join(str(value) for value in leaves(self.pins)) + "\n")
         self.patchers = [
             mock.patch.object(update_pins, "ROOT", self.root),
-            mock.patch.object(update_pins, "FILES", self.files),
+            mock.patch.object(update_pins, "PINS", self.pins_file),
+            mock.patch.object(update_pins, "DOCS", [self.security]),
         ]
         for patcher in self.patchers:
             patcher.start()
@@ -43,30 +93,103 @@ class RepositoryFixture(unittest.TestCase):
             patcher.stop()
         self.temporary_directory.cleanup()
 
-    def write_supporting_files(self):
-        (self.root / "rust-toolchain.toml").write_text('[toolchain]\nchannel = "1.89.0"\n')
-        (self.root / "Cargo.toml").write_text('rust-version = "1.89"\n')
-        (self.root / "README.md").write_text("Rust 1.89.0\n")
-        (self.root / "docs/development.md").write_text("Rust 1.89.0\n")
+    def snapshot(self):
+        return {
+            path.relative_to(self.root).as_posix(): path.read_text()
+            for path in sorted(self.root.rglob("*"))
+            if path.is_file()
+        }
+
+
+class SchemaTests(RepositoryFixture):
+    def test_committed_pins_file_is_valid(self):
+        update_pins.validate(REAL_PINS)
+
+    def test_validate_rejects_missing_and_extra_keys(self):
+        missing = copy.deepcopy(REAL_PINS)
+        del missing["syft"]
+        with self.assertRaisesRegex(RuntimeError, "exactly the keys"):
+            update_pins.validate(missing)
+        extra = copy.deepcopy(REAL_PINS)
+        extra["tools"]["unknown"] = {"sha256": "0" * 64, "version": "1.0.0"}
+        with self.assertRaisesRegex(RuntimeError, r"pins\.tools must have exactly the keys"):
+            update_pins.validate(extra)
+
+    def test_validate_rejects_malformed_values(self):
+        for path, bad in [
+            (("databricks_cli", "sha256"), "0" * 63),
+            (("rust", "version"), "latest"),
+            (("rust", "dist_date"), "2025-8-7"),
+            (("syft", "sha256", "linux_amd64"), ""),
+            (("tools", "cargo-deny", "version"), 1),
+        ]:
+            pins = copy.deepcopy(REAL_PINS)
+            node = pins
+            for key in path[:-1]:
+                node = node[key]
+            node[path[-1]] = bad
+            with self.assertRaisesRegex(RuntimeError, "is not a valid pin"):
+                update_pins.validate(pins)
+
+    def test_validate_rejects_non_object_sections(self):
+        pins = copy.deepcopy(REAL_PINS)
+        pins["rust"]["components"] = []
+        with self.assertRaisesRegex(RuntimeError, "components must have exactly the keys"):
+            update_pins.validate(pins)
+
+    def test_save_is_sorted_indented_and_newline_terminated(self):
+        update_pins.save_pins(update_pins.load_pins())
+        text = self.pins_file.read_text()
+        self.assertEqual(text, json.dumps(REAL_PINS, indent=2, sort_keys=True) + "\n")
+
+    def test_save_refuses_invalid_pins(self):
+        pins = copy.deepcopy(REAL_PINS)
+        pins["rust"]["image_digest"] = "not-a-digest"
+        before = self.pins_file.read_text()
+        with self.assertRaises(RuntimeError):
+            update_pins.save_pins(pins)
+        self.assertEqual(self.pins_file.read_text(), before)
+
+
+class OutputTests(RepositoryFixture):
+    def test_rust_image_combines_version_and_digest(self):
+        self.assertEqual(
+            update_pins.rust_image(REAL_PINS),
+            f"rust:{REAL_PINS['rust']['version']}-bookworm@sha256:{REAL_PINS['rust']['image_digest']}",
+        )
+
+    def test_emit_github_output_writes_compact_json_and_image(self):
+        output = self.root / "github-output"
+        output.write_text("existing=1\n")
+        update_pins.emit_github_output(output)
+        lines = output.read_text().splitlines()
+        self.assertEqual(lines[0], "existing=1")
+        self.assertTrue(lines[1].startswith("json={"))
+        self.assertEqual(json.loads(lines[1].removeprefix("json=")), REAL_PINS)
+        self.assertEqual(lines[2], "rust_image=" + update_pins.rust_image(REAL_PINS))
+
+    def test_emit_github_output_fails_closed_on_invalid_pins(self):
+        self.pins_file.write_text('{"rust": {}}\n')
+        with self.assertRaises(RuntimeError):
+            update_pins.emit_github_output(self.root / "github-output")
 
 
 class ReplacementTests(RepositoryFixture):
-    def test_replace_updates_every_matching_file(self):
-        self.ci.write_text("pin=old\n")
-        self.release.write_text("pin=old\n")
-        self.security.write_text("unrelated\n")
-
-        update_pins.replace("old", "new")
-
-        self.assertEqual(self.ci.read_text(), "pin=new\n")
-        self.assertEqual(self.release.read_text(), "pin=new\n")
+    def test_replace_updates_documentation(self):
+        update_pins.replace(r"Syft [0-9]+(?:\.[0-9]+)+", "Syft 9.9.9")
+        self.assertIn("Syft 9.9.9.", self.security.read_text())
 
     def test_replace_fails_closed_when_pattern_is_missing(self):
-        for path in self.files:
-            path.write_text("no expected pin\n")
-
         with self.assertRaisesRegex(RuntimeError, "pin pattern not found"):
             update_pins.replace("missing", "replacement")
+
+    def test_replace_hash_updates_documented_checksums_only(self):
+        documented = self.pins["rust"]["components"]["clippy"]
+        update_pins.replace_hash(documented, "e" * 64)
+        self.assertIn("e" * 64, self.security.read_text())
+        before = self.security.read_text()
+        update_pins.replace_hash("f" * 64, "0" * 64)  # not documented: no change, no error
+        self.assertEqual(self.security.read_text(), before)
 
     def test_asset_lookup_fails_when_expected_asset_is_missing(self):
         with self.assertRaisesRegex(RuntimeError, "release asset not found"):
@@ -84,8 +207,6 @@ class ApiTests(unittest.TestCase):
 
     @mock.patch.object(update_pins, "fetch", return_value=b"artifact")
     def test_digest_hashes_downloaded_bytes(self, _fetch):
-        import hashlib
-
         self.assertEqual(update_pins.digest("https://example.test/artifact"), hashlib.sha256(b"artifact").hexdigest())
 
     @mock.patch.object(update_pins, "fetch", return_value=b'{"assets": []}')
@@ -125,140 +246,129 @@ class ApiTests(unittest.TestCase):
             update_pins.rust_image_digest("1.99.0")
 
 
-class CommandTests(unittest.TestCase):
-    def test_main_dispatches_both_update_groups(self):
-        args = argparse_namespace(
-            rust="1.90.0",
-            rust_date="2025-09-18",
-            llvm_cov="1",
-            audit="1",
-            deny="1",
-            syft="1",
-            databricks="1",
-            github_token=None,
-        )
-        with mock.patch("argparse.ArgumentParser.parse_args", return_value=args), mock.patch.object(
-            update_pins, "update_rust"
-        ) as update_rust, mock.patch.object(update_pins, "update_github_tools") as update_tools:
-            update_pins.main()
-
-        update_rust.assert_called_once_with("1.90.0", "2025-09-18")
-        update_tools.assert_called_once_with(args)
-
-
 class RustUpdateTests(RepositoryFixture):
-    def test_rust_update_rewrites_versions_hashes_and_image_digest(self):
-        variables = [
-            "CLIPPY_SHA256",
-            "LLVM_TOOLS_SHA256",
-            "RUSTFMT_SHA256",
-            "MACOS_ARM64_CARGO_SHA256",
-            "MACOS_ARM64_RUSTC_SHA256",
-            "MACOS_ARM64_STD_SHA256",
-            "MACOS_X64_CARGO_SHA256",
-            "MACOS_X64_RUSTC_SHA256",
-            "MACOS_X64_STD_SHA256",
-            "WINDOWS_X64_CARGO_SHA256",
-            "WINDOWS_X64_RUSTC_SHA256",
-            "WINDOWS_X64_STD_SHA256",
-        ]
-        self.ci.write_text(
-            "\n".join(f"{name}: {'0' * 64}" for name in variables)
-            + "\nhttps://static.rust-lang.org/dist/2025-08-07/tool-1.89.0.tar.xz\n"
-            + f"image: rust:1.89.0-bookworm@sha256:{'1' * 64}\n"
-        )
-        self.release.write_text("Rust 1.89.0\n")
-        self.security.write_text(f"rust:1.89.0-bookworm@sha256:{'1' * 64}\n")
-        self.write_supporting_files()
-
+    def test_rust_update_rewrites_pins_and_docs(self):
+        old = self.pins["rust"]
         with mock.patch.object(update_pins, "fetch", return_value=("a" * 64 + "  archive\n").encode()), mock.patch.object(
             update_pins, "rust_image_digest", return_value="b" * 64
         ):
-            update_pins.update_rust("1.90.0", "2025-09-18")
+            pins = update_pins.load_pins()
+            update_pins.update_rust(pins, "1.99.0", "2026-01-01")
+            update_pins.save_pins(pins)
 
-        combined = "".join(path.read_text() for path in self.files)
-        self.assertNotIn("1.89.0", combined)
-        self.assertNotIn("2025-08-07", combined)
-        self.assertIn("CLIPPY_SHA256: " + "a" * 64, self.ci.read_text())
-        self.assertIn("rust:1.90.0-bookworm@sha256:" + "b" * 64, combined)
+        saved = json.loads(self.pins_file.read_text())["rust"]
+        self.assertEqual((saved["version"], saved["dist_date"], saved["image_digest"]), ("1.99.0", "2026-01-01", "b" * 64))
+        self.assertEqual(set(saved["components"].values()), {"a" * 64})
+        self.assertEqual({value for target in saved["standalone"].values() for value in target.values()}, {"a" * 64})
+        docs = self.security.read_text()
+        self.assertIn("rust:1.99.0-bookworm@sha256:" + "b" * 64, docs)
+        self.assertNotIn(old["components"]["clippy"], docs)
+        self.assertNotIn(old["dist_date"], docs)
+        self.assertIn('channel = "1.99.0"', (self.root / "rust-toolchain.toml").read_text())
+        self.assertIn("Rust 1.99.0", (self.root / "README.md").read_text())
 
 
 class ToolUpdateTests(RepositoryFixture):
-    def setUp(self):
-        super().setUp()
-        self.ci.write_text(
-            f"TOOL_SHA256: {'0' * 64}\n"
-            "https://github.com/taiki-e/cargo-llvm-cov/releases/download/v0.9.1/cargo-llvm-cov-x86_64-unknown-linux-gnu.tar.gz\n"
-            f"AUDIT_SHA256: {'1' * 64}\n"
-            "https://github.com/rustsec/rustsec/releases/download/cargo-audit/v0.22.2/cargo-audit-x86_64-unknown-linux-musl-v0.22.2.tgz\n"
-            f"DENY_SHA256: {'2' * 64}\n"
-            "https://github.com/EmbarkStudios/cargo-deny/releases/download/0.20.2/cargo-deny-0.20.2-x86_64-unknown-linux-musl.tar.gz\n"
-            "https://github.com/databricks/cli/releases/download/v0.296.0/databricks_cli_0.296.0_linux_amd64.tar.gz\n"
-            f"          echo '{'3' * 64}  /tmp/databricks-cli.tar.gz'\n"
-        )
-        self.release.write_text(
-            f"SYFT_SHA256: {'4' * 64}\n"
-            "https://github.com/anchore/syft/releases/download/v1.52.0/syft_1.52.0_linux_amd64.tar.gz\n"
-            f"syft_archive=syft_1.52.0_darwin_arm64.tar.gz\n              syft_sha256={'5' * 64}\n"
-            f"syft_archive=syft_1.52.0_darwin_amd64.tar.gz\n              syft_sha256={'6' * 64}\n"
-            f"syft_archive=syft_1.52.0_windows_amd64.zip\n              syft_sha256={'7' * 64}\n"
-        )
-        self.security.write_text(
-            f"| cargo-llvm-cov | 0.9.1 | `{'0' * 64}` |\n"
-            f"| cargo-audit | 0.22.2 | `{'1' * 64}` |\n"
-            f"| cargo-deny | 0.20.2 | `{'2' * 64}` |\n"
-            "SBOM with checksum-pinned Syft 1.52.0.\n"
-            f"| Databricks CLI | 0.296.0, Linux amd64 | `{'3' * 64}` |\n"
-        )
+    ARGS = dict(llvm_cov="0.9.9", audit="0.29.0", deny="0.29.1", syft="1.99.0", databricks="1.13.0", github_token="token")
+
+    @staticmethod
+    def release(_repo, _tag, _token):
+        names = [
+            "cargo-llvm-cov-x86_64-unknown-linux-gnu.tar.gz",
+            "cargo-audit-x86_64-unknown-linux-musl-v0.29.0.tgz",
+            "cargo-deny-0.29.1-x86_64-unknown-linux-musl.tar.gz",
+            "syft_1.99.0_linux_amd64.tar.gz",
+            "syft_1.99.0_darwin_arm64.tar.gz",
+            "syft_1.99.0_darwin_amd64.tar.gz",
+            "syft_1.99.0_windows_amd64.zip",
+            "databricks_cli_1.13.0_linux_amd64.tar.gz",
+        ]
+        return {"assets": [{"name": name, "browser_download_url": "https://assets/" + name} for name in names]}
+
+    def run_update(self):
+        with mock.patch.object(update_pins, "github_release", side_effect=self.release), mock.patch.object(
+            update_pins, "digest", side_effect=hashlib_for
+        ):
+            pins = update_pins.load_pins()
+            update_pins.update_github_tools(pins, argparse_namespace(**self.ARGS))
+            update_pins.save_pins(pins)
 
     def test_tool_update_is_complete_and_idempotent(self):
+        self.run_update()
+        first = self.snapshot()
+        self.run_update()
+        self.assertEqual(first, self.snapshot())
+
+        saved = json.loads(self.pins_file.read_text())
+        self.assertEqual(saved["tools"]["cargo-audit"], {
+            "sha256": hashlib_for("https://assets/cargo-audit-x86_64-unknown-linux-musl-v0.29.0.tgz"),
+            "version": "0.29.0",
+        })
+        self.assertEqual(saved["syft"]["version"], "1.99.0")
+        self.assertEqual(saved["syft"]["sha256"]["windows_amd64"], hashlib_for("https://assets/syft_1.99.0_windows_amd64.zip"))
+        docs = self.security.read_text()
+        self.assertIn("| cargo-deny | 0.29.1, musl |", docs)
+        self.assertIn("Syft 1.99.0.", docs)
+        self.assertIn(saved["databricks_cli"]["sha256"], docs)
+
+
+class BoundaryTests(RepositoryFixture):
+    """The updater must never edit workflow files (issue #58)."""
+
+    ALLOWED = {".github/pins.json", "docs/security.md", "docs/development.md", "README.md", "rust-toolchain.toml"}
+
+    def test_full_update_writes_only_allowed_files(self):
+        before = self.snapshot()
         args = argparse_namespace(
-            llvm_cov="0.9.2", audit="0.23.0", deny="0.21.0", syft="1.53.0", databricks="1.0.0", github_token="token"
+            rust="1.99.0", rust_date="2026-01-01", **ToolUpdateTests.ARGS,
         )
+        with mock.patch("argparse.ArgumentParser.parse_args", return_value=args), mock.patch.object(
+            update_pins, "fetch", return_value=("c" * 64 + "  archive\n").encode()
+        ), mock.patch.object(update_pins, "rust_image_digest", return_value="d" * 64), mock.patch.object(
+            update_pins, "github_release", side_effect=ToolUpdateTests.release
+        ), mock.patch.object(update_pins, "digest", side_effect=hashlib_for):
+            args.emit_github_output = None
+            update_pins.main()
+        after = self.snapshot()
 
-        def release(_repo, _tag, _token):
-            names = [
-                "cargo-llvm-cov-x86_64-unknown-linux-gnu.tar.gz",
-                "cargo-audit-x86_64-unknown-linux-musl-v0.23.0.tgz",
-                "cargo-deny-0.21.0-x86_64-unknown-linux-musl.tar.gz",
-                "syft_1.53.0_linux_amd64.tar.gz",
-                "syft_1.53.0_darwin_arm64.tar.gz",
-                "syft_1.53.0_darwin_amd64.tar.gz",
-                "syft_1.53.0_windows_amd64.zip",
-                "databricks_cli_1.0.0_linux_amd64.tar.gz",
-            ]
-            return {"assets": [{"name": name, "browser_download_url": "https://assets/" + name} for name in names]}
+        changed = {path for path in before if before[path] != after[path]}
+        self.assertTrue(changed, "the update should change something")
+        self.assertLessEqual(changed, self.ALLOWED)
+        self.assertEqual(before[".github/workflows/ci.yml"], after[".github/workflows/ci.yml"])
 
-        with mock.patch.object(update_pins, "github_release", side_effect=release), mock.patch.object(
-            update_pins, "digest", side_effect=lambda url: hashlib_for(url)
-        ):
-            update_pins.update_github_tools(args)
-            first = [path.read_text() for path in self.files]
-            update_pins.update_github_tools(args)
-
-        self.assertEqual(first, [path.read_text() for path in self.files])
-        combined = "".join(first)
-        for version in ("0.9.2", "0.23.0", "0.21.0", "1.53.0", "1.0.0"):
-            self.assertIn(version, combined)
-        for old in ("0.9.1", "0.22.2", "0.20.2", "1.52.0", "0.296.0"):
-            self.assertNotIn(old, combined)
-        self.assertIn("Syft 1.53.0.", combined)
+    def test_repository_workflows_contain_no_pinned_values(self):
+        values = {str(value) for value in leaves(REAL_PINS)}
+        for workflow in sorted((REPOSITORY / ".github/workflows").glob("*.yml")):
+            text = workflow.read_text()
+            with self.subTest(workflow=workflow.name):
+                for value in values:
+                    self.assertNotIn(value, text, f"{workflow.name} hard-codes a pin; move it to .github/pins.json")
+                # Actions are pinned by 40-character commit SHAs; a 64-character
+                # value is a checksum or image digest and belongs in pins.json.
+                self.assertIsNone(re.search(r"(?<![0-9a-f])[0-9a-f]{64}(?![0-9a-f])", text))
+                self.assertNotIn("@sha256:", text)
 
 
-def argparse_namespace(**values):
-    class Namespace:
-        pass
+class CommandTests(RepositoryFixture):
+    def test_main_emit_mode_only_writes_outputs(self):
+        output = self.root / "github-output"
+        args = argparse_namespace(
+            emit_github_output=output, rust=None, rust_date=None, llvm_cov=None, audit=None,
+            deny=None, syft=None, databricks=None, github_token=None,
+        )
+        before = self.snapshot()
+        with mock.patch("argparse.ArgumentParser.parse_args", return_value=args):
+            update_pins.main()
+        self.assertIn("rust_image=", output.read_text())
+        after = self.snapshot()
+        del after["github-output"]
+        self.assertEqual(before, after)
 
-    result = Namespace()
-    for name, value in values.items():
-        setattr(result, name, value)
-    return result
-
-
-def hashlib_for(value):
-    import hashlib
-
-    return hashlib.sha256(value.encode()).hexdigest()
+    def test_main_requires_every_version_outside_emit_mode(self):
+        with mock.patch("sys.argv", ["update-pins.py", "--rust", "1.99.0"]), mock.patch("sys.stderr", io.StringIO()) as stderr:
+            with self.assertRaises(SystemExit):
+                update_pins.main()
+        self.assertIn("--rust-date", stderr.getvalue())
 
 
 if __name__ == "__main__":

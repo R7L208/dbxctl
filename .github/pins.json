@@ -1,0 +1,56 @@
+{
+  "databricks_cli": {
+    "sha256": "0a94deffe3c9f1109020c91ac744a25bf45dc833ac302f8192892779e25b3df7",
+    "version": "1.13.0"
+  },
+  "rust": {
+    "components": {
+      "clippy": "c6c362c6cd74567022e9ba0c16f6676f8c2b73d955adcf1f6f4c51cf15e57ce8",
+      "llvm-tools": "bb0ced899fd1ac628f26e375adabc970b415c516ec82fb7cf9ac3c63cb4d0fee",
+      "rustfmt": "540eb7adf43e37b22936f981c630b10c63915f64f3c227d981a8b592ece33430"
+    },
+    "dist_date": "2025-08-07",
+    "image_digest": "c9ac3fa8945b61dede1e4500d25028aa8fd8a8fe46365fcf9c0422f8d999b9b0",
+    "standalone": {
+      "aarch64-apple-darwin": {
+        "cargo": "545517d16ac76789aa6ce801cbc3eeecc9acaf43f3ccb63148c3577f2bb4b8d3",
+        "rust-std": "1f729f8ba21725618ab894f14cc38f01470f1d15ea76a81fac2da63291bed75c",
+        "rustc": "6d2cf6164bef00ff3d2c37ca0a0658ffb7c9c3178882a72d78e35abeba888860"
+      },
+      "x86_64-apple-darwin": {
+        "cargo": "81fabf0d783af844c7dd74dfe10d0302dd063775789a914f29b33e3d46ee1cf0",
+        "rust-std": "09780642e83b12085500ea78dcb46112a546467352cc4a4dd229f22e03d4a5f0",
+        "rustc": "04f3acf7ddfb998fa2713226fd8528e6157b9030f9a6ac6678133d82d5c099f9"
+      },
+      "x86_64-pc-windows-msvc": {
+        "cargo": "8c0a40a5411746ff6600d93acd16652fef56702196bb25b940ff399d7e107f40",
+        "rust-std": "ba81500406fdf8a3a81078df2129bd6e4793b579c9e1a498563670bccad92611",
+        "rustc": "76f70bbd3dc8681ee189931bc5e270cd9524ff3d17738d87f609bba4980c466c"
+      }
+    },
+    "version": "1.89.0"
+  },
+  "syft": {
+    "sha256": {
+      "darwin_amd64": "56975f5d7ffa9846a1eaf64330647841b878097bc7e3730cb9325f93add96917",
+      "darwin_arm64": "014d561b6d13059124155f74a6c5a9a99501f5e209313638dd884f39eb418ee6",
+      "linux_amd64": "caeedb81fb0491615f1ebd1761e4145d41ee86dd2cc7bf80669f9f5ad9d6133d",
+      "windows_amd64": "de787a374cf961c56fd7b206b2e183295abba32d0af3cb44d9aef2357ca9eda2"
+    },
+    "version": "1.52.0"
+  },
+  "tools": {
+    "cargo-audit": {
+      "sha256": "7fb9497f8594b389e5fce5ef9b92db08432996895b2e0c5a0167a69ed445c428",
+      "version": "0.22.2"
+    },
+    "cargo-deny": {
+      "sha256": "9f12ed4c49936e09b48bf862b595cde2fe64fcbd9d74dfacac6131ca824c8d5f",
+      "version": "0.20.2"
+    },
+    "cargo-llvm-cov": {
+      "sha256": "b3f68e625481fed9b16444174f3fa5ebcdbde4a1878803a35eabe2dcefcdc41a",
+      "version": "0.9.1"
+    }
+  }
+}
