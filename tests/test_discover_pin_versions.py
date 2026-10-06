@@ -63,7 +63,7 @@ class DiscoveryTests(unittest.TestCase):
     def test_databricks_pin_fails_closed_when_missing(self):
         with tempfile.TemporaryDirectory() as directory:
             pins = Path(directory) / "pins.json"
-            for text in ('{}', '{"databricks_cli": {"version": "latest"}}'):
+            for text in ('{}', '{"databricks_cli": {"version": "latest"}}', '{"databricks_cli": "1.13.0"}'):
                 pins.write_text(text)
                 with self.assertRaisesRegex(RuntimeError, "no Databricks CLI pin"):
                     discover.pinned_databricks_version(pins)

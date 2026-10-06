@@ -38,7 +38,8 @@ def pinned_databricks_version(pins_file: Path = PINS_FILE) -> str:
     # The Databricks CLI pin is held deliberately because it is also dbxctl's
     # minimum supported version. Report the committed pin rather than the
     # latest release; raising it is a manual change (see docs/development.md).
-    version = json.loads(pins_file.read_text()).get("databricks_cli", {}).get("version")
+    pin = json.loads(pins_file.read_text()).get("databricks_cli")
+    version = pin.get("version") if isinstance(pin, dict) else None
     if not isinstance(version, str) or not re.fullmatch(r"[0-9]+(?:\.[0-9]+)+", version):
         raise RuntimeError(f"no Databricks CLI pin found in {pins_file}")
     return version
