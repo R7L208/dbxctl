@@ -6,9 +6,9 @@ use std::process::ExitCode;
 use crate::args::Parser;
 
 #[derive(Debug)]
-#[allow(dead_code, clippy::large_enum_variant)] // Used by #30
+#[allow(dead_code)] // Used by #30
 pub(crate) enum ProbeCommand {
-    Run(RunOptions),
+    Run(Box<RunOptions>),
     Report(ReportOptions),
     Cleanup(CleanupOptions),
     Help,
@@ -80,7 +80,7 @@ fn parse_run(args: &[OsString]) -> Result<ProbeCommand, String> {
     let lineage = lineage::parse_lineage_options(&mut parser)?;
     parser.check_empty()?;
 
-    Ok(ProbeCommand::Run(RunOptions { suite, lineage }))
+    Ok(ProbeCommand::Run(Box::new(RunOptions { suite, lineage })))
 }
 
 fn parse_report(args: &[OsString]) -> Result<ProbeCommand, String> {
@@ -119,6 +119,13 @@ fn parse_cleanup(args: &[OsString]) -> Result<ProbeCommand, String> {
     Ok(ProbeCommand::Cleanup(CleanupOptions { from }))
 }
 
+/// Execute a parsed probe command.
+///
+/// # Allow Justifications (#30: orchestration will evolve this)
+/// - `unnecessary_wraps`: Returns Result even though Err is never used currently, as the calling
+///   orchestration layer (#30) will need to propagate errors and stack different command results.
+/// - `needless_pass_by_value`: Takes `ProbeCommand` by value to allow consuming variants (`Box<RunOptions>`)
+///   and enable future orchestration layers to transfer ownership of command state.
 #[allow(clippy::unnecessary_wraps, clippy::needless_pass_by_value)]
 pub(crate) fn run_probe(command: ProbeCommand) -> Result<ExitCode, String> {
     match command {

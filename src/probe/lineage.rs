@@ -43,6 +43,102 @@ fn check_requirements(id: &str) -> CheckRequirements {
     }
 }
 
+/// Parse and validate the --only option. Returns a `HashSet` for efficient duplicate detection.
+fn parse_only_option(parser: &mut Parser) -> Result<Option<Vec<String>>, String> {
+    if let Some(only_str) = parser.option("only")? {
+        let check_ids: Vec<String> = only_str
+            .to_string_lossy()
+            .split(',')
+            .map(str::to_string)
+            .collect();
+
+        // Validate each check ID
+        let mut seen = HashSet::new();
+        for id in &check_ids {
+            if id.is_empty() {
+                return Err("--only: empty check ID (consecutive commas?)".to_string());
+            }
+            if !VALID_CHECK_IDS.contains(&id.as_str()) {
+                return Err(format!(
+                    "--only: unknown check ID '{id}' (valid: {})",
+                    VALID_CHECK_IDS.join(", ")
+                ));
+            }
+            if !seen.insert(id.clone()) {
+                return Err(format!("--only: duplicate check ID '{id}'"));
+            }
+        }
+
+        Ok(Some(check_ids))
+    } else {
+        Ok(None)
+    }
+}
+
+/// Validate mutation input options. Returns error if mutation inputs are provided without --allow-mutations.
+fn validate_mutation_inputs(parser: &mut Parser, allow_mutations: bool) -> Result<(), String> {
+    if !allow_mutations {
+        if parser.option("v6-table")?.is_some() {
+            return Err("--v6-table requires --allow-mutations flag".to_string());
+        }
+        if parser.option("v10-scratch-schema")?.is_some() {
+            return Err("--v10-scratch-schema requires --allow-mutations flag".to_string());
+        }
+        if parser.option("v7-pipeline-id")?.is_some() {
+            return Err("--v7-pipeline-id requires --allow-mutations flag".to_string());
+        }
+    }
+    Ok(())
+}
+
+/// Determine selected checks in canonical order based on --only option.
+fn determine_selected_checks(only: Option<&Vec<String>>) -> Vec<&'static str> {
+    let only_set: HashSet<String> = if let Some(checks) = only {
+        checks.iter().cloned().collect()
+    } else {
+        HashSet::new()
+    };
+
+    if only_set.is_empty() {
+        VALID_CHECK_IDS.to_vec()
+    } else {
+        VALID_CHECK_IDS
+            .iter()
+            .filter(|id| only_set.iter().any(|s| s.as_str() == **id))
+            .copied()
+            .collect()
+    }
+}
+
+/// Check resource requirements and collect checks that need each resource.
+fn check_resource_requirements(selected_checks: &[&'static str]) -> (bool, bool, Vec<&'static str>, Vec<&'static str>) {
+    let mut needs_warehouse = false;
+    let mut needs_catalog = false;
+
+    for check_id in selected_checks {
+        let reqs = check_requirements(check_id);
+        if reqs.needs_warehouse {
+            needs_warehouse = true;
+        }
+        if reqs.needs_catalog {
+            needs_catalog = true;
+        }
+    }
+
+    let warehouse_checks: Vec<&'static str> = selected_checks
+        .iter()
+        .filter(|id| check_requirements(id).needs_warehouse)
+        .copied()
+        .collect();
+    let catalog_checks: Vec<&'static str> = selected_checks
+        .iter()
+        .filter(|id| check_requirements(id).needs_catalog)
+        .copied()
+        .collect();
+
+    (needs_warehouse, needs_catalog, warehouse_checks, catalog_checks)
+}
+
 #[derive(Debug, Default)]
 pub(crate) struct LineageOptions {
     #[allow(dead_code)] // Used by #30 (orchestration)
@@ -69,7 +165,6 @@ pub(crate) struct LineageOptions {
     pub(crate) promote_to: Option<OsString>,
 }
 
-#[allow(clippy::too_many_lines)]
 pub(crate) fn parse_lineage_options(parser: &mut Parser) -> Result<LineageOptions, String> {
     let bundle_root = parser
         .option("bundle-root")?
@@ -87,50 +182,13 @@ pub(crate) fn parse_lineage_options(parser: &mut Parser) -> Result<LineageOption
 
     let scope_catalog = parser.option("scope-catalog")?.map(OsStr::to_os_string);
 
-    // Parse --only with validation
-    let only = if let Some(only_str) = parser.option("only")? {
-        let check_ids: Vec<String> = only_str
-            .to_string_lossy()
-            .split(',')
-            .map(str::to_string)
-            .collect();
-
-        // Validate each check ID
-        let mut seen = HashSet::new();
-        for id in &check_ids {
-            if id.is_empty() {
-                return Err("--only: empty check ID (consecutive commas?)".to_string());
-            }
-            if !VALID_CHECK_IDS.contains(&id.as_str()) {
-                return Err(format!(
-                    "--only: unknown check ID '{id}' (valid: {})",
-                    VALID_CHECK_IDS.join(", ")
-                ));
-            }
-            if !seen.insert(id.clone()) {
-                return Err(format!("--only: duplicate check ID '{id}'"));
-            }
-        }
-
-        Some(check_ids)
-    } else {
-        None
-    };
+    // Parse and validate --only
+    let only = parse_only_option(parser)?;
 
     let allow_mutations = parser.flag("allow-mutations");
 
-    // Reject mutation inputs if --allow-mutations is not set
-    if !allow_mutations {
-        if parser.option("v6-table")?.is_some() {
-            return Err("--v6-table requires --allow-mutations flag".to_string());
-        }
-        if parser.option("v10-scratch-schema")?.is_some() {
-            return Err("--v10-scratch-schema requires --allow-mutations flag".to_string());
-        }
-        if parser.option("v7-pipeline-id")?.is_some() {
-            return Err("--v7-pipeline-id requires --allow-mutations flag".to_string());
-        }
-    }
+    // Validate mutation inputs
+    validate_mutation_inputs(parser, allow_mutations)?;
 
     let v6_table = parser.option("v6-table")?.map(OsStr::to_os_string);
     let v10_scratch_schema = parser
@@ -140,37 +198,12 @@ pub(crate) fn parse_lineage_options(parser: &mut Parser) -> Result<LineageOption
 
     let promote_to = parser.option("promote-to")?.map(OsStr::to_os_string);
 
-    // Determine which checks are selected (default: all)
-    let selected_checks: HashSet<&str> = if let Some(ref checks) = only {
-        checks.iter().map(String::as_str).collect()
-    } else {
-        VALID_CHECK_IDS.iter().copied().collect()
-    };
+    // Determine selected checks in canonical order
+    let selected_checks = determine_selected_checks(only.as_ref());
 
-    // Check if required options are satisfied based on selected checks
-    let mut needs_warehouse = false;
-    let mut needs_catalog = false;
-    for check_id in &selected_checks {
-        let reqs = check_requirements(check_id);
-        if reqs.needs_warehouse {
-            needs_warehouse = true;
-        }
-        if reqs.needs_catalog {
-            needs_catalog = true;
-        }
-    }
-
-    // Collect list of checks that need each resource for error messages
-    let warehouse_checks: Vec<&str> = selected_checks
-        .iter()
-        .filter(|id| check_requirements(id).needs_warehouse)
-        .copied()
-        .collect();
-    let catalog_checks: Vec<&str> = selected_checks
-        .iter()
-        .filter(|id| check_requirements(id).needs_catalog)
-        .copied()
-        .collect();
+    // Check resource requirements
+    let (needs_warehouse, needs_catalog, warehouse_checks, catalog_checks) =
+        check_resource_requirements(&selected_checks);
 
     if needs_warehouse && warehouse_id.is_none() {
         return Err(format!(
