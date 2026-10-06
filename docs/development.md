@@ -125,23 +125,33 @@ dispatch. It discovers stable upstream releases, calculates artifact hashes and
 the Linux x86-64 Rust image digest, runs the updater tests, and opens or refreshes
 one reviewable pull request. It never merges an update automatically.
 
+Every pinned version, download checksum, and the Rust image digest live in
+`.github/pins.json`. A `pins` job in the CI and release workflows validates the
+file (`scripts/update-pins.py --emit-github-output`) and passes the values to
+the other jobs, which still verify each download against its checksum. The
+updater edits only `pins.json`, `rust-toolchain.toml`, and the documentation
+tables, never `.github/workflows/`. The update workflow fails if a workflow
+file changes, and a test rejects any pinned value or checksum written into a
+workflow file. Action references (`uses: owner/action@<sha>`) must stay in the
+workflows; Dependabot updates them.
+
 The Databricks CLI is the exception: its pin is held at 1.13.0, which is also
 the minimum version `dbxctl doctor` accepts, so CI tests exactly the oldest
 supported release. Discovery reports the version already pinned in
-`.github/workflows/ci.yml` instead of the latest release, and the updater only
+`.github/pins.json` instead of the latest release, and the updater only
 re-verifies its checksum. To raise the supported version, change these together
 in one reviewed pull request:
 
 1. `MINIMUM_DATABRICKS_VERSION` in `src/databricks.rs` and its boundary test.
-1. The download URL and SHA-256 in `.github/workflows/ci.yml`, and the tool
-   table in `docs/security.md` (`scripts/update-pins.py --databricks <version>`
-   rewrites both).
+1. The version and SHA-256 under `databricks_cli` in `.github/pins.json`, and
+   the tool table in `docs/security.md` (`scripts/update-pins.py --databricks <version>` rewrites both).
 1. The fake CLI's reported versions in `tests/fixtures/fake_databricks.rs`, the
    version assertions in the tests, and the requirement in `README.md`.
 
 Configure a fine-grained `PIN_UPDATE_TOKEN` Actions secret with repository
-Contents and Pull requests read/write permissions. Pull requests created with
-that bot token trigger normal CI. Without the secret, the workflow falls back
+Contents and Pull requests read/write permissions. It needs no Workflows
+permission, because updates never touch workflow files. Pull requests created
+with that bot token trigger normal CI. Without the secret, the workflow falls back
 to `GITHUB_TOKEN`; GitHub permits the PR but suppresses workflows triggered by
 that token, so a maintainer must manually trigger CI before merging.
 
