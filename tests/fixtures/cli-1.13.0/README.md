@@ -44,11 +44,11 @@ All follow conventions from the #23 baseline but are entirely fictional.
 
 ## Path Resolution (Synthesized)
 
-The bundle source (`databricks.yml`) uses relative paths (e.g., `./notebooks/silver`). When
+The bundle source (`databricks.yml`) uses relative paths (e.g., `./notebooks/silver.py`). When
 `bundle validate` runs, it resolves these paths using the target's workspace root and the
 bundle's file path prefix. For the `dev` target:
 
-- Bundle source relative path: `./notebooks/silver`
+- Bundle source relative path: `./notebooks/silver.py` (the synced notebook drops the extension)
 - Resolved workspace path: `/Workspace/Users/user@example.test/projects/example-dev/files/notebooks/silver`
 
 Similarly, pipeline library files:

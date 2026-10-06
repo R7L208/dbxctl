@@ -14,7 +14,7 @@ resources:
       tasks:
         - task_key: refresh_task
           notebook_task:
-            notebook_path: ./notebooks/silver
+            notebook_path: ./notebooks/silver.py
           job_cluster_key: default
       job_clusters:
         - job_cluster_key: default

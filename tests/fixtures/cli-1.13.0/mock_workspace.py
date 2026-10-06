@@ -156,7 +156,7 @@ class MockHandler(http.server.BaseHTTPRequestHandler):
                     "tasks": [
                         {
                             "notebook_task": {
-                                "notebook_path": "/Workspace/Users/user@example.test/projects/example/notebooks/silver"
+                                "notebook_path": "/Workspace/Users/user@example.test/projects/example-dev/files/notebooks/silver"
                             },
                             "task_key": "main",
                         }
