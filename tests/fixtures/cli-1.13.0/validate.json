@@ -23,7 +23,7 @@
           {
             "job_cluster_key": "default",
             "notebook_task": {
-              "notebook_path": "/Workspace/Users/user@example.test/projects/example-dev/notebooks/silver"
+              "notebook_path": "/Workspace/Users/user@example.test/projects/example-dev/files/notebooks/silver"
             },
             "task_key": "refresh_task"
           }
@@ -44,6 +44,23 @@
         "configuration": {
           "query_table": "table"
         },
+        "libraries": [
+          {
+            "file": {
+              "path": "/Workspace/Users/user@example.test/projects/example-dev/files/src/silver.sql"
+            }
+          },
+          {
+            "file": {
+              "path": "/Workspace/Users/user@example.test/projects/example-dev/files/src/q.sql"
+            }
+          },
+          {
+            "file": {
+              "path": "/Workspace/Users/user@example.test/projects/example-dev/files/src/gold/g.sql"
+            }
+          }
+        ],
         "name": "dlt_pipeline",
         "pipeline_type": "TRIGGERED",
         "storage": "/Workspace/Users/user@example.test/projects/example-dev/storage"

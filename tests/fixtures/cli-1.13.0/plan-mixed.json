@@ -8,7 +8,7 @@
         "tasks": [
           {
             "notebook_task": {
-              "notebook_path": "/Workspace/Users/user@example.test/projects/example/notebooks/silver"
+              "notebook_path": "/Workspace/Users/user@example.test/projects/example-dev/files/notebooks/silver"
             },
             "task_key": "refresh_task"
           }
@@ -27,6 +27,23 @@
             "label": "default",
             "spark_conf": {
               "spark.databricks.cluster.profile": "singleNode"
+            }
+          }
+        ],
+        "libraries": [
+          {
+            "file": {
+              "path": "/Workspace/Users/user@example.test/projects/example-dev/files/src/silver.sql"
+            }
+          },
+          {
+            "file": {
+              "path": "/Workspace/Users/user@example.test/projects/example-dev/files/src/q.sql"
+            }
+          },
+          {
+            "file": {
+              "path": "/Workspace/Users/user@example.test/projects/example-dev/files/src/gold/g.sql"
             }
           }
         ],

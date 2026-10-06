@@ -9,7 +9,7 @@
         "tasks": [
           {
             "notebook_task": {
-              "notebook_path": "/Workspace/Users/user@example.test/projects/example-dev/notebooks/silver"
+              "notebook_path": "/Workspace/Users/user@example.test/projects/example-dev/files/notebooks/silver"
             },
             "task_key": "refresh_task"
           }
@@ -18,6 +18,45 @@
       "source": {
         "file": "databricks.yml",
         "line": 11
+      }
+    },
+    "pipelines.dlt_pipeline": {
+      "action": "create",
+      "config": {
+        "clusters": [
+          {
+            "label": "default",
+            "spark_conf": {
+              "spark.databricks.cluster.profile": "singleNode"
+            }
+          }
+        ],
+        "configuration": {
+          "query_table": "table"
+        },
+        "libraries": [
+          {
+            "file": {
+              "path": "/Workspace/Users/user@example.test/projects/example-dev/files/src/silver.sql"
+            }
+          },
+          {
+            "file": {
+              "path": "/Workspace/Users/user@example.test/projects/example-dev/files/src/q.sql"
+            }
+          },
+          {
+            "file": {
+              "path": "/Workspace/Users/user@example.test/projects/example-dev/files/src/gold/g.sql"
+            }
+          }
+        ],
+        "name": "dlt_pipeline",
+        "storage": "/Workspace/Users/user@example.test/projects/example-dev/storage"
+      },
+      "source": {
+        "file": "databricks.yml",
+        "line": 27
       }
     }
   }

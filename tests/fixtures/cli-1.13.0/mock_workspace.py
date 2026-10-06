@@ -178,12 +178,19 @@ class MockHandler(http.server.BaseHTTPRequestHandler):
         body = json.dumps(
             {
                 "manifest": {
-                    "columns": [
-                        {
-                            "name": "result",
-                            "type_text": "STRING",
-                        }
-                    ]
+                    "format": "ROW_BASED",
+                    "schema": {
+                        "column_count": 1,
+                        "columns": [
+                            {
+                                "name": "result",
+                                "position": 0,
+                                "type_name": "STRING",
+                                "type_text": "STRING",
+                            }
+                        ]
+                    },
+                    "total_chunk_count": 1
                 },
                 "result": {
                     "data_array": [["success"]]

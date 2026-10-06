@@ -42,6 +42,23 @@ Each placeholder is distinct and used consistently across all fixtures.
 
 All follow conventions from the #23 baseline but are entirely fictional.
 
+## Path Resolution (Synthesized)
+
+The bundle source (`databricks.yml`) uses relative paths (e.g., `./notebooks/silver`). When
+`bundle validate` runs, it resolves these paths using the target's workspace root and the
+bundle's file path prefix. For the `dev` target:
+
+- Bundle source relative path: `./notebooks/silver`
+- Resolved workspace path: `/Workspace/Users/user@example.test/projects/example-dev/files/notebooks/silver`
+
+Similarly, pipeline library files:
+- Bundle relative path: `./src/silver.sql`
+- Resolved workspace path: `/Workspace/Users/user@example.test/projects/example-dev/files/src/silver.sql`
+
+This resolution is **synthesized** in `validate.json` and `plan-*.json` based on the bundle
+schema and target definitions. The exact path resolution mechanism will be verified during
+Phase 0 against a real 1.13.0 environment.
+
 ## Baseline Status (target 1.13.0)
 
 This table records observations made during fixture creation. Cells marked "Verified offline" were
@@ -73,7 +90,7 @@ The server:
 - Returns recorded, deterministic responses for these endpoints:
   - `GET /api/2.0/pipelines/01a23b45c67d8901` (HTTP 200, JSON with pipeline info)
   - `GET /api/2.1/jobs/get?job_id=123` (HTTP 200, JSON with job info)
-  - `POST /api/2.0/sql/statements` (HTTP 200, Statement Execution response with `statement_id`, `status.state`, `manifest.columns[]`, `result.data_array`)
+  - `POST /api/2.0/sql/statements` (HTTP 200, Statement Execution response with `statement_id`, `status.state`, `manifest.format`, `manifest.schema.columns[]` with `name`, `type_text`, `type_name`, `position`, and `result.data_array`)
 - Returns HTTP 404 for unrecorded GET requests
 - Returns HTTP 501 for unrecorded POST/PUT/PATCH/DELETE requests
 - Parses query parameters and reads POST JSON bodies

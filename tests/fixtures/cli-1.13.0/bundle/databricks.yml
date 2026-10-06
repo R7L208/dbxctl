@@ -14,7 +14,7 @@ resources:
       tasks:
         - task_key: refresh_task
           notebook_task:
-            notebook_path: ${workspace.root_path}/notebooks/silver
+            notebook_path: ./notebooks/silver
           job_cluster_key: default
       job_clusters:
         - job_cluster_key: default
@@ -33,6 +33,13 @@ resources:
             spark.databricks.cluster.profile: singleNode
       configuration:
         query_table: table
+      libraries:
+        - file:
+            path: ./src/silver.sql
+        - file:
+            path: ./src/q.sql
+        - file:
+            path: ./src/gold/g.sql
 
 targets:
   dev:
