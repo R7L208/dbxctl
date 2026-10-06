@@ -18,12 +18,29 @@ env:
   RUSTUP_DIST_SERVER: https://rustup-downloads-disabled.invalid
 
 jobs:
+  pins:
+    name: Load supply-chain pins
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      json: ${{ steps.pins.outputs.json }}
+      rust_image: ${{ steps.pins.outputs.rust_image }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Validate and export pins
+        id: pins
+        run: python3 scripts/update-pins.py --emit-github-output "$GITHUB_OUTPUT"
+
   portability:
     name: Test (${{ matrix.os }})
     strategy:
       fail-fast: false
       matrix:
         os: [macos-15, windows-2025]
+    needs: pins
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     steps:
@@ -37,15 +54,17 @@ jobs:
       - name: Install checksum-pinned Rust toolchain
         shell: bash
         env:
-          MACOS_ARM64_CARGO_SHA256: 545517d16ac76789aa6ce801cbc3eeecc9acaf43f3ccb63148c3577f2bb4b8d3
-          MACOS_ARM64_RUSTC_SHA256: 6d2cf6164bef00ff3d2c37ca0a0658ffb7c9c3178882a72d78e35abeba888860
-          MACOS_ARM64_STD_SHA256: 1f729f8ba21725618ab894f14cc38f01470f1d15ea76a81fac2da63291bed75c
-          MACOS_X64_CARGO_SHA256: 81fabf0d783af844c7dd74dfe10d0302dd063775789a914f29b33e3d46ee1cf0
-          MACOS_X64_RUSTC_SHA256: 04f3acf7ddfb998fa2713226fd8528e6157b9030f9a6ac6678133d82d5c099f9
-          MACOS_X64_STD_SHA256: 09780642e83b12085500ea78dcb46112a546467352cc4a4dd229f22e03d4a5f0
-          WINDOWS_X64_CARGO_SHA256: 8c0a40a5411746ff6600d93acd16652fef56702196bb25b940ff399d7e107f40
-          WINDOWS_X64_RUSTC_SHA256: 76f70bbd3dc8681ee189931bc5e270cd9524ff3d17738d87f609bba4980c466c
-          WINDOWS_X64_STD_SHA256: ba81500406fdf8a3a81078df2129bd6e4793b579c9e1a498563670bccad92611
+          RUST_VERSION: ${{ fromJSON(needs.pins.outputs.json).rust.version }}
+          RUST_DIST_DATE: ${{ fromJSON(needs.pins.outputs.json).rust.dist_date }}
+          MACOS_ARM64_CARGO_SHA256: ${{ fromJSON(needs.pins.outputs.json).rust.standalone['aarch64-apple-darwin']['cargo'] }}
+          MACOS_ARM64_RUSTC_SHA256: ${{ fromJSON(needs.pins.outputs.json).rust.standalone['aarch64-apple-darwin']['rustc'] }}
+          MACOS_ARM64_STD_SHA256: ${{ fromJSON(needs.pins.outputs.json).rust.standalone['aarch64-apple-darwin']['rust-std'] }}
+          MACOS_X64_CARGO_SHA256: ${{ fromJSON(needs.pins.outputs.json).rust.standalone['x86_64-apple-darwin']['cargo'] }}
+          MACOS_X64_RUSTC_SHA256: ${{ fromJSON(needs.pins.outputs.json).rust.standalone['x86_64-apple-darwin']['rustc'] }}
+          MACOS_X64_STD_SHA256: ${{ fromJSON(needs.pins.outputs.json).rust.standalone['x86_64-apple-darwin']['rust-std'] }}
+          WINDOWS_X64_CARGO_SHA256: ${{ fromJSON(needs.pins.outputs.json).rust.standalone['x86_64-pc-windows-msvc']['cargo'] }}
+          WINDOWS_X64_RUSTC_SHA256: ${{ fromJSON(needs.pins.outputs.json).rust.standalone['x86_64-pc-windows-msvc']['rustc'] }}
+          WINDOWS_X64_STD_SHA256: ${{ fromJSON(needs.pins.outputs.json).rust.standalone['x86_64-pc-windows-msvc']['rust-std'] }}
         run: |
           set -euo pipefail
 
@@ -79,15 +98,15 @@ jobs:
             runner_temp="$(cygpath -u "${RUNNER_TEMP}")"
           fi
 
-          toolchain_root="${runner_temp}/rust-1.89.0-${rust_target}"
+          toolchain_root="${runner_temp}/rust-${RUST_VERSION}-${rust_target}"
           install -d -m 0755 "${toolchain_root}"
 
           install_component() {
             component_name="$1"
             component_sha256="$2"
-            archive="${runner_temp}/${component_name}-1.89.0-${rust_target}.tar.xz"
+            archive="${runner_temp}/${component_name}-${RUST_VERSION}-${rust_target}.tar.xz"
             component_dir="${runner_temp}/${component_name}-${rust_target}"
-            component_url="https://static.rust-lang.org/dist/2025-08-07/${component_name}-1.89.0-${rust_target}.tar.xz"
+            component_url="https://static.rust-lang.org/dist/${RUST_DIST_DATE}/${component_name}-${RUST_VERSION}-${rust_target}.tar.xz"
 
             curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location \
               --output "${archive}" "${component_url}"
@@ -116,9 +135,9 @@ jobs:
           cargo_version="$(cargo --version --verbose)"
           echo "${rustc_version}"
           echo "${cargo_version}"
-          grep --fixed-strings --line-regexp 'release: 1.89.0' <<< "${rustc_version}"
+          grep --fixed-strings --line-regexp "release: ${RUST_VERSION}" <<< "${rustc_version}"
           grep --fixed-strings --line-regexp "host: ${rust_target}" <<< "${rustc_version}"
-          grep --fixed-strings --line-regexp 'release: 1.89.0' <<< "${cargo_version}"
+          grep --fixed-strings --line-regexp "release: ${RUST_VERSION}" <<< "${cargo_version}"
           grep --fixed-strings --line-regexp "host: ${rust_target}" <<< "${cargo_version}"
       - name: Run tests
         run: cargo test --locked --all-features
@@ -143,10 +162,12 @@ jobs:
   quality:
     name: Format, lint, test
     runs-on: ubuntu-24.04
+    needs: pins
     container:
-      image: rust:1.89.0-bookworm@sha256:c9ac3fa8945b61dede1e4500d25028aa8fd8a8fe46365fcf9c0422f8d999b9b0
+      image: ${{ needs.pins.outputs.rust_image }}
     env:
-      RUSTUP_TOOLCHAIN: 1.89.0-x86_64-unknown-linux-gnu
+      RUST_VERSION: ${{ fromJSON(needs.pins.outputs.json).rust.version }}
+      RUSTUP_TOOLCHAIN: ${{ fromJSON(needs.pins.outputs.json).rust.version }}-x86_64-unknown-linux-gnu
     timeout-minutes: 20
     steps:
       - name: Isolate Cargo home in ephemeral storage
@@ -159,12 +180,12 @@ jobs:
       - name: Install checksum-pinned Rust components
         shell: bash
         env:
-          CLIPPY_SHA256: c6c362c6cd74567022e9ba0c16f6676f8c2b73d955adcf1f6f4c51cf15e57ce8
-          CLIPPY_URL: https://static.rust-lang.org/dist/2025-08-07/clippy-1.89.0-x86_64-unknown-linux-gnu.tar.xz
-          LLVM_TOOLS_SHA256: bb0ced899fd1ac628f26e375adabc970b415c516ec82fb7cf9ac3c63cb4d0fee
-          LLVM_TOOLS_URL: https://static.rust-lang.org/dist/2025-08-07/llvm-tools-1.89.0-x86_64-unknown-linux-gnu.tar.xz
-          RUSTFMT_SHA256: 540eb7adf43e37b22936f981c630b10c63915f64f3c227d981a8b592ece33430
-          RUSTFMT_URL: https://static.rust-lang.org/dist/2025-08-07/rustfmt-1.89.0-x86_64-unknown-linux-gnu.tar.xz
+          CLIPPY_SHA256: ${{ fromJSON(needs.pins.outputs.json).rust.components['clippy'] }}
+          CLIPPY_URL: https://static.rust-lang.org/dist/${{ fromJSON(needs.pins.outputs.json).rust.dist_date }}/clippy-${{ fromJSON(needs.pins.outputs.json).rust.version }}-x86_64-unknown-linux-gnu.tar.xz
+          LLVM_TOOLS_SHA256: ${{ fromJSON(needs.pins.outputs.json).rust.components['llvm-tools'] }}
+          LLVM_TOOLS_URL: https://static.rust-lang.org/dist/${{ fromJSON(needs.pins.outputs.json).rust.dist_date }}/llvm-tools-${{ fromJSON(needs.pins.outputs.json).rust.version }}-x86_64-unknown-linux-gnu.tar.xz
+          RUSTFMT_SHA256: ${{ fromJSON(needs.pins.outputs.json).rust.components['rustfmt'] }}
+          RUSTFMT_URL: https://static.rust-lang.org/dist/${{ fromJSON(needs.pins.outputs.json).rust.dist_date }}/rustfmt-${{ fromJSON(needs.pins.outputs.json).rust.version }}-x86_64-unknown-linux-gnu.tar.xz
         run: |
           set -euo pipefail
           rust_sysroot="$(rustc --print sysroot)"
@@ -193,10 +214,10 @@ jobs:
           cargo fmt --version
           rustc_version="$(rustc --version --verbose)"
           cargo_version="$(cargo --version --verbose)"
-          grep --fixed-strings --line-regexp 'release: 1.89.0' <<< "${rustc_version}"
+          grep --fixed-strings --line-regexp "release: ${RUST_VERSION}" <<< "${rustc_version}"
           grep --fixed-strings --line-regexp 'host: x86_64-unknown-linux-gnu' \
             <<< "${rustc_version}"
-          grep --fixed-strings --line-regexp 'release: 1.89.0' <<< "${cargo_version}"
+          grep --fixed-strings --line-regexp "release: ${RUST_VERSION}" <<< "${cargo_version}"
           grep --fixed-strings --line-regexp 'host: x86_64-unknown-linux-gnu' \
             <<< "${cargo_version}"
           test -x "${rust_sysroot}/lib/rustlib/x86_64-unknown-linux-gnu/bin/llvm-profdata"
@@ -209,8 +230,8 @@ jobs:
       - name: Install checksum-pinned coverage tool
         shell: bash
         env:
-          TOOL_SHA256: b3f68e625481fed9b16444174f3fa5ebcdbde4a1878803a35eabe2dcefcdc41a
-          TOOL_URL: https://github.com/taiki-e/cargo-llvm-cov/releases/download/v0.9.1/cargo-llvm-cov-x86_64-unknown-linux-gnu.tar.gz
+          TOOL_SHA256: ${{ fromJSON(needs.pins.outputs.json).tools['cargo-llvm-cov'].sha256 }}
+          TOOL_URL: https://github.com/taiki-e/cargo-llvm-cov/releases/download/v${{ fromJSON(needs.pins.outputs.json).tools['cargo-llvm-cov'].version }}/cargo-llvm-cov-x86_64-unknown-linux-gnu.tar.gz
         run: |
           set -euo pipefail
           install -d -m 0755 "${RUNNER_TEMP}/dbxctl-tools"
@@ -237,11 +258,14 @@ jobs:
           cmp first-dist/*.tar.gz dist/*.tar.gz
           tar --list --gzip --file dist/*.tar.gz >/dev/null
       - name: Download pinned Databricks CLI
+        env:
+          DATABRICKS_CLI_VERSION: ${{ fromJSON(needs.pins.outputs.json).databricks_cli.version }}
+          DATABRICKS_CLI_SHA256: ${{ fromJSON(needs.pins.outputs.json).databricks_cli.sha256 }}
         run: |
           curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location \
             --output /tmp/databricks-cli.tar.gz \
-            https://github.com/databricks/cli/releases/download/v1.13.0/databricks_cli_1.13.0_linux_amd64.tar.gz
-          echo '0a94deffe3c9f1109020c91ac744a25bf45dc833ac302f8192892779e25b3df7  /tmp/databricks-cli.tar.gz' \
+            "https://github.com/databricks/cli/releases/download/v${DATABRICKS_CLI_VERSION}/databricks_cli_${DATABRICKS_CLI_VERSION}_linux_amd64.tar.gz"
+          echo "${DATABRICKS_CLI_SHA256}  /tmp/databricks-cli.tar.gz" \
             | sha256sum --check --strict
           mkdir /tmp/databricks-cli
           tar --extract --gzip --file /tmp/databricks-cli.tar.gz --directory /tmp/databricks-cli
@@ -291,10 +315,12 @@ jobs:
   supply-chain:
     name: CVEs, licenses, dependency policy
     runs-on: ubuntu-24.04
+    needs: pins
     container:
-      image: rust:1.89.0-bookworm@sha256:c9ac3fa8945b61dede1e4500d25028aa8fd8a8fe46365fcf9c0422f8d999b9b0
+      image: ${{ needs.pins.outputs.rust_image }}
     env:
-      RUSTUP_TOOLCHAIN: 1.89.0-x86_64-unknown-linux-gnu
+      RUST_VERSION: ${{ fromJSON(needs.pins.outputs.json).rust.version }}
+      RUSTUP_TOOLCHAIN: ${{ fromJSON(needs.pins.outputs.json).rust.version }}-x86_64-unknown-linux-gnu
     timeout-minutes: 20
     steps:
       - name: Isolate Cargo home in ephemeral storage
@@ -306,10 +332,10 @@ jobs:
           set -euo pipefail
           rustc_version="$(rustc --version --verbose)"
           cargo_version="$(cargo --version --verbose)"
-          grep --fixed-strings --line-regexp 'release: 1.89.0' <<< "${rustc_version}"
+          grep --fixed-strings --line-regexp "release: ${RUST_VERSION}" <<< "${rustc_version}"
           grep --fixed-strings --line-regexp 'host: x86_64-unknown-linux-gnu' \
             <<< "${rustc_version}"
-          grep --fixed-strings --line-regexp 'release: 1.89.0' <<< "${cargo_version}"
+          grep --fixed-strings --line-regexp "release: ${RUST_VERSION}" <<< "${cargo_version}"
           grep --fixed-strings --line-regexp 'host: x86_64-unknown-linux-gnu' \
             <<< "${cargo_version}"
       - name: Check out repository
@@ -319,10 +345,12 @@ jobs:
       - name: Install checksum-pinned security tools
         shell: bash
         env:
-          AUDIT_SHA256: 7fb9497f8594b389e5fce5ef9b92db08432996895b2e0c5a0167a69ed445c428
-          AUDIT_URL: https://github.com/rustsec/rustsec/releases/download/cargo-audit/v0.22.2/cargo-audit-x86_64-unknown-linux-musl-v0.22.2.tgz
-          DENY_SHA256: 9f12ed4c49936e09b48bf862b595cde2fe64fcbd9d74dfacac6131ca824c8d5f
-          DENY_URL: https://github.com/EmbarkStudios/cargo-deny/releases/download/0.20.2/cargo-deny-0.20.2-x86_64-unknown-linux-musl.tar.gz
+          AUDIT_SHA256: ${{ fromJSON(needs.pins.outputs.json).tools['cargo-audit'].sha256 }}
+          AUDIT_VERSION: ${{ fromJSON(needs.pins.outputs.json).tools['cargo-audit'].version }}
+          AUDIT_URL: https://github.com/rustsec/rustsec/releases/download/cargo-audit/v${{ fromJSON(needs.pins.outputs.json).tools['cargo-audit'].version }}/cargo-audit-x86_64-unknown-linux-musl-v${{ fromJSON(needs.pins.outputs.json).tools['cargo-audit'].version }}.tgz
+          DENY_SHA256: ${{ fromJSON(needs.pins.outputs.json).tools['cargo-deny'].sha256 }}
+          DENY_VERSION: ${{ fromJSON(needs.pins.outputs.json).tools['cargo-deny'].version }}
+          DENY_URL: https://github.com/EmbarkStudios/cargo-deny/releases/download/${{ fromJSON(needs.pins.outputs.json).tools['cargo-deny'].version }}/cargo-deny-${{ fromJSON(needs.pins.outputs.json).tools['cargo-deny'].version }}-x86_64-unknown-linux-musl.tar.gz
         run: |
           set -euo pipefail
           install -d -m 0755 "${RUNNER_TEMP}/dbxctl-tools"
@@ -332,14 +360,14 @@ jobs:
           echo "${AUDIT_SHA256}  ${RUNNER_TEMP}/cargo-audit.tgz" | sha256sum --check --strict
           tar --extract --gzip --file "${RUNNER_TEMP}/cargo-audit.tgz" \
             --directory "${RUNNER_TEMP}/dbxctl-tools" --strip-components 1 \
-            cargo-audit-x86_64-unknown-linux-musl-v0.22.2/cargo-audit
+            "cargo-audit-x86_64-unknown-linux-musl-v${AUDIT_VERSION}/cargo-audit"
 
           curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location \
             --output "${RUNNER_TEMP}/cargo-deny.tar.gz" "${DENY_URL}"
           echo "${DENY_SHA256}  ${RUNNER_TEMP}/cargo-deny.tar.gz" | sha256sum --check --strict
           tar --extract --gzip --file "${RUNNER_TEMP}/cargo-deny.tar.gz" \
             --directory "${RUNNER_TEMP}/dbxctl-tools" --strip-components 1 \
-            cargo-deny-0.20.2-x86_64-unknown-linux-musl/cargo-deny
+            "cargo-deny-${DENY_VERSION}-x86_64-unknown-linux-musl/cargo-deny"
 
           chmod 0755 "${RUNNER_TEMP}/dbxctl-tools/cargo-audit" \
             "${RUNNER_TEMP}/dbxctl-tools/cargo-deny"

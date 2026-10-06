@@ -12,7 +12,7 @@ import importlib.util
 
 
 UPDATER_PATH = Path(__file__).with_name("update-pins.py")
-CI_WORKFLOW = Path(__file__).parents[1] / ".github" / "workflows" / "ci.yml"
+PINS_FILE = Path(__file__).parents[1] / ".github" / "pins.json"
 SPEC = importlib.util.spec_from_file_location("update_pins", UPDATER_PATH)
 update_pins = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(update_pins)
@@ -34,14 +34,14 @@ def latest_audit_version(token: str | None) -> str:
     raise RuntimeError("no cargo-audit release found")
 
 
-def pinned_databricks_version(workflow: Path = CI_WORKFLOW) -> str:
+def pinned_databricks_version(pins_file: Path = PINS_FILE) -> str:
     # The Databricks CLI pin is held deliberately because it is also dbxctl's
     # minimum supported version. Report the committed pin rather than the
     # latest release; raising it is a manual change (see docs/development.md).
-    match = re.search(r"databricks/cli/releases/download/v([0-9]+(?:\.[0-9]+)+)/", workflow.read_text())
-    if not match:
-        raise RuntimeError(f"no Databricks CLI pin found in {workflow}")
-    return match.group(1)
+    version = json.loads(pins_file.read_text()).get("databricks_cli", {}).get("version")
+    if not isinstance(version, str) or not re.fullmatch(r"[0-9]+(?:\.[0-9]+)+", version):
+        raise RuntimeError(f"no Databricks CLI pin found in {pins_file}")
+    return version
 
 
 def stable_rust() -> tuple[str, str]:

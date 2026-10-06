@@ -17,18 +17,37 @@ env:
   RUSTUP_DIST_SERVER: https://rustup-downloads-disabled.invalid
 
 jobs:
+  pins:
+    name: Load supply-chain pins
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      json: ${{ steps.pins.outputs.json }}
+      rust_image: ${{ steps.pins.outputs.rust_image }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Validate and export pins
+        id: pins
+        run: python3 scripts/update-pins.py --emit-github-output "$GITHUB_OUTPUT"
+
   linux:
     name: Linux x86-64 artifact and attestations
+    needs: pins
     runs-on: ubuntu-24.04
     container:
-      image: rust:1.89.0-bookworm@sha256:c9ac3fa8945b61dede1e4500d25028aa8fd8a8fe46365fcf9c0422f8d999b9b0
+      image: ${{ needs.pins.outputs.rust_image }}
     timeout-minutes: 20
     permissions:
       contents: read
       id-token: write
       attestations: write
     env:
-      RUSTUP_TOOLCHAIN: 1.89.0-x86_64-unknown-linux-gnu
+      RUSTUP_TOOLCHAIN: ${{ fromJSON(needs.pins.outputs.json).rust.version }}-x86_64-unknown-linux-gnu
     steps:
       - name: Isolate Cargo home in ephemeral storage
         shell: bash
@@ -73,8 +92,8 @@ jobs:
       - name: Install checksum-pinned Syft
         shell: bash
         env:
-          SYFT_SHA256: caeedb81fb0491615f1ebd1761e4145d41ee86dd2cc7bf80669f9f5ad9d6133d
-          SYFT_URL: https://github.com/anchore/syft/releases/download/v1.52.0/syft_1.52.0_linux_amd64.tar.gz
+          SYFT_SHA256: ${{ fromJSON(needs.pins.outputs.json).syft.sha256['linux_amd64'] }}
+          SYFT_URL: https://github.com/anchore/syft/releases/download/v${{ fromJSON(needs.pins.outputs.json).syft.version }}/syft_${{ fromJSON(needs.pins.outputs.json).syft.version }}_linux_amd64.tar.gz
         run: |
           set -euo pipefail
           curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location \
@@ -127,6 +146,7 @@ jobs:
             os: macos-15
           - name: Windows
             os: windows-2025
+    needs: pins
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     permissions:
@@ -146,15 +166,21 @@ jobs:
       - name: Install checksum-pinned Rust toolchain
         shell: bash
         env:
-          MACOS_ARM64_CARGO_SHA256: 545517d16ac76789aa6ce801cbc3eeecc9acaf43f3ccb63148c3577f2bb4b8d3
-          MACOS_ARM64_RUSTC_SHA256: 6d2cf6164bef00ff3d2c37ca0a0658ffb7c9c3178882a72d78e35abeba888860
-          MACOS_ARM64_STD_SHA256: 1f729f8ba21725618ab894f14cc38f01470f1d15ea76a81fac2da63291bed75c
-          MACOS_X64_CARGO_SHA256: 81fabf0d783af844c7dd74dfe10d0302dd063775789a914f29b33e3d46ee1cf0
-          MACOS_X64_RUSTC_SHA256: 04f3acf7ddfb998fa2713226fd8528e6157b9030f9a6ac6678133d82d5c099f9
-          MACOS_X64_STD_SHA256: 09780642e83b12085500ea78dcb46112a546467352cc4a4dd229f22e03d4a5f0
-          WINDOWS_X64_CARGO_SHA256: 8c0a40a5411746ff6600d93acd16652fef56702196bb25b940ff399d7e107f40
-          WINDOWS_X64_RUSTC_SHA256: 76f70bbd3dc8681ee189931bc5e270cd9524ff3d17738d87f609bba4980c466c
-          WINDOWS_X64_STD_SHA256: ba81500406fdf8a3a81078df2129bd6e4793b579c9e1a498563670bccad92611
+          RUST_VERSION: ${{ fromJSON(needs.pins.outputs.json).rust.version }}
+          RUST_DIST_DATE: ${{ fromJSON(needs.pins.outputs.json).rust.dist_date }}
+          SYFT_VERSION: ${{ fromJSON(needs.pins.outputs.json).syft.version }}
+          SYFT_DARWIN_ARM64_SHA256: ${{ fromJSON(needs.pins.outputs.json).syft.sha256['darwin_arm64'] }}
+          SYFT_DARWIN_AMD64_SHA256: ${{ fromJSON(needs.pins.outputs.json).syft.sha256['darwin_amd64'] }}
+          SYFT_WINDOWS_AMD64_SHA256: ${{ fromJSON(needs.pins.outputs.json).syft.sha256['windows_amd64'] }}
+          MACOS_ARM64_CARGO_SHA256: ${{ fromJSON(needs.pins.outputs.json).rust.standalone['aarch64-apple-darwin']['cargo'] }}
+          MACOS_ARM64_RUSTC_SHA256: ${{ fromJSON(needs.pins.outputs.json).rust.standalone['aarch64-apple-darwin']['rustc'] }}
+          MACOS_ARM64_STD_SHA256: ${{ fromJSON(needs.pins.outputs.json).rust.standalone['aarch64-apple-darwin']['rust-std'] }}
+          MACOS_X64_CARGO_SHA256: ${{ fromJSON(needs.pins.outputs.json).rust.standalone['x86_64-apple-darwin']['cargo'] }}
+          MACOS_X64_RUSTC_SHA256: ${{ fromJSON(needs.pins.outputs.json).rust.standalone['x86_64-apple-darwin']['rustc'] }}
+          MACOS_X64_STD_SHA256: ${{ fromJSON(needs.pins.outputs.json).rust.standalone['x86_64-apple-darwin']['rust-std'] }}
+          WINDOWS_X64_CARGO_SHA256: ${{ fromJSON(needs.pins.outputs.json).rust.standalone['x86_64-pc-windows-msvc']['cargo'] }}
+          WINDOWS_X64_RUSTC_SHA256: ${{ fromJSON(needs.pins.outputs.json).rust.standalone['x86_64-pc-windows-msvc']['rustc'] }}
+          WINDOWS_X64_STD_SHA256: ${{ fromJSON(needs.pins.outputs.json).rust.standalone['x86_64-pc-windows-msvc']['rust-std'] }}
         run: |
           set -euo pipefail
 
@@ -164,24 +190,24 @@ jobs:
               cargo_sha256="${MACOS_ARM64_CARGO_SHA256}"
               rustc_sha256="${MACOS_ARM64_RUSTC_SHA256}"
               std_sha256="${MACOS_ARM64_STD_SHA256}"
-              syft_archive=syft_1.52.0_darwin_arm64.tar.gz
-              syft_sha256=014d561b6d13059124155f74a6c5a9a99501f5e209313638dd884f39eb418ee6
+              syft_archive="syft_${SYFT_VERSION}_darwin_arm64.tar.gz"
+              syft_sha256="${SYFT_DARWIN_ARM64_SHA256}"
               ;;
             macOS-x86_64)
               rust_target=x86_64-apple-darwin
               cargo_sha256="${MACOS_X64_CARGO_SHA256}"
               rustc_sha256="${MACOS_X64_RUSTC_SHA256}"
               std_sha256="${MACOS_X64_STD_SHA256}"
-              syft_archive=syft_1.52.0_darwin_amd64.tar.gz
-              syft_sha256=56975f5d7ffa9846a1eaf64330647841b878097bc7e3730cb9325f93add96917
+              syft_archive="syft_${SYFT_VERSION}_darwin_amd64.tar.gz"
+              syft_sha256="${SYFT_DARWIN_AMD64_SHA256}"
               ;;
             Windows-x86_64)
               rust_target=x86_64-pc-windows-msvc
               cargo_sha256="${WINDOWS_X64_CARGO_SHA256}"
               rustc_sha256="${WINDOWS_X64_RUSTC_SHA256}"
               std_sha256="${WINDOWS_X64_STD_SHA256}"
-              syft_archive=syft_1.52.0_windows_amd64.zip
-              syft_sha256=de787a374cf961c56fd7b206b2e183295abba32d0af3cb44d9aef2357ca9eda2
+              syft_archive="syft_${SYFT_VERSION}_windows_amd64.zip"
+              syft_sha256="${SYFT_WINDOWS_AMD64_SHA256}"
               ;;
             *)
               echo "Unsupported runner architecture: ${RUNNER_OS}-$(uname -m)" >&2
@@ -194,15 +220,15 @@ jobs:
             runner_temp="$(cygpath -u "${RUNNER_TEMP}")"
           fi
 
-          toolchain_root="${runner_temp}/rust-1.89.0-${rust_target}"
+          toolchain_root="${runner_temp}/rust-${RUST_VERSION}-${rust_target}"
           install -d -m 0755 "${toolchain_root}"
 
           install_component() {
             component_name="$1"
             component_sha256="$2"
-            archive="${runner_temp}/${component_name}-1.89.0-${rust_target}.tar.xz"
+            archive="${runner_temp}/${component_name}-${RUST_VERSION}-${rust_target}.tar.xz"
             component_dir="${runner_temp}/${component_name}-${rust_target}"
-            component_url="https://static.rust-lang.org/dist/2025-08-07/${component_name}-1.89.0-${rust_target}.tar.xz"
+            component_url="https://static.rust-lang.org/dist/${RUST_DIST_DATE}/${component_name}-${RUST_VERSION}-${rust_target}.tar.xz"
 
             curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location \
               --output "${archive}" "${component_url}"
@@ -231,14 +257,15 @@ jobs:
           cargo_version="$(cargo --version --verbose)"
           echo "${rustc_version}"
           echo "${cargo_version}"
-          grep --fixed-strings --line-regexp 'release: 1.89.0' <<< "${rustc_version}"
+          grep --fixed-strings --line-regexp "release: ${RUST_VERSION}" <<< "${rustc_version}"
           grep --fixed-strings --line-regexp "host: ${rust_target}" <<< "${rustc_version}"
-          grep --fixed-strings --line-regexp 'release: 1.89.0' <<< "${cargo_version}"
+          grep --fixed-strings --line-regexp "release: ${RUST_VERSION}" <<< "${cargo_version}"
           grep --fixed-strings --line-regexp "host: ${rust_target}" <<< "${cargo_version}"
 
           echo "RUST_TARGET=${rust_target}" >> "${GITHUB_ENV}"
           echo "SYFT_ARCHIVE=${syft_archive}" >> "${GITHUB_ENV}"
           echo "SYFT_SHA256=${syft_sha256}" >> "${GITHUB_ENV}"
+          echo "SYFT_VERSION=${SYFT_VERSION}" >> "${GITHUB_ENV}"
 
       - name: Validate release version
         shell: bash
@@ -295,7 +322,7 @@ jobs:
           archive="${runner_temp}/${SYFT_ARCHIVE}"
           curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location \
             --output "${archive}" \
-            "https://github.com/anchore/syft/releases/download/v1.52.0/${SYFT_ARCHIVE}"
+            "https://github.com/anchore/syft/releases/download/v${SYFT_VERSION}/${SYFT_ARCHIVE}"
           if [[ "${RUNNER_OS}" == macOS ]]; then
             echo "${SYFT_SHA256}  ${archive}" | shasum -a 256 --check
           else
