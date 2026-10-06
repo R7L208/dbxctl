@@ -305,11 +305,13 @@ fn probe_run_with_valid_options_prints_not_implemented() {
             "/tmp",
             "--target",
             "dev",
+            "--only",
+            "cli",
         ])
         .output()
         .expect("run probe run with valid options");
     assert!(!output.status.success());
-    assert_eq!(output.status.code(), Some(10));
+    assert_eq!(output.status.code(), Some(1));
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("not implemented yet"));
 }
@@ -333,7 +335,7 @@ fn probe_report_with_valid_options_prints_not_implemented() {
         .output()
         .expect("run probe report with valid options");
     assert!(!output.status.success());
-    assert_eq!(output.status.code(), Some(10));
+    assert_eq!(output.status.code(), Some(1));
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("not implemented yet"));
 }
@@ -357,7 +359,7 @@ fn probe_cleanup_with_valid_options_prints_not_implemented() {
         .output()
         .expect("run probe cleanup with valid options");
     assert!(!output.status.success());
-    assert_eq!(output.status.code(), Some(11));
+    assert_eq!(output.status.code(), Some(1));
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("not implemented yet"));
 }

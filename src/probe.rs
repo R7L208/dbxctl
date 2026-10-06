@@ -6,35 +6,40 @@ use std::process::ExitCode;
 use crate::args::Parser;
 
 #[derive(Debug)]
-#[allow(clippy::large_enum_variant)]
+#[allow(dead_code, clippy::large_enum_variant)] // Used by #30
 pub(crate) enum ProbeCommand {
     Run(RunOptions),
     Report(ReportOptions),
     Cleanup(CleanupOptions),
+    Help,
 }
 
 #[derive(Debug)]
 pub(crate) struct RunOptions {
+    #[allow(dead_code)] // Used by #30 (orchestration)
     pub(crate) suite: String,
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Used by #30
     pub(crate) lineage: lineage::LineageOptions,
 }
 
 #[derive(Debug)]
 pub(crate) struct ReportOptions {
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Used by #30
     pub(crate) from: OsString,
 }
 
 #[derive(Debug)]
 pub(crate) struct CleanupOptions {
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Used by #30
     pub(crate) from: OsString,
 }
 
 pub(crate) fn parse_probe(args: &[OsString]) -> Result<ProbeCommand, String> {
     if args.is_empty() {
-        return Err("probe requires a subcommand (run, report, cleanup); run `dbxctl probe --help` for usage".to_string());
+        return Err(
+            "probe requires a subcommand (run, report, cleanup); run `dbxctl probe --help` for usage"
+                .to_string(),
+        );
     }
 
     let cmd = &args[0];
@@ -54,13 +59,10 @@ pub(crate) fn parse_probe(args: &[OsString]) -> Result<ProbeCommand, String> {
 fn parse_run(args: &[OsString]) -> Result<ProbeCommand, String> {
     let mut parser = Parser::new(args.iter());
 
-    // Check for help
-    if parser.flag("help") || parser.flag("h") {
+    // Check for help early (takes precedence, exits 0 without validating required options)
+    if parser.help_requested() {
         print_run_help();
-        return Ok(ProbeCommand::Run(RunOptions {
-            suite: String::new(),
-            lineage: lineage::LineageOptions::default(),
-        }));
+        return Ok(ProbeCommand::Help);
     }
 
     let suite = parser
@@ -84,11 +86,9 @@ fn parse_run(args: &[OsString]) -> Result<ProbeCommand, String> {
 fn parse_report(args: &[OsString]) -> Result<ProbeCommand, String> {
     let mut parser = Parser::new(args.iter());
 
-    if parser.flag("help") || parser.flag("h") {
+    if parser.help_requested() {
         print_report_help();
-        return Ok(ProbeCommand::Report(ReportOptions {
-            from: OsString::new(),
-        }));
+        return Ok(ProbeCommand::Help);
     }
 
     let from = parser
@@ -104,11 +104,9 @@ fn parse_report(args: &[OsString]) -> Result<ProbeCommand, String> {
 fn parse_cleanup(args: &[OsString]) -> Result<ProbeCommand, String> {
     let mut parser = Parser::new(args.iter());
 
-    if parser.flag("help") || parser.flag("h") {
+    if parser.help_requested() {
         print_cleanup_help();
-        return Ok(ProbeCommand::Cleanup(CleanupOptions {
-            from: OsString::new(),
-        }));
+        return Ok(ProbeCommand::Help);
     }
 
     let from = parser
@@ -121,32 +119,24 @@ fn parse_cleanup(args: &[OsString]) -> Result<ProbeCommand, String> {
     Ok(ProbeCommand::Cleanup(CleanupOptions { from }))
 }
 
-#[allow(clippy::unnecessary_wraps)]
+#[allow(clippy::unnecessary_wraps, clippy::needless_pass_by_value)]
 pub(crate) fn run_probe(command: ProbeCommand) -> Result<ExitCode, String> {
     match command {
-        ProbeCommand::Run(opts) => {
-            if opts.suite.is_empty() {
-                // Help was printed
-                return Ok(ExitCode::SUCCESS);
-            }
+        ProbeCommand::Help => {
+            // Help was already printed in parse phase; exit cleanly
+            Ok(ExitCode::SUCCESS)
+        }
+        ProbeCommand::Run(_) => {
             eprintln!("probe run: not implemented yet");
-            Ok(ExitCode::from(10))
+            Ok(ExitCode::from(1))
         }
-        ProbeCommand::Report(opts) => {
-            if opts.from.is_empty() {
-                // Help was printed
-                return Ok(ExitCode::SUCCESS);
-            }
+        ProbeCommand::Report(_) => {
             eprintln!("probe report: not implemented yet");
-            Ok(ExitCode::from(10))
+            Ok(ExitCode::from(1))
         }
-        ProbeCommand::Cleanup(opts) => {
-            if opts.from.is_empty() {
-                // Help was printed
-                return Ok(ExitCode::SUCCESS);
-            }
+        ProbeCommand::Cleanup(_) => {
             eprintln!("probe cleanup: not implemented yet");
-            Ok(ExitCode::from(11))
+            Ok(ExitCode::from(1))
         }
     }
 }
@@ -257,6 +247,8 @@ mod tests {
             "/tmp",
             "--target",
             "dev",
+            "--only",
+            "cli",
         ]))
         .unwrap();
         match cmd {
@@ -265,6 +257,18 @@ mod tests {
             }
             _ => panic!("expected Run command"),
         }
+    }
+
+    #[test]
+    fn help_in_run() {
+        let cmd = parse_run(&args(&["--help"])).unwrap();
+        assert!(matches!(cmd, ProbeCommand::Help));
+    }
+
+    #[test]
+    fn help_short_in_run() {
+        let cmd = parse_run(&args(&["-h"])).unwrap();
+        assert!(matches!(cmd, ProbeCommand::Help));
     }
 
     #[test]
@@ -285,6 +289,12 @@ mod tests {
     }
 
     #[test]
+    fn help_in_report() {
+        let cmd = parse_report(&args(&["--help"])).unwrap();
+        assert!(matches!(cmd, ProbeCommand::Help));
+    }
+
+    #[test]
     fn rejects_missing_cleanup_from() {
         let error = parse_cleanup(&args(&[])).unwrap_err();
         assert!(error.contains("--from is required"));
@@ -302,6 +312,12 @@ mod tests {
     }
 
     #[test]
+    fn help_in_cleanup() {
+        let cmd = parse_cleanup(&args(&["--help"])).unwrap();
+        assert!(matches!(cmd, ProbeCommand::Help));
+    }
+
+    #[test]
     fn rejects_unknown_probe_subcommand() {
         let error = parse_probe(&args(&["unknown"])).unwrap_err();
         assert!(error.contains("unknown probe subcommand"));
@@ -311,5 +327,26 @@ mod tests {
     fn rejects_empty_probe_subcommand() {
         let error = parse_probe(&args(&[])).unwrap_err();
         assert!(error.contains("probe requires a subcommand"));
+    }
+
+    #[test]
+    fn options_in_any_order_run() {
+        let cmd = parse_run(&args(&[
+            "--target",
+            "dev",
+            "--bundle-root",
+            "/tmp",
+            "--suite",
+            "lineage",
+            "--only",
+            "validate",
+        ]))
+        .unwrap();
+        match cmd {
+            ProbeCommand::Run(opts) => {
+                assert_eq!(opts.suite, "lineage");
+            }
+            _ => panic!("expected Run command"),
+        }
     }
 }

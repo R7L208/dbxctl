@@ -69,20 +69,30 @@ fn run_with_binary(cli: Cli, binary: &OsStr) -> Result<ExitCode, String> {
         Cli::Doctor => Ok(databricks::run_doctor(binary)),
         Cli::Databricks(args) => databricks::run_passthrough(binary, args),
         Cli::Probe(args) => {
-            // Check if first arg is help
-            let is_help = if let Some(first_arg) = args.first() {
-                let s = first_arg.to_string_lossy();
-                s == "--help" || s == "-h" || s == "help"
-            } else {
-                false
-            };
-
-            if is_help {
+            // Check if top-level probe help is requested (no subcommand or --help as first arg)
+            if args.is_empty() {
                 probe::print_probe_help();
                 Ok(ExitCode::SUCCESS)
+            } else if args.len() == 1 {
+                let arg = args[0].to_string_lossy();
+                if arg == "--help" || arg == "-h" || arg == "help" {
+                    probe::print_probe_help();
+                    Ok(ExitCode::SUCCESS)
+                } else {
+                    let command = probe::parse_probe(&args)?;
+                    if matches!(command, probe::ProbeCommand::Help) {
+                        Ok(ExitCode::SUCCESS)
+                    } else {
+                        probe::run_probe(command)
+                    }
+                }
             } else {
                 let command = probe::parse_probe(&args)?;
-                probe::run_probe(command)
+                if matches!(command, probe::ProbeCommand::Help) {
+                    Ok(ExitCode::SUCCESS)
+                } else {
+                    probe::run_probe(command)
+                }
             }
         }
     }

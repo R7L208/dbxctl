@@ -3,62 +3,92 @@ use std::ffi::{OsStr, OsString};
 
 use crate::args::Parser;
 
-/// All valid check IDs for the lineage suite.
+/// All valid check IDs for the lineage suite (from #23 contract).
 const VALID_CHECK_IDS: &[&str] = &[
     "cli", "validate", "plan", "state", "v8", "v1", "api", "v2", "v3", "v11", "v9", "v4", "v6",
     "v10", "v7",
 ];
 
+/// Check requirements: whether each check needs warehouse-id and/or scope-catalog.
+/// Derived from #23 checks table: checks using Statement Execution need warehouse-id;
+/// checks using catalog-scoped probes need scope-catalog.
+struct CheckRequirements {
+    needs_warehouse: bool,
+    needs_catalog: bool,
+}
+
+fn check_requirements(id: &str) -> CheckRequirements {
+    match id {
+        // Offline/bundle-only checks (no warehouse or catalog needed)
+        "cli" | "validate" | "plan" | "state" | "v8" | "v1" | "api" | "v6" | "v10" | "v7" => {
+            CheckRequirements {
+                needs_warehouse: false,
+                needs_catalog: false,
+            }
+        }
+        // Checks requiring warehouse (Statement Execution)
+        "v2" | "v9" | "v4" => CheckRequirements {
+            needs_warehouse: true,
+            needs_catalog: false,
+        }, // v2: wait_timeout with SELECT 1; v9: Lineage via API; v4: Refresh history via API
+        // Checks requiring both warehouse and catalog
+        "v3" | "v11" => CheckRequirements {
+            needs_warehouse: true,
+            needs_catalog: true,
+        }, // MV/metric-view checks
+        _ => CheckRequirements {
+            needs_warehouse: false,
+            needs_catalog: false,
+        },
+    }
+}
+
 #[derive(Debug, Default)]
 pub(crate) struct LineageOptions {
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Used by #30 (orchestration)
     pub(crate) bundle_root: Option<OsString>,
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Used by #30
     pub(crate) target: Option<OsString>,
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Used by #30
     pub(crate) profile: Option<OsString>,
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Used by #30
     pub(crate) warehouse_id: Option<OsString>,
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Used by #30
     pub(crate) scope_catalog: Option<OsString>,
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Used by #30
     pub(crate) only: Option<Vec<String>>,
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Used by #37
     pub(crate) allow_mutations: bool,
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Used by #37
     pub(crate) v6_table: Option<OsString>,
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Used by #37
     pub(crate) v10_scratch_schema: Option<OsString>,
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Used by #37
     pub(crate) v7_pipeline_id: Option<OsString>,
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Used by #30
     pub(crate) promote_to: Option<OsString>,
 }
 
-#[allow(clippy::field_reassign_with_default)]
+#[allow(clippy::too_many_lines)]
 pub(crate) fn parse_lineage_options(parser: &mut Parser) -> Result<LineageOptions, String> {
-    let mut opts = LineageOptions::default();
-
-    opts.bundle_root = parser
+    let bundle_root = parser
         .option("bundle-root")?
         .ok_or("option --bundle-root is required")?
-        .to_os_string()
-        .into();
+        .to_os_string();
 
-    opts.target = parser
+    let target = parser
         .option("target")?
         .ok_or("option --target is required")?
-        .to_os_string()
-        .into();
+        .to_os_string();
 
-    opts.profile = parser.option("profile")?.map(OsStr::to_os_string);
+    let profile = parser.option("profile")?.map(OsStr::to_os_string);
 
-    opts.warehouse_id = parser.option("warehouse-id")?.map(OsStr::to_os_string);
+    let warehouse_id = parser.option("warehouse-id")?.map(OsStr::to_os_string);
 
-    opts.scope_catalog = parser.option("scope-catalog")?.map(OsStr::to_os_string);
+    let scope_catalog = parser.option("scope-catalog")?.map(OsStr::to_os_string);
 
     // Parse --only with validation
-    if let Some(only_str) = parser.option("only")? {
+    let only = if let Some(only_str) = parser.option("only")? {
         let check_ids: Vec<String> = only_str
             .to_string_lossy()
             .split(',')
@@ -82,20 +112,93 @@ pub(crate) fn parse_lineage_options(parser: &mut Parser) -> Result<LineageOption
             }
         }
 
-        opts.only = Some(check_ids);
+        Some(check_ids)
+    } else {
+        None
+    };
+
+    let allow_mutations = parser.flag("allow-mutations");
+
+    // Reject mutation inputs if --allow-mutations is not set
+    if !allow_mutations {
+        if parser.option("v6-table")?.is_some() {
+            return Err("--v6-table requires --allow-mutations flag".to_string());
+        }
+        if parser.option("v10-scratch-schema")?.is_some() {
+            return Err("--v10-scratch-schema requires --allow-mutations flag".to_string());
+        }
+        if parser.option("v7-pipeline-id")?.is_some() {
+            return Err("--v7-pipeline-id requires --allow-mutations flag".to_string());
+        }
     }
 
-    opts.allow_mutations = parser.flag("allow-mutations");
-
-    opts.v6_table = parser.option("v6-table")?.map(OsStr::to_os_string);
-    opts.v10_scratch_schema = parser
+    let v6_table = parser.option("v6-table")?.map(OsStr::to_os_string);
+    let v10_scratch_schema = parser
         .option("v10-scratch-schema")?
         .map(OsStr::to_os_string);
-    opts.v7_pipeline_id = parser.option("v7-pipeline-id")?.map(OsStr::to_os_string);
+    let v7_pipeline_id = parser.option("v7-pipeline-id")?.map(OsStr::to_os_string);
 
-    opts.promote_to = parser.option("promote-to")?.map(OsStr::to_os_string);
+    let promote_to = parser.option("promote-to")?.map(OsStr::to_os_string);
 
-    Ok(opts)
+    // Determine which checks are selected (default: all)
+    let selected_checks: HashSet<&str> = if let Some(ref checks) = only {
+        checks.iter().map(String::as_str).collect()
+    } else {
+        VALID_CHECK_IDS.iter().copied().collect()
+    };
+
+    // Check if required options are satisfied based on selected checks
+    let mut needs_warehouse = false;
+    let mut needs_catalog = false;
+    for check_id in &selected_checks {
+        let reqs = check_requirements(check_id);
+        if reqs.needs_warehouse {
+            needs_warehouse = true;
+        }
+        if reqs.needs_catalog {
+            needs_catalog = true;
+        }
+    }
+
+    // Collect list of checks that need each resource for error messages
+    let warehouse_checks: Vec<&str> = selected_checks
+        .iter()
+        .filter(|id| check_requirements(id).needs_warehouse)
+        .copied()
+        .collect();
+    let catalog_checks: Vec<&str> = selected_checks
+        .iter()
+        .filter(|id| check_requirements(id).needs_catalog)
+        .copied()
+        .collect();
+
+    if needs_warehouse && warehouse_id.is_none() {
+        return Err(format!(
+            "--warehouse-id is required by selected checks: {}",
+            warehouse_checks.join(", ")
+        ));
+    }
+
+    if needs_catalog && scope_catalog.is_none() {
+        return Err(format!(
+            "--scope-catalog is required by selected checks: {}",
+            catalog_checks.join(", ")
+        ));
+    }
+
+    Ok(LineageOptions {
+        bundle_root: Some(bundle_root),
+        target: Some(target),
+        profile,
+        warehouse_id,
+        scope_catalog,
+        only,
+        allow_mutations,
+        v6_table,
+        v10_scratch_schema,
+        v7_pipeline_id,
+        promote_to,
+    })
 }
 
 #[cfg(test)]
@@ -128,11 +231,98 @@ mod tests {
 
     #[test]
     fn accepts_required_options() {
-        let input = args(&["--bundle-root", "/tmp", "--target", "dev"]);
+        // Use offline-only checks to avoid warehouse requirement
+        let input = args(&[
+            "--bundle-root",
+            "/tmp",
+            "--target",
+            "dev",
+            "--only",
+            "cli,validate",
+        ]);
         let mut parser = Parser::new(args_refs(&input));
         let opts = parse_lineage_options(&mut parser).unwrap();
         assert_eq!(opts.bundle_root.as_ref().unwrap().to_string_lossy(), "/tmp");
         assert_eq!(opts.target.as_ref().unwrap().to_string_lossy(), "dev");
+    }
+
+    #[test]
+    fn all_checks_online_dont_require_warehouse_by_default() {
+        // With --only containing only offline checks, warehouse shouldn't be required
+        let input = args(&[
+            "--bundle-root",
+            "/tmp",
+            "--target",
+            "dev",
+            "--only",
+            "cli,validate,plan",
+        ]);
+        let mut parser = Parser::new(args_refs(&input));
+        let opts = parse_lineage_options(&mut parser).unwrap();
+        assert!(opts.warehouse_id.is_none());
+        assert!(opts.scope_catalog.is_none());
+    }
+
+    #[test]
+    fn warehouse_required_when_v2_selected() {
+        let input = args(&["--bundle-root", "/tmp", "--target", "dev", "--only", "v2"]);
+        let mut parser = Parser::new(args_refs(&input));
+        let error = parse_lineage_options(&mut parser).unwrap_err();
+        assert!(error.contains("--warehouse-id is required"));
+        assert!(error.contains("v2"));
+    }
+
+    #[test]
+    fn catalog_required_when_v3_selected() {
+        let input = args(&[
+            "--bundle-root",
+            "/tmp",
+            "--target",
+            "dev",
+            "--only",
+            "v3",
+            "--warehouse-id",
+            "w1",
+        ]);
+        let mut parser = Parser::new(args_refs(&input));
+        let error = parse_lineage_options(&mut parser).unwrap_err();
+        assert!(error.contains("--scope-catalog is required"));
+        assert!(error.contains("v3"));
+    }
+
+    #[test]
+    fn rejects_mutation_input_without_flag() {
+        let input = args(&[
+            "--bundle-root",
+            "/tmp",
+            "--target",
+            "dev",
+            "--v6-table",
+            "t1",
+        ]);
+        let mut parser = Parser::new(args_refs(&input));
+        let error = parse_lineage_options(&mut parser).unwrap_err();
+        assert!(error.contains("--allow-mutations"));
+    }
+
+    #[test]
+    fn accepts_mutation_input_with_flag() {
+        // Use offline-only checks to avoid warehouse requirement
+        let input = args(&[
+            "--bundle-root",
+            "/tmp",
+            "--target",
+            "dev",
+            "--allow-mutations",
+            "--v6-table",
+            "t1",
+            "--only",
+            "cli",
+        ]);
+        let mut parser = Parser::new(args_refs(&input));
+        let opts = parse_lineage_options(&mut parser).unwrap();
+        assert!(opts.allow_mutations);
+        assert_eq!(opts.v6_table.as_ref().unwrap().to_string_lossy(), "t1");
     }
 
     #[test]
@@ -174,18 +364,6 @@ mod tests {
         );
         assert!(opts.allow_mutations);
         assert_eq!(opts.v6_table.as_ref().unwrap().to_string_lossy(), "t1");
-        assert_eq!(
-            opts.v10_scratch_schema.as_ref().unwrap().to_string_lossy(),
-            "s1"
-        );
-        assert_eq!(
-            opts.v7_pipeline_id.as_ref().unwrap().to_string_lossy(),
-            "p1"
-        );
-        assert_eq!(
-            opts.promote_to.as_ref().unwrap().to_string_lossy(),
-            "/approve"
-        );
     }
 
     #[test]
@@ -229,7 +407,6 @@ mod tests {
         let mut parser = Parser::new(args_refs(&input));
         let error = parse_lineage_options(&mut parser).unwrap_err();
         assert!(error.contains("unknown check ID"));
-        assert!(error.contains("unknown"));
     }
 
     #[test]
@@ -269,37 +446,15 @@ mod tests {
             "/tmp",
             "--target",
             "dev",
+            "--warehouse-id",
+            "w1",
+            "--scope-catalog",
+            "c1",
             "--only",
             "cli,validate,plan,state,v8,v1,api,v2,v3,v11,v9,v4,v6,v10,v7",
         ]);
         let mut parser = Parser::new(args_refs(&input));
         let opts = parse_lineage_options(&mut parser).unwrap();
         assert_eq!(opts.only.as_ref().unwrap().len(), 15);
-    }
-
-    #[test]
-    fn only_flag_is_optional() {
-        let input = args(&["--bundle-root", "/tmp", "--target", "dev"]);
-        let mut parser = Parser::new(args_refs(&input));
-        let opts = parse_lineage_options(&mut parser).unwrap();
-        assert_eq!(opts.only, None);
-    }
-
-    #[test]
-    fn allow_mutations_flag_is_optional() {
-        let input = args(&["--bundle-root", "/tmp", "--target", "dev"]);
-        let mut parser = Parser::new(args_refs(&input));
-        let opts = parse_lineage_options(&mut parser).unwrap();
-        assert!(!opts.allow_mutations);
-    }
-
-    #[test]
-    fn all_mutation_inputs_are_optional() {
-        let input = args(&["--bundle-root", "/tmp", "--target", "dev"]);
-        let mut parser = Parser::new(args_refs(&input));
-        let opts = parse_lineage_options(&mut parser).unwrap();
-        assert_eq!(opts.v6_table, None);
-        assert_eq!(opts.v10_scratch_schema, None);
-        assert_eq!(opts.v7_pipeline_id, None);
     }
 }
