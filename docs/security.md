@@ -33,6 +33,7 @@ verified. Current pinned tools are:
 | cargo-audit | 0.22.2, musl | `7fb9497f8594b389e5fce5ef9b92db08432996895b2e0c5a0167a69ed445c428` |
 | cargo-deny | 0.20.2, musl | `9f12ed4c49936e09b48bf862b595cde2fe64fcbd9d74dfacac6131ca824c8d5f` |
 | Databricks CLI | 1.13.0, Linux amd64 | `0a94deffe3c9f1109020c91ac744a25bf45dc833ac302f8192892779e25b3df7` |
+| zizmor | 1.30.1, PyPI wheels | Per-platform wheel hashes in `requirements/zizmor.txt` |
 
 The Databricks CLI pin equals the minimum supported version and is not raised
 by the automated updater; see [Reviewed Pin Updates](development.md#reviewed-pin-updates).
@@ -46,6 +47,47 @@ Dependabot proposes reviewed updates to the formatter lock; it cannot merge
 them automatically. Developers on networks that block pypi.org can select a
 local mirror (see [Package Index](development.md#package-index)); hashes are
 enforced regardless of the index, and no private index URL is committed.
+
+### Workflow Scanning
+
+The `Workflow security` workflow runs [zizmor](https://docs.zizmor.sh/) 1.30.1
+on every push and pull request that changes `.github/`, the zizmor lock, or
+its script, and fails on any finding. It scans the workflows and the
+Dependabot configuration and enforces the rules above instead of leaving them
+to review:
+
+- every `uses:` reference, including GitHub's own actions, is pinned to a full
+  commit SHA (`.github/zizmor.yml` sets the `unpinned-uses` policy to
+  `hash-pin` for `*`), and the SHA belongs to the named repository rather than
+  a fork (impostor commits);
+- no `${{ ... }}` expression is expanded into `run:` script source;
+- checkout does not persist credentials, and permissions are not broader than
+  each job needs;
+- no dangerous trigger, known-vulnerable action, or cache-poisoning pattern is
+  present.
+
+zizmor is installed the same way as mdformat: an exact version from
+`requirements/zizmor.txt` with a SHA-256 for each platform wheel (Linux x86-64
+and Arm64, macOS Arm64 and x86-64, Windows x86-64), `--require-hashes`,
+`--only-binary :all:`, `--no-deps`, no pip cache, and an ignored virtual
+environment. The wheels contain only the self-contained zizmor binary and have
+no Python dependencies. The third-party `zizmor-action` is not used. Dependabot
+proposes reviewed updates to the lock.
+
+The CI job passes its read-only `GITHUB_TOKEN` as `GH_TOKEN` so the online
+audits, such as `impostor-commit`, `known-vulnerable-actions`, and
+`ref-confusion`, query the GitHub API. Local runs without `GH_TOKEN`
+use `--offline` and skip those audits; see
+[Workflow Scanning](development.md#workflow-scanning).
+
+A finding may be accepted only with an inline `# zizmor: ignore[<audit>]`
+comment that states the reason, or a narrowly scoped ignore in
+`.github/zizmor.yml` with its own comment. There are no blanket severity
+thresholds and no accepted findings today.
+
+Dependabot waits seven days after an upstream release before proposing a
+Cargo, Actions, or pip update, which gives the ecosystem time to detect and
+yank a compromised release. Security updates are not delayed.
 
 The Linux quality job also downloads the Rust 1.89.0 Clippy, LLVM tools, and
 Rustfmt component archives directly from the dated Rust distribution path.
@@ -167,8 +209,9 @@ license, source, or supported-Rust-version policies.
   not expose digest-pinned hosted images; removing this boundary would require
   controlled self-hosted runners.
 - The live RustSec database is trusted as security data.
-- There is no automated workflow security scanner or policy preventing a
-  future unpinned Action.
+- Workflow scanning is limited to what zizmor's audits detect. It does not
+  establish that a correctly pinned Action's code is trustworthy; reviewers
+  still need to inspect Action updates.
 - Release archives and SBOMs are not yet published as durable GitHub Release
   assets; workflow artifacts expire after 30 days.
 - Release binaries are not signed in their platform-native formats. Each
