@@ -13,6 +13,7 @@ import importlib.util
 
 UPDATER_PATH = Path(__file__).with_name("update-pins.py")
 PINS_FILE = Path(__file__).parents[1] / ".github" / "pins.json"
+DATABRICKS_SOURCE = Path(__file__).parents[1] / "src" / "databricks.rs"
 SPEC = importlib.util.spec_from_file_location("update_pins", UPDATER_PATH)
 update_pins = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(update_pins)
@@ -45,6 +46,30 @@ def pinned_databricks_version(pins_file: Path = PINS_FILE) -> str:
     return version
 
 
+def tested_databricks_version(source_file: Path = DATABRICKS_SOURCE) -> str:
+    match = re.search(
+        r"^const TESTED_DATABRICKS_VERSION: Version = Version::new\(([0-9]+), ([0-9]+), ([0-9]+)\);$",
+        source_file.read_text(),
+        re.MULTILINE,
+    )
+    if not match:
+        raise RuntimeError(f"no TESTED_DATABRICKS_VERSION found in {source_file}")
+    return ".".join(match.groups())
+
+
+def held_databricks_version(pins_file: Path = PINS_FILE, source_file: Path = DATABRICKS_SOURCE) -> str:
+    # The CI pin is the version dbxctl calls tested. `doctor` reads it from
+    # TESTED_DATABRICKS_VERSION, so the two must change together.
+    pinned = pinned_databricks_version(pins_file)
+    tested = tested_databricks_version(source_file)
+    if pinned != tested:
+        raise RuntimeError(
+            f"Databricks CLI pin {pinned} in {pins_file} differs from "
+            f"TESTED_DATABRICKS_VERSION {tested} in {source_file}"
+        )
+    return pinned
+
+
 def stable_rust() -> tuple[str, str]:
     manifest = update_pins.fetch("https://static.rust-lang.org/dist/channel-rust-stable.toml").decode()
     date = re.search(r'^date = "([0-9-]+)"$', manifest, re.MULTILINE)
@@ -64,7 +89,7 @@ def discover(token: str | None) -> dict[str, str]:
         "audit": latest_audit_version(token),
         "deny": latest_release_tag("EmbarkStudios/cargo-deny", token).removeprefix("v"),
         "syft": latest_release_tag("anchore/syft", token).removeprefix("v"),
-        "databricks": pinned_databricks_version(),
+        "databricks": held_databricks_version(),
     }
 
 
