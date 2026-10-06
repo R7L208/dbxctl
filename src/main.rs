@@ -1,5 +1,6 @@
 mod args;
 mod databricks;
+mod json;
 mod probe;
 
 use std::env;
