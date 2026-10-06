@@ -183,3 +183,311 @@ fn doctor_does_not_share_its_stdin_with_databricks() {
     assert!(output.status.success());
     assert!(String::from_utf8_lossy(&output.stdout).contains("Databricks CLI 1.13.0"));
 }
+
+#[test]
+fn probe_help_succeeds() {
+    let output = dbxctl()
+        .arg("probe")
+        .arg("--help")
+        .output()
+        .expect("run dbxctl probe --help");
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("probe") && stdout.contains("lineage"));
+}
+
+#[test]
+fn probe_run_help_succeeds() {
+    let output = dbxctl()
+        .args(["probe", "run", "--help"])
+        .output()
+        .expect("run dbxctl probe run --help");
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("--suite") && stdout.contains("--bundle-root"));
+}
+
+#[test]
+fn probe_report_help_succeeds() {
+    let output = dbxctl()
+        .args(["probe", "report", "--help"])
+        .output()
+        .expect("run dbxctl probe report --help");
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("--from"));
+}
+
+#[test]
+fn probe_cleanup_help_succeeds() {
+    let output = dbxctl()
+        .args(["probe", "cleanup", "--help"])
+        .output()
+        .expect("run dbxctl probe cleanup --help");
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("--from"));
+}
+
+#[test]
+fn probe_run_requires_suite() {
+    let output = dbxctl()
+        .args(["probe", "run", "--bundle-root", "/tmp", "--target", "dev"])
+        .output()
+        .expect("run probe run without --suite");
+    assert!(!output.status.success());
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("--suite is required"));
+}
+
+#[test]
+fn probe_run_rejects_unknown_suite() {
+    let output = dbxctl()
+        .args([
+            "probe",
+            "run",
+            "--suite",
+            "unknown",
+            "--bundle-root",
+            "/tmp",
+            "--target",
+            "dev",
+        ])
+        .output()
+        .expect("run probe run with unknown suite");
+    assert!(!output.status.success());
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("unknown suite"));
+}
+
+#[test]
+fn probe_run_requires_bundle_root() {
+    let output = dbxctl()
+        .args(["probe", "run", "--suite", "lineage", "--target", "dev"])
+        .output()
+        .expect("run probe run without --bundle-root");
+    assert!(!output.status.success());
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("--bundle-root is required"));
+}
+
+#[test]
+fn probe_run_requires_target() {
+    let output = dbxctl()
+        .args([
+            "probe",
+            "run",
+            "--suite",
+            "lineage",
+            "--bundle-root",
+            "/tmp",
+        ])
+        .output()
+        .expect("run probe run without --target");
+    assert!(!output.status.success());
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("--target is required"));
+}
+
+#[test]
+fn probe_run_with_valid_options_prints_not_implemented() {
+    let output = dbxctl()
+        .args([
+            "probe",
+            "run",
+            "--suite",
+            "lineage",
+            "--bundle-root",
+            "/tmp",
+            "--target",
+            "dev",
+            "--only",
+            "cli",
+        ])
+        .output()
+        .expect("run probe run with valid options");
+    assert!(!output.status.success());
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("not implemented yet"));
+}
+
+#[test]
+fn probe_report_requires_from() {
+    let output = dbxctl()
+        .args(["probe", "report"])
+        .output()
+        .expect("run probe report without --from");
+    assert!(!output.status.success());
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("--from is required"));
+}
+
+#[test]
+fn probe_report_with_valid_options_prints_not_implemented() {
+    let output = dbxctl()
+        .args(["probe", "report", "--from", "/tmp/run"])
+        .output()
+        .expect("run probe report with valid options");
+    assert!(!output.status.success());
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("not implemented yet"));
+}
+
+#[test]
+fn probe_cleanup_requires_from() {
+    let output = dbxctl()
+        .args(["probe", "cleanup"])
+        .output()
+        .expect("run probe cleanup without --from");
+    assert!(!output.status.success());
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("--from is required"));
+}
+
+#[test]
+fn probe_cleanup_with_valid_options_prints_not_implemented() {
+    let output = dbxctl()
+        .args(["probe", "cleanup", "--from", "/tmp/run"])
+        .output()
+        .expect("run probe cleanup with valid options");
+    assert!(!output.status.success());
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("not implemented yet"));
+}
+
+#[test]
+fn probe_run_rejects_unknown_check_id() {
+    let output = dbxctl()
+        .args([
+            "probe",
+            "run",
+            "--suite",
+            "lineage",
+            "--bundle-root",
+            "/tmp",
+            "--target",
+            "dev",
+            "--only",
+            "unknown",
+        ])
+        .output()
+        .expect("run probe run with unknown check ID");
+    assert!(!output.status.success());
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("unknown check ID"));
+}
+
+#[test]
+fn probe_run_rejects_duplicate_check_ids() {
+    let output = dbxctl()
+        .args([
+            "probe",
+            "run",
+            "--suite",
+            "lineage",
+            "--bundle-root",
+            "/tmp",
+            "--target",
+            "dev",
+            "--only",
+            "cli,plan,cli",
+        ])
+        .output()
+        .expect("run probe run with duplicate check IDs");
+    assert!(!output.status.success());
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("duplicate check ID"));
+}
+
+#[test]
+fn probe_run_rejects_empty_check_id() {
+    let output = dbxctl()
+        .args([
+            "probe",
+            "run",
+            "--suite",
+            "lineage",
+            "--bundle-root",
+            "/tmp",
+            "--target",
+            "dev",
+            "--only",
+            "cli,,plan",
+        ])
+        .output()
+        .expect("run probe run with empty check ID");
+    assert!(!output.status.success());
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("empty check ID"));
+}
+
+fn probe_run(extra: &[&str]) -> std::process::Output {
+    dbxctl()
+        .args([
+            "probe",
+            "run",
+            "--suite",
+            "lineage",
+            "--bundle-root",
+            "/tmp",
+            "--target",
+            "dev",
+        ])
+        .args(extra)
+        .output()
+        .expect("run dbxctl probe run")
+}
+
+#[test]
+fn probe_run_without_only_requires_warehouse_for_all_checks() {
+    // With no --only, every check is selected, so the warehouse requirement
+    // lists every warehouse-backed check in the contract's canonical order.
+    let output = probe_run(&[]);
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(
+        String::from_utf8_lossy(&output.stderr),
+        "error: --warehouse-id is required by selected checks: v2, v3, v11, v9, v4\n"
+    );
+}
+
+#[test]
+fn probe_run_without_only_requires_scope_catalog_for_catalog_checks() {
+    let output = probe_run(&["--warehouse-id", "w"]);
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.starts_with("error: --scope-catalog is required by selected checks: v3"),
+        "{stderr}"
+    );
+}
+
+#[test]
+fn probe_run_with_all_required_options_passes_validation() {
+    let output = probe_run(&["--warehouse-id", "w", "--scope-catalog", "c"]);
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(
+        String::from_utf8_lossy(&output.stderr),
+        "probe run: not implemented yet\n"
+    );
+}
+
+#[test]
+fn probe_run_accepts_repeated_options_with_last_value_winning() {
+    let output = probe_run(&["--target", "prod", "--only", "cli"]);
+    assert_eq!(
+        String::from_utf8_lossy(&output.stderr),
+        "probe run: not implemented yet\n"
+    );
+}
