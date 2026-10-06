@@ -17,7 +17,7 @@
       },
       "source": {
         "file": "databricks.yml",
-        "line": 11
+        "line": 10
       }
     },
     "pipelines.dlt_pipeline": {
