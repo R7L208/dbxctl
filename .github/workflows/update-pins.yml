@@ -52,6 +52,14 @@ jobs:
       - name: Validate generated changes
         run: |
           git diff --check
+          # Pins live in .github/pins.json, so an update must never touch a
+          # workflow file. This keeps the PR token free of Workflows permission.
+          if ! git diff --quiet -- .github/workflows; then
+            echo "The pin update changed workflow files:" >&2
+            git diff --stat -- .github/workflows >&2
+            exit 1
+          fi
+          python3 scripts/update-pins.py --emit-github-output /dev/null
           PYTHONDONTWRITEBYTECODE=1 python -m unittest discover -s tests -p 'test_*.py' -v
       - name: Open reviewed update pull request
         uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
@@ -62,8 +70,9 @@ jobs:
           commit-message: Update supply-chain pins
           title: Update supply-chain pins
           body: |
-            Automated refresh of Rust, downloaded-tool, and OCI image pins.
-            The Databricks CLI pin is held at dbxctl's minimum supported
-            version and only its checksum is re-verified. Review the
-            upstream versions, computed SHA-256 values, and full CI results
-            before merging.
+            Automated refresh of the Rust, downloaded-tool, and OCI image pins
+            in `.github/pins.json`, plus the matching documentation tables.
+            Workflow files are not changed. The Databricks CLI pin is held at
+            dbxctl's minimum supported version and only its checksum is
+            re-verified. Review the upstream versions, computed SHA-256
+            values, and full CI results before merging.

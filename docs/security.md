@@ -19,7 +19,10 @@ and release jobs, and jobs use timeouts and concurrency cancellation. Most CI
 jobs have read-only tokens. Release jobs additionally receive narrowly scoped
 OIDC and attestation permissions. The reviewed pin-update workflow has
 `contents: write` and `pull-requests: write` so it can propose, but not merge,
-an update.
+an update. All tool, archive, and image pins live in `.github/pins.json`, which
+a `pins` job validates and passes to the other jobs. Because the updater only
+edits that file and documentation, its token never needs permission to change
+workflow files.
 
 Downloaded executables are treated as inert until their committed SHA-256 is
 verified. Current pinned tools are:
@@ -46,8 +49,8 @@ enforced regardless of the index, and no private index URL is committed.
 
 The Linux quality job also downloads the Rust 1.89.0 Clippy, LLVM tools, and
 Rustfmt component archives directly from the dated Rust distribution path.
-Their SHA-256 values are pinned in the workflow and verified before their
-installers run. This avoids allowing `rustup component add` to resolve and
+Their SHA-256 values are pinned in `.github/pins.json` and verified before
+their installers run. This avoids allowing `rustup component add` to resolve and
 download components dynamically at job runtime. The job also selects the
 already-installed, fully qualified Rust toolchain through `RUSTUP_TOOLCHAIN`,
 so the repository's toolchain file cannot trigger implicit component setup.
@@ -60,9 +63,10 @@ so the repository's toolchain file cannot trigger implicit component setup.
 
 The macOS and Windows portability jobs similarly install Cargo, `rustc`, and
 the target standard library from dated Rust 1.89.0 standalone archives rather
-than asking `rustup` to resolve the minimal toolchain. The workflow contains
-the archive SHA-256 values for macOS Arm64, macOS x86-64, and Windows x86-64
-and rejects runner architectures without an explicit checksum set. Each job
+than asking `rustup` to resolve the minimal toolchain. `.github/pins.json`
+holds the archive SHA-256 values for macOS Arm64, macOS x86-64, and Windows
+x86-64, and the workflows reject runner architectures without an explicit
+checksum set. Each job
 also asserts the installed release and host target before running project
 commands.
 

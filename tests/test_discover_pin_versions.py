@@ -56,20 +56,19 @@ class DiscoveryTests(unittest.TestCase):
 
     def test_databricks_pin_is_held_at_the_committed_version(self):
         with tempfile.TemporaryDirectory() as directory:
-            workflow = Path(directory) / "ci.yml"
-            workflow.write_text(
-                "https://github.com/databricks/cli/releases/download/v1.13.0/databricks_cli_1.13.0_linux_amd64.tar.gz\n"
-            )
-            self.assertEqual(discover.pinned_databricks_version(workflow), "1.13.0")
+            pins = Path(directory) / "pins.json"
+            pins.write_text('{"databricks_cli": {"sha256": "x", "version": "1.13.0"}}\n')
+            self.assertEqual(discover.pinned_databricks_version(pins), "1.13.0")
 
     def test_databricks_pin_fails_closed_when_missing(self):
         with tempfile.TemporaryDirectory() as directory:
-            workflow = Path(directory) / "ci.yml"
-            workflow.write_text("no pin here\n")
-            with self.assertRaisesRegex(RuntimeError, "no Databricks CLI pin"):
-                discover.pinned_databricks_version(workflow)
+            pins = Path(directory) / "pins.json"
+            for text in ('{}', '{"databricks_cli": {"version": "latest"}}', '{"databricks_cli": "1.13.0"}'):
+                pins.write_text(text)
+                with self.assertRaisesRegex(RuntimeError, "no Databricks CLI pin"):
+                    discover.pinned_databricks_version(pins)
 
-    def test_committed_ci_workflow_pins_databricks_1_13_0(self):
+    def test_committed_pins_hold_databricks_1_13_0(self):
         self.assertEqual(discover.pinned_databricks_version(), "1.13.0")
 
     def test_main_appends_github_outputs(self):
