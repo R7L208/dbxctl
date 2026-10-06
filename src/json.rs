@@ -298,7 +298,7 @@ mod tests {
 
     #[test]
     fn decodes_escape_sequences() {
-        let document = doc(r#"["\"\\\/\b\f\n\r\t", "é", "😀"]"#);
+        let document = doc(r#"["\"\\\/\b\f\n\r\t", "\u00e9", "\ud83d\ude00"]"#);
         let strings: Vec<_> = document
             .root()
             .elements()
