@@ -63,6 +63,9 @@ executable and exercise the real process boundary. They cover:
 
 - exact argument forwarding, including spaces and option values;
 - upstream exit-code preservation;
+- on Unix, passthrough replacing the `dbxctl` process (the fake CLI reports
+  the same PID as the spawned `dbxctl`) and an upstream signal reaching the
+  caller as that signal rather than a mapped `128 + N` exit code;
 - missing and failing executables;
 - malformed and non-UTF-8 version output;
 - minimum supported Databricks CLI enforcement; and
