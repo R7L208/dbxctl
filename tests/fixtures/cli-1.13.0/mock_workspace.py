@@ -116,11 +116,11 @@ class MockHandler(http.server.BaseHTTPRequestHandler):
                 },
                 "created_at": 1698000000,
                 "creator_user_id": 9876543210,
-                "name": "example-pipeline",
+                "name": "dlt_pipeline",
                 "object_id": "01a23b45c67d8901",
                 "object_type": "PIPELINE",
                 "pipeline_type": "TRIGGERED",
-                "storage": "/Workspace/Users/user@example.test/projects/example",
+                "storage": "/Workspace/Users/user@example.test/projects/example-dev/storage",
                 "updated_at": 1698100000,
             },
             separators=(",", ":"),
@@ -158,7 +158,7 @@ class MockHandler(http.server.BaseHTTPRequestHandler):
                             "notebook_task": {
                                 "notebook_path": "/Workspace/Users/user@example.test/projects/example-dev/files/notebooks/silver"
                             },
-                            "task_key": "main",
+                            "task_key": "refresh_task",
                         }
                     ],
                 },
