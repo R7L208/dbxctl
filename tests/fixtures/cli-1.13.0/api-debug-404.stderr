@@ -1,0 +1,11 @@
+2024/10/23 10:30:47 GET /api/2.1/pipelines/nonexistent12345 HTTP/1.1
+2024/10/23 10:30:47 "Authorization: Bearer [REDACTED]"
+2024/10/23 10:30:47 "User-Agent: databricks-cli/1.13.0"
+2024/10/23 10:30:47 < HTTP/1.1 404 Not Found
+2024/10/23 10:30:47 < Content-Type: application/json
+2024/10/23 10:30:47 < Date: Tue, 23 Oct 2024 10:30:47 GMT
+Error: RESOURCE_NOT_FOUND
+{
+  "error_code": "RESOURCE_NOT_FOUND",
+  "message": "Pipeline not found"
+}

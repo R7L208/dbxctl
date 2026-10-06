@@ -1,0 +1,60 @@
+{
+  "state": {
+    "resources.jobs.refresh_silver": {
+      "__id__": "123",
+      "description": "Refresh silver table from raw data",
+      "max_concurrent_runs": 1,
+      "name": "refresh_silver",
+      "tasks": [
+        {
+          "notebook_task": {
+            "notebook_path": "/Workspace/Users/user@example.test/projects/example-dev/files/notebooks/silver"
+          },
+          "task_key": "refresh_task"
+        }
+      ]
+    },
+    "resources.pipelines.dlt_pipeline": {
+      "__id__": "01a23b45c67d8901",
+      "channel": "CURRENT",
+      "clusters": [
+        {
+          "label": "default",
+          "node_type_id": "i3.xlarge",
+          "num_workers": 0,
+          "spark_conf": {
+            "spark.databricks.cluster.profile": "singleNode"
+          }
+        }
+      ],
+      "configuration": {
+        "query_table": "table"
+      },
+      "created_at": 1698000000,
+      "creator_user_id": 9876543210,
+      "libraries": [
+        {
+          "file": {
+            "path": "/Workspace/Users/user@example.test/projects/example-dev/files/src/silver.sql"
+          }
+        },
+        {
+          "file": {
+            "path": "/Workspace/Users/user@example.test/projects/example-dev/files/src/q.sql"
+          }
+        },
+        {
+          "file": {
+            "path": "/Workspace/Users/user@example.test/projects/example-dev/files/src/gold/g.sql"
+          }
+        }
+      ],
+      "name": "dlt_pipeline",
+      "object_id": "01a23b45c67d8901",
+      "object_type": "PIPELINE",
+      "pipeline_type": "TRIGGERED",
+      "storage": "/Workspace/Users/user@example.test/projects/example-dev/storage",
+      "updated_at": 1698100000
+    }
+  }
+}
