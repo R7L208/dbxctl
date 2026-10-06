@@ -432,3 +432,62 @@ fn probe_run_rejects_empty_check_id() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("empty check ID"));
 }
+
+fn probe_run(extra: &[&str]) -> std::process::Output {
+    dbxctl()
+        .args([
+            "probe",
+            "run",
+            "--suite",
+            "lineage",
+            "--bundle-root",
+            "/tmp",
+            "--target",
+            "dev",
+        ])
+        .args(extra)
+        .output()
+        .expect("run dbxctl probe run")
+}
+
+#[test]
+fn probe_run_without_only_requires_warehouse_for_all_checks() {
+    // With no --only, every check is selected, so the warehouse requirement
+    // lists every warehouse-backed check in the contract's canonical order.
+    let output = probe_run(&[]);
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(
+        String::from_utf8_lossy(&output.stderr),
+        "error: --warehouse-id is required by selected checks: v2, v3, v11, v9, v4\n"
+    );
+}
+
+#[test]
+fn probe_run_without_only_requires_scope_catalog_for_catalog_checks() {
+    let output = probe_run(&["--warehouse-id", "w"]);
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.starts_with("error: --scope-catalog is required by selected checks: v3"),
+        "{stderr}"
+    );
+}
+
+#[test]
+fn probe_run_with_all_required_options_passes_validation() {
+    let output = probe_run(&["--warehouse-id", "w", "--scope-catalog", "c"]);
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(
+        String::from_utf8_lossy(&output.stderr),
+        "probe run: not implemented yet\n"
+    );
+}
+
+#[test]
+fn probe_run_accepts_repeated_options_with_last_value_winning() {
+    let output = probe_run(&["--target", "prod", "--only", "cli"]);
+    assert_eq!(
+        String::from_utf8_lossy(&output.stderr),
+        "probe run: not implemented yet\n"
+    );
+}

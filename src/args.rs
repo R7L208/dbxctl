@@ -1,4 +1,3 @@
-use std::collections::HashSet;
 use std::ffi::{OsStr, OsString};
 
 /// A generic option parser over `OsString` that preserves non-UTF-8 paths.
@@ -20,16 +19,16 @@ use std::ffi::{OsStr, OsString};
 #[derive(Debug)]
 pub(crate) struct Parser<'a> {
     args: Vec<&'a OsStr>,
-    consumed: HashSet<usize>, // Track which indices have been consumed
+    /// `consumed[i]` is true once argument `i` has been matched.
+    consumed: Vec<bool>,
 }
 
 impl<'a> Parser<'a> {
     /// Create a new parser from an iterator of arguments.
     pub(crate) fn new(args: impl Iterator<Item = &'a OsString>) -> Self {
-        Self {
-            args: args.map(OsString::as_os_str).collect(),
-            consumed: HashSet::new(),
-        }
+        let args: Vec<_> = args.map(OsString::as_os_str).collect();
+        let consumed = vec![false; args.len()];
+        Self { args, consumed }
     }
 
     /// Check if help flag is present anywhere in the arguments.
@@ -43,95 +42,77 @@ impl<'a> Parser<'a> {
     /// Get a flag (no value). If the flag is present, it is consumed and returns true.
     /// Flags may appear anywhere in the argument list.
     pub(crate) fn flag(&mut self, name: &str) -> bool {
-        let full_flag = format!("--{name}");
-        for (i, arg) in self.args.iter().enumerate() {
-            if self.consumed.contains(&i) {
-                continue;
-            }
-            if *arg == full_flag.as_str() {
-                self.consumed.insert(i);
-                return true;
+        let flag = format!("--{name}");
+        let mut found = false;
+        for (arg, consumed) in self.args.iter().zip(self.consumed.iter_mut()) {
+            if !*consumed && *arg == flag.as_str() {
+                *consumed = true;
+                found = true;
             }
         }
-        false
+        found
     }
 
-    /// Get an option value. If the option is present, returns its value.
-    /// The last occurrence's value is returned if present multiple times.
-    /// Options may appear anywhere in the argument list.
-    #[allow(clippy::too_many_lines)]
+    /// Get an option value. Every occurrence of `--name value` is consumed and
+    /// the last value wins. Options may appear anywhere in the argument list.
     pub(crate) fn option(&mut self, name: &str) -> Result<Option<&'a OsStr>, String> {
-        let full_option = format!("--{name}");
-        let mut last_value: Option<(&'a OsStr, usize)> = None;
-        let mut option_indices = Vec::new();
-
-        // Find all occurrences of the option
-        for (i, arg) in self.args.iter().enumerate() {
-            if self.consumed.contains(&i) {
-                continue;
-            }
-
-            // Check for --name=value form and reject it
-            let arg_str = arg.to_string_lossy();
-            if arg_str.starts_with("--") && arg_str.contains('=') {
+        let option = format!("--{name}");
+        let equals_form = format!("--{name}=");
+        let mut value = None;
+        let mut index = 0;
+        while index < self.args.len() {
+            if !self.consumed[index] && self.args[index].to_string_lossy().starts_with(&equals_form)
+            {
                 return Err(format!(
-                    "option format --{name}=value is not supported; use --{name} value instead"
+                    "option format {option}=value is not supported; use {option} value instead"
                 ));
             }
-
-            if *arg == full_option.as_str() {
-                option_indices.push(i);
-                // Check if there's a next argument that's the value
-                if i + 1 < self.args.len() && !self.consumed.contains(&(i + 1)) {
-                    let next_arg = self.args[i + 1];
-                    let next_str = next_arg.to_string_lossy();
-
-                    // Check if the next argument looks like an option (starts with --)
-                    if next_str.starts_with("--") || next_str.starts_with('-') {
-                        return Err(format!(
-                            "option {} requires a value, got {}",
-                            full_option,
-                            next_arg.display()
-                        ));
-                    }
-
-                    // Check for empty value
-                    if next_str.is_empty() {
-                        return Err(format!("option {full_option} requires a non-empty value"));
-                    }
-
-                    last_value = Some((next_arg, i + 1));
-                } else if i + 1 >= self.args.len() || self.consumed.contains(&(i + 1)) {
-                    return Err(format!("option {full_option} requires a value"));
-                }
+            if self.consumed[index] || self.args[index] != option.as_str() {
+                index += 1;
+                continue;
             }
-        }
-
-        // If we found the option, mark it and its value as consumed
-        if let Some((value, value_idx)) = last_value {
-            // Mark all occurrences of the option as consumed
-            for idx in option_indices {
-                self.consumed.insert(idx);
+            let next = index + 1;
+            let Some(candidate) = self.args.get(next).filter(|_| !self.consumed[next]) else {
+                return Err(format!("option {option} requires a value"));
+            };
+            let text = candidate.to_string_lossy();
+            if text.is_empty() {
+                return Err(format!("option {option} requires a non-empty value"));
             }
-            // Mark the value index as consumed
-            self.consumed.insert(value_idx);
-            Ok(Some(value))
-        } else if !option_indices.is_empty() {
-            // Option was found but we already returned an error above
-            Ok(None)
-        } else {
-            Ok(None)
+            if text.starts_with('-') {
+                return Err(format!(
+                    "option {option} requires a value, got {}",
+                    candidate.display()
+                ));
+            }
+            self.consumed[index] = true;
+            self.consumed[next] = true;
+            value = Some(*candidate);
+            index = next + 1;
         }
+        Ok(value)
     }
 
     /// Verify all arguments have been consumed.
     pub(crate) fn check_empty(&self) -> Result<(), String> {
-        for (i, arg) in self.args.iter().enumerate() {
-            if !self.consumed.contains(&i) {
-                return Err(format!("unexpected argument {}", arg.display()));
-            }
+        let leftover = self
+            .args
+            .iter()
+            .zip(&self.consumed)
+            .find(|(_, consumed)| !**consumed);
+        let Some((arg, _)) = leftover else {
+            return Ok(());
+        };
+        let text = arg.to_string_lossy();
+        if let Some((name, _)) = text
+            .strip_prefix("--")
+            .and_then(|rest| rest.split_once('='))
+        {
+            return Err(format!(
+                "option format --{name}=value is not supported; use --{name} value instead"
+            ));
         }
-        Ok(())
+        Err(format!("unexpected argument {}", arg.display()))
     }
 }
 
@@ -160,8 +141,19 @@ mod tests {
     fn parses_flags_in_any_order() {
         let input = args(&["--suite", "lineage", "--verbose", "--target", "dev"]);
         let mut parser = Parser::new(args_refs(&input));
+        assert_eq!(
+            parser
+                .option("target")
+                .unwrap()
+                .map(|s| s.to_string_lossy()),
+            Some("dev".into())
+        );
         assert!(parser.flag("verbose"));
-        parser.check_empty().ok(); // Reset for next test
+        assert_eq!(
+            parser.option("suite").unwrap().map(|s| s.to_string_lossy()),
+            Some("lineage".into())
+        );
+        parser.check_empty().unwrap();
     }
 
     #[test]
@@ -213,12 +205,26 @@ mod tests {
 
     #[test]
     fn last_occurrence_wins_for_repeated_options() {
-        let input = args(&["--name", "first", "--name", "second"]);
+        let input = args(&["--name", "first", "--other", "x", "--name", "second"]);
         let mut parser = Parser::new(args_refs(&input));
         assert_eq!(
             parser.option("name").unwrap().map(|s| s.to_string_lossy()),
             Some("second".into())
         );
+        assert_eq!(
+            parser.option("other").unwrap().map(|s| s.to_string_lossy()),
+            Some("x".into())
+        );
+        // Earlier occurrences and their values are consumed too.
+        parser.check_empty().unwrap();
+    }
+
+    #[test]
+    fn repeated_flags_are_all_consumed() {
+        let input = args(&["--verbose", "--verbose"]);
+        let mut parser = Parser::new(args_refs(&input));
+        assert!(parser.flag("verbose"));
+        parser.check_empty().unwrap();
     }
 
     #[test]
@@ -255,11 +261,19 @@ mod tests {
 
     #[test]
     fn rejects_equals_form() {
-        let input = args(&["--name=value"]);
+        let input = args(&["--target=dev"]);
         let mut parser = Parser::new(args_refs(&input));
-        let error = parser.option("name").unwrap_err();
-        assert!(error.contains("not supported"));
-        assert!(error.contains("--name value"));
+        let error = parser.option("target").unwrap_err();
+        assert!(error.contains("--target=value is not supported"), "{error}");
+
+        // An `=` form of an option nobody asked for is reported by check_empty,
+        // naming the option that was actually given.
+        let input = args(&["--suite", "lineage", "--name=value"]);
+        let mut parser = Parser::new(args_refs(&input));
+        assert!(parser.option("suite").unwrap().is_some());
+        let error = parser.check_empty().unwrap_err();
+        assert!(error.contains("--name=value is not supported"), "{error}");
+        assert!(error.contains("--name value"), "{error}");
     }
 
     #[test]
