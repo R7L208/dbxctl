@@ -5,9 +5,8 @@ on:
   schedule:
     - cron: "37 15 * * 1"
 
-permissions:
-  contents: write
-  pull-requests: write
+# Write access is granted only to the job that opens the update PR.
+permissions: {}
 
 concurrency:
   group: update-supply-chain-pins
@@ -18,6 +17,9 @@ jobs:
     name: Discover updates and propose PR
     runs-on: ubuntu-24.04
     timeout-minutes: 20
+    permissions:
+      contents: write
+      pull-requests: write
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -40,15 +42,24 @@ jobs:
       - name: Refresh versions, hashes, and image digest
         env:
           GITHUB_TOKEN: ${{ github.token }}
+          # Upstream-derived values reach the script through the environment,
+          # never through template expansion into the shell source.
+          RUST_VERSION: ${{ steps.versions.outputs.rust }}
+          RUST_DATE: ${{ steps.versions.outputs.rust_date }}
+          LLVM_COV_VERSION: ${{ steps.versions.outputs.llvm_cov }}
+          AUDIT_VERSION: ${{ steps.versions.outputs.audit }}
+          DENY_VERSION: ${{ steps.versions.outputs.deny }}
+          SYFT_VERSION: ${{ steps.versions.outputs.syft }}
+          DATABRICKS_VERSION: ${{ steps.versions.outputs.databricks }}
         run: |
           scripts/update-pins.py \
-            --rust "${{ steps.versions.outputs.rust }}" \
-            --rust-date "${{ steps.versions.outputs.rust_date }}" \
-            --llvm-cov "${{ steps.versions.outputs.llvm_cov }}" \
-            --audit "${{ steps.versions.outputs.audit }}" \
-            --deny "${{ steps.versions.outputs.deny }}" \
-            --syft "${{ steps.versions.outputs.syft }}" \
-            --databricks "${{ steps.versions.outputs.databricks }}"
+            --rust "${RUST_VERSION}" \
+            --rust-date "${RUST_DATE}" \
+            --llvm-cov "${LLVM_COV_VERSION}" \
+            --audit "${AUDIT_VERSION}" \
+            --deny "${DENY_VERSION}" \
+            --syft "${SYFT_VERSION}" \
+            --databricks "${DATABRICKS_VERSION}"
       - name: Validate generated changes
         run: |
           git diff --check
