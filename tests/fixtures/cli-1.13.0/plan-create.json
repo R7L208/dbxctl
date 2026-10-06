@@ -9,7 +9,7 @@
         "tasks": [
           {
             "notebook_task": {
-              "notebook_path": "/Workspace/Users/user@example.test/projects/example/notebooks/silver"
+              "notebook_path": "/Workspace/Users/user@example.test/projects/example-dev/notebooks/silver"
             },
             "task_key": "refresh_task"
           }
@@ -17,7 +17,7 @@
       },
       "source": {
         "file": "databricks.yml",
-        "line": 15
+        "line": 11
       }
     }
   }

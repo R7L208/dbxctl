@@ -8,7 +8,7 @@
       "tasks": [
         {
           "notebook_task": {
-            "notebook_path": "/Workspace/Users/user@example.test/projects/example/notebooks/silver"
+            "notebook_path": "/Workspace/Users/user@example.test/projects/example-dev/notebooks/silver"
           },
           "task_key": "refresh_task"
         }
@@ -28,14 +28,7 @@
         }
       ],
       "configuration": {
-        "query_table": {
-          "id": "abcd1234-ef56-7890-abcd-ef1234567890",
-          "tables": [
-            {
-              "name": "query_result"
-            }
-          ]
-        }
+        "query_table": "table"
       },
       "created_at": 1698000000,
       "creator_user_id": 9876543210,
@@ -43,7 +36,7 @@
       "object_id": "01a23b45c67d8901",
       "object_type": "PIPELINE",
       "pipeline_type": "TRIGGERED",
-      "storage": "/Workspace/Users/user@example.test/projects/example/storage",
+      "storage": "/Workspace/Users/user@example.test/projects/example-dev/storage",
       "updated_at": 1698100000
     }
   }

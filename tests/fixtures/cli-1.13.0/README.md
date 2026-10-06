@@ -69,13 +69,14 @@ python3.12 mock_workspace.py --port 8000
 
 The server:
 
-- Binds to `127.0.0.1` on an ephemeral or specified port
+- Binds to `127.0.0.1` on an ephemeral or specified port (binds once; no racing)
 - Returns recorded, deterministic responses for these endpoints:
-  - `GET /api/2.1/pipelines/01a23b45c67d8901` (HTTP 200)
-  - `GET /api/2.1/jobs/123` (HTTP 200)
-  - `POST /api/2.1/statement-execution/execute` (HTTP 200)
+  - `GET /api/2.0/pipelines/01a23b45c67d8901` (HTTP 200, JSON with pipeline info)
+  - `GET /api/2.1/jobs/get?job_id=123` (HTTP 200, JSON with job info)
+  - `POST /api/2.0/sql/statements` (HTTP 200, Statement Execution response with `statement_id`, `status.state`, `manifest.columns[]`, `result.data_array`)
 - Returns HTTP 404 for unrecorded GET requests
 - Returns HTTP 501 for unrecorded POST/PUT/PATCH/DELETE requests
+- Parses query parameters and reads POST JSON bodies
 - Never forwards requests to a real workspace
 - Uses Python standard library only (no third-party dependencies)
 
@@ -87,7 +88,10 @@ SERVER_PID=$!
 sleep 1
 
 # Test recorded endpoint
-curl -s http://127.0.0.1:8765/api/2.1/pipelines/01a23b45c67d8901 | python3.12 -m json.tool
+curl -s http://127.0.0.1:8765/api/2.0/pipelines/01a23b45c67d8901 | python3.12 -m json.tool
+
+# Test recorded job endpoint with query parameter
+curl -s 'http://127.0.0.1:8765/api/2.1/jobs/get?job_id=123' | python3.12 -m json.tool
 
 # Test unrecorded endpoint (returns 404)
 curl -s -o /dev/null -w "%{http_code}\n" http://127.0.0.1:8765/api/2.1/unknown
@@ -129,12 +133,14 @@ To test fixture well-formedness:
 
 ```console
 # Validate JSON syntax
-python3.12 -m json.tool tests/fixtures/cli-1.13.0/*.json > /dev/null
+for f in tests/fixtures/cli-1.13.0/*.json; do
+  python3.12 -m json.tool "$f" > /dev/null || exit 1
+done
 
 # Start mock server and test
 python3.12 tests/fixtures/cli-1.13.0/mock_workspace.py --port 8765 &
 sleep 1
-curl -s http://127.0.0.1:8765/api/2.1/pipelines/01a23b45c67d8901 | python3.12 -m json.tool
+curl -s http://127.0.0.1:8765/api/2.0/pipelines/01a23b45c67d8901 | python3.12 -m json.tool
 jobs -p | xargs kill
 
 # Run markdown formatter check

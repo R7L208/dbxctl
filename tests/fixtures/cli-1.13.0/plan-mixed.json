@@ -16,7 +16,7 @@
       },
       "source": {
         "file": "databricks.yml",
-        "line": 15
+        "line": 11
       }
     },
     "pipelines.dlt_pipeline": {
@@ -31,11 +31,11 @@
           }
         ],
         "name": "dlt_pipeline",
-        "storage": "/Workspace/Users/user@example.test/projects/example/storage"
+        "storage": "/Workspace/Users/user@example.test/projects/example-dev/storage"
       },
       "source": {
         "file": "databricks.yml",
-        "line": 25
+        "line": 28
       }
     }
   }

@@ -1,8 +1,7 @@
 {
   "bundle": {
-    "description": "Example analytics bundle with DLT pipeline and refresh job",
-    "name": "example-analytics",
-    "version": "0.1.0"
+    "engine": "direct",
+    "name": "example-analytics"
   },
   "resources": {
     "jobs": {
@@ -24,7 +23,7 @@
           {
             "job_cluster_key": "default",
             "notebook_task": {
-              "notebook_path": "/Workspace/Users/user@example.test/projects/example/notebooks/silver"
+              "notebook_path": "/Workspace/Users/user@example.test/projects/example-dev/notebooks/silver"
             },
             "task_key": "refresh_task"
           }
@@ -43,17 +42,11 @@
           }
         ],
         "configuration": {
-          "query_table": {
-            "tables": [
-              {
-                "name": "query_result"
-              }
-            ]
-          }
+          "query_table": "table"
         },
         "name": "dlt_pipeline",
         "pipeline_type": "TRIGGERED",
-        "storage": "/Workspace/Users/user@example.test/projects/example/storage"
+        "storage": "/Workspace/Users/user@example.test/projects/example-dev/storage"
       }
     }
   },

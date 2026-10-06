@@ -1,6 +1,5 @@
 # Databricks credentials and configuration
-.databricks
-!.databricks/.gitkeep
+.databricks/
 
 # Terraform state files
 *.tfstate

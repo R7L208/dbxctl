@@ -1,7 +1,6 @@
 bundle:
   name: example-analytics
-  description: Example analytics bundle with DLT pipeline and refresh job
-  version: 0.1.0
+  engine: direct
 
 workspace:
   root_path: /Workspace/Users/user@example.test/projects/example
@@ -33,14 +32,7 @@ resources:
           spark_conf:
             spark.databricks.cluster.profile: singleNode
       configuration:
-        query_table:
-          tables:
-            - name: query_result
-
-  workspace_files:
-    source_files:
-      path: ./src
-      workspace_path: ${workspace.root_path}/src
+        query_table: table
 
 targets:
   dev:
