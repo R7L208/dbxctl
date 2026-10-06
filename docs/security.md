@@ -159,6 +159,32 @@ dependency graph but created substantially more parser and maintenance risk.
 Revisit this choice if the dependency cannot satisfy the project's audit,
 license, source, or supported-Rust-version policies.
 
+### Passthrough Interrupts
+
+`dbxctl databricks ...` must let the Databricks CLI handle Ctrl-C itself. A
+command such as `bundle deploy` may need to release a deployment lock after an
+interrupt, and the caller should get the CLI's result, not the wrapper's.
+
+On Unix, passthrough replaces the `dbxctl` process with the CLI through the
+standard library's `CommandExt::exec`, which is safe Rust and adds no
+dependency. The CLI keeps the PID, process group, terminal, and inherited
+streams, so it is the only process to receive `SIGINT`, and its exit code or
+terminating signal is the caller's result. If the CLI cannot be started,
+`exec` returns and `dbxctl` reports the error and exits non-zero. `doctor` and
+captured execution still run the CLI as a child, because they must inspect its
+output after it exits.
+
+Windows has no `exec`, and its console delivers Ctrl-C to every attached
+process. There, `dbxctl` still runs the CLI as a child and exits with its exit
+code. The accepted limitation is that on Ctrl-C `dbxctl` may exit, and return
+the prompt, before the CLI finishes its own cleanup. The rejected alternative
+was ignoring Ctrl-C in `dbxctl` while the child runs. That requires a console
+control handler, which means either `unsafe` FFI, which the crate forbids, or
+a new runtime dependency such as `ctrlc`, which needs its own reviewed design
+decision. Neither cost is justified for an interrupt-timing limitation that
+does not change normal exit codes. Revisit this choice if Windows users depend
+on interrupt-safe passthrough.
+
 ## Remaining Trust Boundaries
 
 - GitHub's `ubuntu-24.04` runner remains the Docker host.

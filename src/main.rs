@@ -64,7 +64,9 @@ fn run_with_binary(cli: Cli, binary: &OsStr) -> Result<ExitCode, String> {
             Ok(ExitCode::SUCCESS)
         }
         Cli::Doctor => Ok(databricks::run_doctor(binary)),
-        Cli::Databricks(args) => databricks::run_passthrough(binary, args),
+        Cli::Databricks(args) => {
+            databricks::run_passthrough(binary, args).map(|never| match never {})
+        }
     }
 }
 
