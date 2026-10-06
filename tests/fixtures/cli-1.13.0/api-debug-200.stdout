@@ -1,0 +1,28 @@
+{
+  "channel": "CURRENT",
+  "clusters": [
+    {
+      "aws_attributes": {
+        "availability": "SPOT",
+        "zone_id": "us-west-2b"
+      },
+      "label": "default",
+      "node_type_id": "i3.xlarge",
+      "num_workers": 0,
+      "spark_conf": {
+        "spark.databricks.cluster.profile": "singleNode"
+      }
+    }
+  ],
+  "configuration": {
+    "query_table": "table"
+  },
+  "created_at": 1698000000,
+  "creator_user_id": 9876543210,
+  "name": "dlt_pipeline",
+  "object_id": "01a23b45c67d8901",
+  "object_type": "PIPELINE",
+  "pipeline_type": "TRIGGERED",
+  "storage": "/Workspace/Users/user@example.test/projects/example-dev/storage",
+  "updated_at": 1698100000
+}
