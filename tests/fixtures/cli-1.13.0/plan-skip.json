@@ -1,0 +1,7 @@
+{
+  "resources": {
+    "jobs.refresh_silver": {
+      "action": "skip"
+    }
+  }
+}

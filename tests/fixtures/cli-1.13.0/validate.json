@@ -1,0 +1,73 @@
+{
+  "bundle": {
+    "engine": "direct",
+    "name": "example-analytics"
+  },
+  "resources": {
+    "jobs": {
+      "refresh_silver": {
+        "description": "Refresh silver table from raw data",
+        "job_clusters": [
+          {
+            "job_cluster_key": "default",
+            "new_cluster": {
+              "node_type_id": "i3.xlarge",
+              "num_workers": 2,
+              "spark_version": "13.3.x-scala2.12"
+            }
+          }
+        ],
+        "max_concurrent_runs": 1,
+        "name": "refresh_silver",
+        "tasks": [
+          {
+            "job_cluster_key": "default",
+            "notebook_task": {
+              "notebook_path": "/Workspace/Users/user@example.test/projects/example-dev/files/notebooks/silver"
+            },
+            "task_key": "refresh_task"
+          }
+        ]
+      }
+    },
+    "pipelines": {
+      "dlt_pipeline": {
+        "channel": "CURRENT",
+        "clusters": [
+          {
+            "label": "default",
+            "spark_conf": {
+              "spark.databricks.cluster.profile": "singleNode"
+            }
+          }
+        ],
+        "configuration": {
+          "query_table": "table"
+        },
+        "libraries": [
+          {
+            "file": {
+              "path": "/Workspace/Users/user@example.test/projects/example-dev/files/src/silver.sql"
+            }
+          },
+          {
+            "file": {
+              "path": "/Workspace/Users/user@example.test/projects/example-dev/files/src/q.sql"
+            }
+          },
+          {
+            "file": {
+              "path": "/Workspace/Users/user@example.test/projects/example-dev/files/src/gold/g.sql"
+            }
+          }
+        ],
+        "name": "dlt_pipeline",
+        "pipeline_type": "TRIGGERED",
+        "storage": "/Workspace/Users/user@example.test/projects/example-dev/storage"
+      }
+    }
+  },
+  "workspace": {
+    "root_path": "/Workspace/Users/user@example.test/projects/example-dev"
+  }
+}
