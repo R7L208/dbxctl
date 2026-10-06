@@ -9,9 +9,8 @@ use std::sync::Arc;
 /// This module wraps `serde_json` to hide its types from callers and enforce
 /// defensive access patterns. Accessors return borrowed references without cloning.
 ///
-/// **Nesting depth limit:** `serde_json` enforces a maximum recursion depth. Attempting
-/// to parse beyond this limit returns an error instead of panicking or overflowing the
-/// stack. The exact limit is determined at runtime via test.
+/// **Nesting depth limit:** `serde_json` accepts at most 127 nested arrays or
+/// objects. Deeper input returns an error rather than overflowing the stack.
 ///
 /// **Duplicate object keys:** When an object has duplicate keys, `serde_json` keeps
 /// the last value (standard JSON behavior). Access methods return the value associated
@@ -542,28 +541,20 @@ mod tests {
     }
 
     #[test]
-    fn deep_nesting_finds_limit() {
-        // Binary search for the actual nesting limit
-        for depth in [100, 120, 128, 129, 150, 200] {
-            let mut s = String::new();
-            for _ in 0..depth {
-                s.push('[');
-            }
-            s.push('1');
-            for _ in 0..depth {
-                s.push(']');
-            }
-            let result = parse(&s);
-            if result.is_err() {
-                // Found the limit or close to it
-                eprintln!(
-                    "Depth {} failed: serde_json limit found around {}",
-                    depth, depth
-                );
-                return;
-            }
-        }
-        eprintln!("Could not find exact limit within tested range");
+    fn deep_nesting_beyond_the_recursion_limit_is_an_error() {
+        // serde_json's recursion limit allows 127 nested containers around a
+        // scalar; one more is an error rather than a stack overflow.
+        let nested = |depth: usize| format!("{}1{}", "[".repeat(depth), "]".repeat(depth));
+        assert!(
+            parse(&nested(127)).is_ok(),
+            "127 levels are within the limit"
+        );
+        let error = parse(&nested(128)).expect_err("128 levels exceed the limit");
+        assert!(error.to_string().contains("recursion limit"), "{error}");
+        assert!(
+            parse(&nested(100_000)).is_err(),
+            "very deep input must not overflow the stack"
+        );
     }
 
     #[test]
