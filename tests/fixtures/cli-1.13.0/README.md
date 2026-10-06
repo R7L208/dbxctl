@@ -52,6 +52,7 @@ bundle's file path prefix. For the `dev` target:
 - Resolved workspace path: `/Workspace/Users/user@example.test/projects/example-dev/files/notebooks/silver`
 
 Similarly, pipeline library files:
+
 - Bundle relative path: `./src/silver.sql`
 - Resolved workspace path: `/Workspace/Users/user@example.test/projects/example-dev/files/src/silver.sql`
 
