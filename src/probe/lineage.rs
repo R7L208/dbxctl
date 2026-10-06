@@ -111,7 +111,9 @@ fn determine_selected_checks(only: Option<&Vec<String>>) -> Vec<&'static str> {
 }
 
 /// Check resource requirements and collect checks that need each resource.
-fn check_resource_requirements(selected_checks: &[&'static str]) -> (bool, bool, Vec<&'static str>, Vec<&'static str>) {
+fn check_resource_requirements(
+    selected_checks: &[&'static str],
+) -> (bool, bool, Vec<&'static str>, Vec<&'static str>) {
     let mut needs_warehouse = false;
     let mut needs_catalog = false;
 
@@ -136,7 +138,12 @@ fn check_resource_requirements(selected_checks: &[&'static str]) -> (bool, bool,
         .copied()
         .collect();
 
-    (needs_warehouse, needs_catalog, warehouse_checks, catalog_checks)
+    (
+        needs_warehouse,
+        needs_catalog,
+        warehouse_checks,
+        catalog_checks,
+    )
 }
 
 #[derive(Debug, Default)]
