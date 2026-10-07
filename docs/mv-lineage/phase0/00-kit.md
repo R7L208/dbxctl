@@ -72,7 +72,7 @@ See [05-workspace-probes.md](05-workspace-probes.md).
 | --- | --- |
 | 0 | Every selected check resolved |
 | 1 | Invocation or usage failure |
-| 10 | One or more checks unknown or blocked |
+| 10 | One or more selected checks not resolved (unknown, skipped, or failed) |
 | 11 | Cleanup failure |
 
 An unknown is a valid outcome: it carries a reason and the fallback later

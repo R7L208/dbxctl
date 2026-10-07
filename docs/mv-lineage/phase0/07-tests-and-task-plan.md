@@ -84,4 +84,3 @@ columns:
 
 Outside milestone 0.0.1: #40 (Rust mock workspace server, optional), #41
 (workflow security scanning), and #42 (durable release assets).
-

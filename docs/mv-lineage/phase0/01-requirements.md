@@ -56,8 +56,12 @@ Centralized in `src/exit.rs` (#30).
 | --- | --- |
 | 0 | Run completed and every selected check resolved |
 | 1 | Invocation or usage failure |
-| 10 | One or more checks unknown or blocked |
+| 10 | One or more selected checks not resolved (unknown, skipped, or failed) |
 | 11 | Cleanup failure |
+
+The #23 contract words exit 10 as "unknown or blocked". The finding states in
+[R12](#r12-findings) have no "blocked" state, so this page states the mapping
+explicitly: any selected check that is not resolved yields exit 10.
 
 ## R4: Checks
 
