@@ -9,6 +9,10 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 const MINIMUM_DATABRICKS_VERSION: Version = Version::new(1, 13, 0);
+// The newest release CI runs against: the `databricks_cli` version pinned in
+// `.github/pins.json`. `scripts/discover-pin-versions.py` and its tests fail
+// when the two differ. Newer versions are accepted with a warning.
+const TESTED_DATABRICKS_VERSION: Version = Version::new(1, 13, 0);
 const POLL_INTERVAL: Duration = Duration::from_millis(10);
 // How long to wait for the output pipes to close after the process is gone. A
 // descendant that inherited them (for example Terraform under `databricks
@@ -227,21 +231,67 @@ fn installed_version(binary: &OsStr, timeout: Duration) -> Result<Version, Strin
         .ok_or_else(|| format!("could not parse Databricks CLI version from {stdout:?}"))
 }
 
-fn validate(binary: &OsStr, timeout: Duration) -> Result<Version, String> {
-    let version = installed_version(binary, timeout)?;
-    if version < MINIMUM_DATABRICKS_VERSION {
-        return Err(format!(
-            "Databricks CLI {version} is unsupported; install {MINIMUM_DATABRICKS_VERSION} or newer"
-        ));
+/// A Databricks CLI version that meets the minimum, and whether it is at or
+/// below the tested version. The fields are private so every value comes from
+/// `classify`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct SupportedVersion {
+    version: Version,
+    tested: bool,
+}
+
+impl SupportedVersion {
+    /// Rejects versions below the minimum. Newer-than-tested versions are
+    /// supported but untested: callers warn and carry on.
+    pub(crate) fn classify(version: Version) -> Result<Self, String> {
+        if version < MINIMUM_DATABRICKS_VERSION {
+            return Err(format!(
+                "Databricks CLI {version} is unsupported; install {MINIMUM_DATABRICKS_VERSION} or newer"
+            ));
+        }
+        Ok(Self {
+            version,
+            tested: version <= TESTED_DATABRICKS_VERSION,
+        })
     }
-    Ok(version)
+
+    pub(crate) fn version(self) -> Version {
+        self.version
+    }
+
+    pub(crate) fn tested(self) -> bool {
+        self.tested
+    }
+
+    /// The warning for an untested version, without a `warning: ` prefix.
+    pub(crate) fn untested_warning(self) -> Option<String> {
+        (!self.tested()).then(|| {
+            format!(
+                "Databricks CLI {} is newer than the tested version {TESTED_DATABRICKS_VERSION}; output shapes may differ",
+                self.version()
+            )
+        })
+    }
+}
+
+fn validate(binary: &OsStr, timeout: Duration) -> Result<SupportedVersion, String> {
+    SupportedVersion::classify(installed_version(binary, timeout)?)
 }
 
 pub(crate) fn run_doctor(binary: &OsStr) -> ExitCode {
     println!("dbxctl {}", env!("CARGO_PKG_VERSION"));
     match validate(binary, VERSION_TIMEOUT) {
-        Ok(version) => {
-            println!("Databricks CLI {version} ({})", binary.display());
+        Ok(supported) => {
+            println!(
+                "Databricks CLI {} ({})",
+                supported.version(),
+                binary.display()
+            );
+            // stderr keeps doctor's stdout identical for tested and untested
+            // versions; an untested version never changes the exit status.
+            if let Some(warning) = supported.untested_warning() {
+                eprintln!("warning: {warning}");
+            }
             ExitCode::SUCCESS
         }
         Err(problem) => {
@@ -282,7 +332,8 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use super::{
-        MINIMUM_DATABRICKS_VERSION, Version, run_captured, run_captured_command, validate,
+        MINIMUM_DATABRICKS_VERSION, SupportedVersion, TESTED_DATABRICKS_VERSION, Version,
+        run_captured, run_captured_command, validate,
     };
 
     // Generous bound for "returned promptly" on slow CI runners; every case
@@ -300,6 +351,36 @@ mod tests {
         assert!(Version::new(0, 296, 0) < MINIMUM_DATABRICKS_VERSION);
         assert!(Version::new(1, 13, 0) >= MINIMUM_DATABRICKS_VERSION);
         assert!(Version::new(1, 19, 0) >= MINIMUM_DATABRICKS_VERSION);
+    }
+
+    #[test]
+    fn tested_version_is_the_minimum() {
+        // CI pins exactly the minimum, so the tested range is one release. If
+        // the pin is raised past the minimum, assert `>=` here instead.
+        assert_eq!(TESTED_DATABRICKS_VERSION, MINIMUM_DATABRICKS_VERSION);
+    }
+
+    #[test]
+    fn classifies_versions_against_the_minimum_and_tested_range() {
+        let error = SupportedVersion::classify(Version::new(1, 12, 99))
+            .expect_err("older than the minimum must fail");
+        assert_eq!(
+            error,
+            "Databricks CLI 1.12.99 is unsupported; install 1.13.0 or newer"
+        );
+
+        let tested = SupportedVersion::classify(TESTED_DATABRICKS_VERSION).expect("tested");
+        assert!(tested.tested());
+        assert_eq!(tested.untested_warning(), None);
+
+        let newer = SupportedVersion::classify(Version::new(1, 13, 1)).expect("newer");
+        assert!(!newer.tested());
+        assert_eq!(
+            newer.untested_warning().as_deref(),
+            Some(
+                "Databricks CLI 1.13.1 is newer than the tested version 1.13.0; output shapes may differ"
+            )
+        );
     }
 
     #[test]

@@ -38,7 +38,7 @@ class DiscoveryTests(unittest.TestCase):
         with mock.patch.object(discover, "stable_rust", return_value=("1.99.0", "2026-01-01")), mock.patch.object(
             discover, "latest_audit_version", return_value="0.24.0"
         ), mock.patch.object(discover, "latest_release_tag", side_effect=["v0.10.0", "0.22.0", "v2.0.0"]), mock.patch.object(
-            discover, "pinned_databricks_version", return_value="1.13.0"
+            discover, "held_databricks_version", return_value="1.13.0"
         ):
             versions = discover.discover("token")
         self.assertEqual(
@@ -70,6 +70,30 @@ class DiscoveryTests(unittest.TestCase):
 
     def test_committed_pins_hold_databricks_1_13_0(self):
         self.assertEqual(discover.pinned_databricks_version(), "1.13.0")
+
+    def test_committed_pin_is_the_tested_version(self):
+        self.assertEqual(discover.tested_databricks_version(), discover.pinned_databricks_version())
+        self.assertEqual(discover.held_databricks_version(), "1.13.0")
+
+    def test_tested_version_is_read_from_the_rust_constant(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "databricks.rs"
+            source.write_text("const TESTED_DATABRICKS_VERSION: Version = Version::new(1, 19, 2);\n")
+            self.assertEqual(discover.tested_databricks_version(source), "1.19.2")
+            source.write_text("const MINIMUM_DATABRICKS_VERSION: Version = Version::new(1, 13, 0);\n")
+            with self.assertRaisesRegex(RuntimeError, "no TESTED_DATABRICKS_VERSION"):
+                discover.tested_databricks_version(source)
+
+    def test_held_version_fails_closed_when_pin_and_tested_differ(self):
+        with tempfile.TemporaryDirectory() as directory:
+            pins = Path(directory) / "pins.json"
+            source = Path(directory) / "databricks.rs"
+            pins.write_text('{"databricks_cli": {"sha256": "x", "version": "1.19.0"}}\n')
+            source.write_text("const TESTED_DATABRICKS_VERSION: Version = Version::new(1, 13, 0);\n")
+            with self.assertRaisesRegex(RuntimeError, "pin 1.19.0 .* differs from TESTED_DATABRICKS_VERSION 1.13.0"):
+                discover.held_databricks_version(pins, source)
+            source.write_text("const TESTED_DATABRICKS_VERSION: Version = Version::new(1, 19, 0);\n")
+            self.assertEqual(discover.held_databricks_version(pins, source), "1.19.0")
 
     def test_main_appends_github_outputs(self):
         with tempfile.TemporaryDirectory() as directory:
