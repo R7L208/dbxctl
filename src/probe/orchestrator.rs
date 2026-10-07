@@ -78,18 +78,34 @@ pub(crate) struct Outcome {
 }
 
 /// Runs `plan` against `binary`. An `Err` means the run directory could not
-/// be written; check problems are reported as findings instead.
+/// be written; check problems are reported as findings instead. Once the run
+/// directory exists, the error names it, so a partial run can be found.
 pub(crate) fn run(plan: &Plan, binary: &OsStr, clock: &dyn Clock) -> Result<Outcome, String> {
     let started = clock.now();
     let run_dir = RunDir::create(&plan.bundle_root, SUITE, started)?;
+    complete(plan, binary, clock, &run_dir, started).map_err(|error| {
+        format!(
+            "{error} (partial run directory: {})",
+            run_dir.path().display()
+        )
+    })
+}
+
+fn complete(
+    plan: &Plan,
+    binary: &OsStr,
+    clock: &dyn Clock,
+    run_dir: &RunDir,
+    started: u64,
+) -> Result<Outcome, String> {
     run_dir.write_json(
         "run.json",
-        &run_document(plan, &run_dir, started, None).into(),
+        &run_document(plan, run_dir, started, None).into(),
     )?;
 
     let context = Context {
         binary,
-        run: &run_dir,
+        run: run_dir,
     };
     let findings = plan
         .checks
@@ -105,14 +121,14 @@ pub(crate) fn run(plan: &Plan, binary: &OsStr, clock: &dyn Clock) -> Result<Outc
         Exit::Unresolved
     };
 
-    run_dir.write_json("findings.json", &findings_document(&run_dir, &findings))?;
+    run_dir.write_json("findings.json", &findings_document(run_dir, &findings))?;
     run_dir.write_file(
         "findings.md",
-        findings_markdown(&run_dir, &findings).as_bytes(),
+        findings_markdown(run_dir, &findings).as_bytes(),
     )?;
     run_dir.write_json(
         "run.json",
-        &run_document(plan, &run_dir, started, Some((clock.now(), exit))).into(),
+        &run_document(plan, run_dir, started, Some((clock.now(), exit))).into(),
     )?;
     Ok(Outcome {
         exit,

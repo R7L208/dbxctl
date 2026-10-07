@@ -2,10 +2,14 @@
 //!
 //! A run lives at `<bundle-root>/.dbxctl/probe/<suite>/<run-id>/`. Before
 //! anything is written below `.dbxctl/`, that directory gets a `.gitignore`
-//! containing `*`, so raw evidence cannot be committed by accident.
+//! containing `*`. `.dbxctl/probe/`, which only dbxctl writes to, always gets
+//! its own, so raw evidence stays ignored even if a repository commits a
+//! different `.dbxctl/.gitignore`. None of the state directories may be a
+//! symlink, so evidence cannot be redirected out of the ignored tree.
 //!
-//! The run ID is the run's UTC start time (`20260102T030405Z`), with a `-2`,
-//! `-3`, ... suffix when an earlier run already used that second. Time comes
+//! The run ID is the run's UTC start time (`20260102T030405Z`), with a
+//! zero-padded `-0002`, `-0003`, ... suffix when an earlier run already used
+//! that second, so run IDs sort in creation order. Time comes
 //! from an injected [`Clock`]; with a fixed clock and the same inputs, every
 //! written file is byte-identical.
 //!
@@ -119,7 +123,7 @@ impl RunDir {
     /// Creates a new run directory for `suite` below `bundle_root`, which must
     /// already exist, naming it from `started` (Unix seconds). Writes
     /// `.dbxctl/.gitignore` first if it is missing; an existing one is left as
-    /// it is.
+    /// it is. `.dbxctl/probe/.gitignore` is always rewritten.
     pub(crate) fn create(bundle_root: &Path, suite: &str, started: u64) -> Result<Self, String> {
         check_name(suite)?;
         if !bundle_root.is_dir() {
@@ -129,17 +133,20 @@ impl RunDir {
             ));
         }
         let state = bundle_root.join(STATE_DIRECTORY);
-        create_dir_all(&state)?;
+        create_real_dir(&state)?;
         write_gitignore(&state.join(".gitignore"))?;
-        let suite_root = state.join("probe").join(suite);
-        create_dir_all(&suite_root)?;
+        let probe_root = state.join("probe");
+        create_real_dir(&probe_root)?;
+        write(&probe_root.join(".gitignore"), GITIGNORE)?;
+        let suite_root = probe_root.join(suite);
+        create_real_dir(&suite_root)?;
 
         let base = UtcTime::from_unix(started).compact();
         for attempt in 1..=MAX_RUNS_PER_SECOND {
             let run_id = if attempt == 1 {
                 base.clone()
             } else {
-                format!("{base}-{attempt}")
+                format!("{base}-{attempt:04}")
             };
             let path = suite_root.join(&run_id);
             match private_dir_builder().create(&path) {
@@ -304,6 +311,36 @@ fn create_dir_all(path: &Path) -> Result<(), String> {
         .map_err(|error| format!("could not create directory {}: {error}", path.display()))
 }
 
+/// Creates `path` if it is missing (its parent must exist) and confirms it is
+/// a real directory, not a symlink to one.
+fn create_real_dir(path: &Path) -> Result<(), String> {
+    match fs::create_dir(path) {
+        Ok(()) => return Ok(()),
+        Err(error) if error.kind() == ErrorKind::AlreadyExists => {}
+        Err(error) => {
+            return Err(format!(
+                "could not create directory {}: {error}",
+                path.display()
+            ));
+        }
+    }
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.is_dir() => Ok(()),
+        Ok(metadata) if metadata.file_type().is_symlink() => Err(format!(
+            "could not create directory {}: it is a symlink",
+            path.display()
+        )),
+        Ok(_) => Err(format!(
+            "could not create directory {}: it is not a directory",
+            path.display()
+        )),
+        Err(error) => Err(format!(
+            "could not create directory {}: {error}",
+            path.display()
+        )),
+    }
+}
+
 fn write(path: &Path, contents: &[u8]) -> Result<(), String> {
     fs::write(path, contents)
         .map_err(|error| format!("could not write {}: {error}", path.display()))
@@ -313,6 +350,7 @@ fn write(path: &Path, contents: &[u8]) -> Result<(), String> {
 pub(crate) mod tests {
     use std::ffi::OsString;
     use std::fs;
+    use std::path::Path;
 
     use super::{Clock, RunDir, SystemClock, UtcTime, check_name, timestamp};
     use crate::databricks::run_captured;
@@ -387,6 +425,44 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn always_ignores_the_probe_directory() {
+        // A committed `.dbxctl/.gitignore` that ignores nothing must not
+        // expose evidence, and a stale probe `.gitignore` is replaced.
+        let temp = TempDir::new("evidence-probe-gitignore");
+        fs::create_dir_all(temp.path().join(".dbxctl/probe")).expect("create probe dir");
+        fs::write(temp.path().join(".dbxctl/.gitignore"), "").expect("write");
+        fs::write(temp.path().join(".dbxctl/probe/.gitignore"), "!*\n").expect("write");
+        RunDir::create(temp.path(), "lineage", FIXED_TIME).expect("create");
+        assert_eq!(
+            fs::read(temp.path().join(".dbxctl/probe/.gitignore")).expect("read"),
+            b"*\n"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rejects_symlinked_state_directories() {
+        use std::os::unix::fs::symlink;
+
+        for link in [".dbxctl", ".dbxctl/probe", ".dbxctl/probe/lineage"] {
+            let temp = TempDir::new("evidence-symlink");
+            let target = temp.path().join("elsewhere");
+            fs::create_dir(&target).expect("create target");
+            if let Some(parent) = Path::new(link).parent() {
+                fs::create_dir_all(temp.path().join(parent)).expect("create parent");
+            }
+            symlink(&target, temp.path().join(link)).expect("symlink");
+            let error = RunDir::create(temp.path(), "lineage", FIXED_TIME).expect_err(link);
+            assert!(error.contains("is a symlink"), "{link}: {error}");
+            assert_eq!(
+                fs::read_dir(&target).expect("read target").count(),
+                0,
+                "{link}: nothing may be written through the symlink"
+            );
+        }
+    }
+
+    #[test]
     fn suffixes_run_ids_that_share_a_second() {
         let temp = TempDir::new("evidence-collide");
         let ids: Vec<_> = (0..3)
@@ -401,8 +477,8 @@ pub(crate) mod tests {
             ids,
             [
                 "20260102T030405Z",
-                "20260102T030405Z-2",
-                "20260102T030405Z-3"
+                "20260102T030405Z-0002",
+                "20260102T030405Z-0003"
             ]
         );
     }
@@ -415,7 +491,7 @@ pub(crate) mod tests {
         fs::create_dir_all(&suite).expect("create suite dir");
         fs::write(suite.join("20260102T030405Z"), "").expect("occupy");
         for attempt in 2..=super::MAX_RUNS_PER_SECOND {
-            fs::write(suite.join(format!("20260102T030405Z-{attempt}")), "").expect("occupy");
+            fs::write(suite.join(format!("20260102T030405Z-{attempt:04}")), "").expect("occupy");
         }
         let error =
             RunDir::create(temp.path(), "lineage", FIXED_TIME).expect_err("exhausted run IDs");
