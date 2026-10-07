@@ -328,7 +328,10 @@ impl ProbeFixture {
 
     /// The only run directory created so far.
     fn run_dir(&self) -> std::path::PathBuf {
-        let runs: Vec<_> = std::fs::read_dir(self.bundle().join(".dbxctl/probe/lineage"))
+        // Join each component so the separators match what dbxctl prints on
+        // Windows.
+        let suite = self.bundle().join(".dbxctl").join("probe").join("lineage");
+        let runs: Vec<_> = std::fs::read_dir(suite)
             .expect("read runs")
             .map(|entry| entry.expect("read run entry").path())
             .collect();
