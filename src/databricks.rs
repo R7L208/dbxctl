@@ -256,8 +256,9 @@ pub(crate) fn run_doctor(binary: &OsStr) -> ExitCode {
 /// not be started.
 ///
 /// On Unix the `dbxctl` process is replaced with the CLI (`execvp`), so the CLI
-/// keeps the same PID, process group, terminal, and signal dispositions. It
-/// alone receives Ctrl-C, controls its own shutdown, and its exit status or
+/// keeps the same PID, process group, and terminal, and starts with the same
+/// signal state it would have if run directly (`exec` resets caught signals).
+/// It alone receives Ctrl-C, controls its own shutdown, and its exit status or
 /// terminating signal is what the caller observes.
 ///
 /// Other platforms have no `exec`; there the CLI runs as a child and `dbxctl`
