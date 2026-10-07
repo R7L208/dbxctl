@@ -11,7 +11,9 @@ Phase 0 adds `serde_json` as the first approved third-party Rust runtime
 dependency, wrapped by a crate-private JSON layer (`src/json.rs`) for defensive
 access and deterministic output; see the recorded
 [JSON design decision](docs/security.md#design-decisions). Phase 1 will use
-`petgraph` for its in-memory lineage graph.
+`petgraph` for its in-memory lineage graph. See the
+[MV lineage documentation](docs/mv-lineage/README.md) for the Phase 0
+requirements, architecture, and plan.
 
 ## Requirements
 
