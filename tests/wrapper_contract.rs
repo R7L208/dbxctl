@@ -5,7 +5,8 @@ use std::process::Stdio;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use common::{dbxctl, fake_databricks};
+use common::scenario::{ScenarioCli, assert_no_mutations};
+use common::{TempDir, dbxctl, fake_databricks};
 
 #[test]
 fn forwards_arguments_exactly_and_preserves_exit_code() {
@@ -293,27 +294,128 @@ fn probe_run_requires_target() {
     assert!(stderr.contains("--target is required"));
 }
 
+const CLI_VERSION_SCENARIO: &str = include_str!("fixtures/scenarios/cli-version.txt");
+
+/// A bundle root and a scenario-backed fake CLI in one scratch directory.
+struct ProbeFixture {
+    temp: TempDir,
+    cli: ScenarioCli,
+}
+
+impl ProbeFixture {
+    fn new(name: &str, scenario: &str) -> Self {
+        let temp = TempDir::new(name);
+        std::fs::create_dir(temp.path().join("bundle")).expect("create bundle");
+        std::fs::create_dir(temp.path().join("cli")).expect("create CLI dir");
+        let cli = ScenarioCli::new(fake_databricks(), &temp.path().join("cli"), scenario);
+        Self { temp, cli }
+    }
+
+    fn bundle(&self) -> std::path::PathBuf {
+        self.temp.path().join("bundle")
+    }
+
+    fn run(&self, extra: &[&str]) -> std::process::Output {
+        dbxctl()
+            .env("DATABRICKS_CLI_PATH", self.cli.binary())
+            .args(["probe", "run", "--suite", "lineage", "--bundle-root"])
+            .arg(self.bundle())
+            .args(["--target", "dev"])
+            .args(extra)
+            .output()
+            .expect("run dbxctl probe run")
+    }
+
+    /// The only run directory created so far.
+    fn run_dir(&self) -> std::path::PathBuf {
+        let runs: Vec<_> = std::fs::read_dir(self.bundle().join(".dbxctl/probe/lineage"))
+            .expect("read runs")
+            .map(|entry| entry.expect("read run entry").path())
+            .collect();
+        assert_eq!(runs.len(), 1, "{runs:?}");
+        runs.into_iter().next().expect("one run")
+    }
+}
+
 #[test]
-fn probe_run_with_valid_options_prints_not_implemented() {
-    let output = dbxctl()
-        .args([
-            "probe",
-            "run",
-            "--suite",
-            "lineage",
-            "--bundle-root",
-            "/tmp",
-            "--target",
-            "dev",
-            "--only",
-            "cli",
-        ])
-        .output()
-        .expect("run probe run with valid options");
-    assert!(!output.status.success());
+fn probe_run_cli_check_runs_end_to_end() {
+    let fixture = ProbeFixture::new("probe-cli", CLI_VERSION_SCENARIO);
+    let output = fixture.run(&["--only", "cli"]);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(output.status.code(), Some(0), "{stdout}");
+    assert!(
+        stdout.starts_with("cli       resolved  1.13.0\n"),
+        "{stdout}"
+    );
+    let run_dir = fixture.run_dir();
+    assert!(
+        stdout.ends_with(&format!("run directory: {}\n", run_dir.display())),
+        "{stdout}"
+    );
+    assert!(output.stderr.is_empty());
+
+    assert_eq!(
+        std::fs::read(fixture.bundle().join(".dbxctl/.gitignore")).expect("read gitignore"),
+        b"*\n"
+    );
+    let run_json = std::fs::read_to_string(run_dir.join("run.json")).expect("read run.json");
+    assert!(run_json.contains("\"status\": \"completed\""), "{run_json}");
+    assert!(run_json.contains("\"exit_code\": 0"), "{run_json}");
+    for name in ["findings.json", "findings.md", "evidence/cli/version.json"] {
+        assert!(run_dir.join(name).is_file(), "missing {name}");
+    }
+
+    let invocations = fixture.cli.invocations();
+    assert_eq!(invocations, [["--version"]]);
+    assert_no_mutations(&invocations);
+}
+
+#[test]
+fn probe_run_directory_is_ignored_by_git() {
+    let fixture = ProbeFixture::new("probe-git", CLI_VERSION_SCENARIO);
+    let git = |args: &[&str]| {
+        std::process::Command::new("git")
+            .arg("-C")
+            .arg(fixture.bundle())
+            .args(args)
+            .output()
+    };
+    if git(&["init", "--quiet"]).is_err() {
+        eprintln!("git is not installed; skipping");
+        return;
+    }
+    assert_eq!(fixture.run(&["--only", "cli"]).status.code(), Some(0));
+    let status = git(&["status", "--porcelain", "--untracked-files=all"]).expect("git status");
+    assert!(status.status.success());
+    assert_eq!(String::from_utf8_lossy(&status.stdout), "");
+}
+
+#[test]
+fn probe_run_with_unresolved_checks_exits_10() {
+    let fixture = ProbeFixture::new("probe-unresolved", CLI_VERSION_SCENARIO);
+    let output = fixture.run(&["--only", "v6,cli"]);
+    assert_eq!(output.status.code(), Some(10));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.starts_with(
+            "cli       resolved  1.13.0\nv6        skipped   not implemented yet; #34 adds this check\n"
+        ),
+        "{stdout}"
+    );
+}
+
+#[test]
+fn probe_run_with_a_missing_bundle_root_exits_1() {
+    let fixture = ProbeFixture::new("probe-missing-root", CLI_VERSION_SCENARIO);
+    std::fs::remove_dir(fixture.bundle()).expect("remove bundle");
+    let output = fixture.run(&["--only", "cli"]);
     assert_eq!(output.status.code(), Some(1));
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("not implemented yet"));
+    assert!(
+        stderr.starts_with("error: bundle root ") && stderr.ends_with(" is not a directory\n"),
+        "{stderr}"
+    );
+    assert!(fixture.cli.invocations().is_empty());
 }
 
 #[test]
@@ -475,19 +577,22 @@ fn probe_run_without_only_requires_scope_catalog_for_catalog_checks() {
 
 #[test]
 fn probe_run_with_all_required_options_passes_validation() {
-    let output = probe_run(&["--warehouse-id", "w", "--scope-catalog", "c"]);
-    assert_eq!(output.status.code(), Some(1));
-    assert_eq!(
-        String::from_utf8_lossy(&output.stderr),
-        "probe run: not implemented yet\n"
-    );
+    // Every check runs; all but `cli` are not implemented yet, so the run
+    // completes with unresolved findings.
+    let fixture = ProbeFixture::new("probe-all-checks", CLI_VERSION_SCENARIO);
+    let output = fixture.run(&["--warehouse-id", "w", "--scope-catalog", "c"]);
+    assert_eq!(output.status.code(), Some(10));
+    assert!(output.stderr.is_empty());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(stdout.lines().count(), 16, "{stdout}");
 }
 
 #[test]
 fn probe_run_accepts_repeated_options_with_last_value_winning() {
-    let output = probe_run(&["--target", "prod", "--only", "cli"]);
-    assert_eq!(
-        String::from_utf8_lossy(&output.stderr),
-        "probe run: not implemented yet\n"
-    );
+    let fixture = ProbeFixture::new("probe-repeated", CLI_VERSION_SCENARIO);
+    let output = fixture.run(&["--target", "prod", "--only", "cli"]);
+    assert_eq!(output.status.code(), Some(0));
+    let run_json =
+        std::fs::read_to_string(fixture.run_dir().join("run.json")).expect("read run.json");
+    assert!(run_json.contains("\"target\": \"prod\""), "{run_json}");
 }

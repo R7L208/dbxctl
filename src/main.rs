@@ -1,7 +1,11 @@
 mod args;
 mod databricks;
+mod evidence;
+mod exit;
 mod json;
 mod probe;
+#[cfg(test)]
+mod test_support;
 
 use std::env;
 use std::ffi::{OsStr, OsString};
@@ -70,31 +74,17 @@ fn run_with_binary(cli: Cli, binary: &OsStr) -> Result<ExitCode, String> {
         Cli::Doctor => Ok(databricks::run_doctor(binary)),
         Cli::Databricks(args) => databricks::run_passthrough(binary, args),
         Cli::Probe(args) => {
-            // Check if top-level probe help is requested (no subcommand or --help as first arg)
-            if args.is_empty() {
+            // Top-level probe help: no subcommand, or only a help argument.
+            let help_only = match args.as_slice() {
+                [] => true,
+                [argument] => matches!(argument.to_str(), Some("--help" | "-h" | "help")),
+                _ => false,
+            };
+            if help_only {
                 probe::print_probe_help();
-                Ok(ExitCode::SUCCESS)
-            } else if args.len() == 1 {
-                let arg = args[0].to_string_lossy();
-                if arg == "--help" || arg == "-h" || arg == "help" {
-                    probe::print_probe_help();
-                    Ok(ExitCode::SUCCESS)
-                } else {
-                    let command = probe::parse_probe(&args)?;
-                    if matches!(command, probe::ProbeCommand::Help) {
-                        Ok(ExitCode::SUCCESS)
-                    } else {
-                        probe::run_probe(command)
-                    }
-                }
-            } else {
-                let command = probe::parse_probe(&args)?;
-                if matches!(command, probe::ProbeCommand::Help) {
-                    Ok(ExitCode::SUCCESS)
-                } else {
-                    probe::run_probe(command)
-                }
+                return Ok(ExitCode::SUCCESS);
             }
+            probe::run_probe(probe::parse_probe(&args)?, binary)
         }
     }
 }
@@ -105,7 +95,7 @@ fn main() -> ExitCode {
         Ok(code) => code,
         Err(error) => {
             eprintln!("error: {error}");
-            ExitCode::FAILURE
+            exit::Exit::Usage.into()
         }
     }
 }

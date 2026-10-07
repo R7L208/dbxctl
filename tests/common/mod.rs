@@ -1,9 +1,33 @@
 #![allow(dead_code)]
 
+pub mod scenario;
+
 use std::env;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::OnceLock;
+
+/// A scratch directory, removed when dropped. `name` must be unique per test.
+pub struct TempDir(PathBuf);
+
+impl TempDir {
+    pub fn new(name: &str) -> Self {
+        let path = env::temp_dir().join(format!("dbxctl-it-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&path);
+        std::fs::create_dir_all(&path).expect("create scratch directory");
+        Self(path)
+    }
+
+    pub fn path(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl Drop for TempDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
 
 pub fn dbxctl() -> Command {
     Command::new(env!("CARGO_BIN_EXE_dbxctl"))

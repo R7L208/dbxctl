@@ -1,0 +1,6 @@
+# Databricks CLI 1.13.0 answering the minimal `cli` check (#30).
+# Format: tests/fixtures/fake_databricks.rs, `replay`.
+case
+arg --version
+stdout Databricks CLI v1.13.0\n
+exit 0
