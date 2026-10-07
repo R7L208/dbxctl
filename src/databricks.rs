@@ -8,7 +8,7 @@ use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::thread;
 use std::time::{Duration, Instant};
 
-const MINIMUM_DATABRICKS_VERSION: Version = Version::new(1, 13, 0);
+pub(crate) const MINIMUM_DATABRICKS_VERSION: Version = Version::new(1, 13, 0);
 const POLL_INTERVAL: Duration = Duration::from_millis(10);
 // How long to wait for the output pipes to close after the process is gone. A
 // descendant that inherited them (for example Terraform under `databricks
@@ -275,15 +275,14 @@ fn passthrough_exit_code(status: ExitStatus) -> i32 {
 
 #[cfg(test)]
 mod tests {
-    use std::ffi::{OsStr, OsString};
-    use std::path::{Path, PathBuf};
+    use std::ffi::OsString;
     use std::process::Command;
-    use std::sync::OnceLock;
     use std::time::{Duration, Instant};
 
     use super::{
         MINIMUM_DATABRICKS_VERSION, Version, run_captured, run_captured_command, validate,
     };
+    use crate::test_support::fake_databricks;
 
     // Generous bound for "returned promptly" on slow CI runners; every case
     // below would otherwise take at least five seconds.
@@ -417,28 +416,5 @@ mod tests {
         assert!(captured.status.success());
         assert_eq!(captured.stdout, vec![b'o'; BYTES]);
         assert_eq!(captured.stderr, vec![b'e'; BYTES]);
-    }
-
-    fn fake_databricks() -> &'static Path {
-        static BINARY: OnceLock<PathBuf> = OnceLock::new();
-        BINARY.get_or_init(compile_fake).as_path()
-    }
-
-    fn compile_fake() -> PathBuf {
-        let output_dir =
-            std::env::temp_dir().join(format!("dbxctl-unit-fixture-{}", std::process::id()));
-        std::fs::create_dir_all(&output_dir).expect("create fixture output directory");
-        let binary = output_dir.join(format!("fake-databricks{}", std::env::consts::EXE_SUFFIX));
-        let source =
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/fake_databricks.rs");
-        let status = Command::new(OsStr::new("rustc"))
-            .args([OsStr::new("--edition"), OsStr::new("2024")])
-            .arg(source)
-            .arg(OsStr::new("-o"))
-            .arg(&binary)
-            .status()
-            .expect("execute rustc for unit-test fixture");
-        assert!(status.success(), "compile Rust Databricks fixture");
-        binary
     }
 }

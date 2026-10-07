@@ -68,6 +68,15 @@ executable and exercise the real process boundary. They cover:
 - minimum supported Databricks CLI enforcement; and
 - wrapper commands that do not require Databricks.
 
+Probe tests replay fake-CLI scenarios. `ScenarioCli` in
+`tests/common/scenario.rs` links the fake into a scratch directory next to a
+scenario file that maps each argv to stdout, stderr, and an exit code
+(`tests/fixtures/scenarios/`). The fake appends every argv to an invocation
+log, and `assert_no_mutations` fails on any command not known to be read-only.
+Unit tests share the same helper and inject a fixed clock, so a probe run
+produces byte-identical files. `tests/layering.rs` scans `src/` to keep
+`use crate::probe` and `CheckId` inside `src/probe/`.
+
 Run them with:
 
 ```console

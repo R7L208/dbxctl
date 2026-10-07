@@ -1,13 +1,10 @@
+pub(crate) mod cli;
+
 use std::collections::HashSet;
 use std::ffi::{OsStr, OsString};
 
 use crate::args::Parser;
-
-/// All valid check IDs for the lineage suite (from #23 contract).
-const VALID_CHECK_IDS: &[&str] = &[
-    "cli", "validate", "plan", "state", "v8", "v1", "api", "v2", "v3", "v11", "v9", "v4", "v6",
-    "v10", "v7",
-];
+use crate::probe::model::CheckId;
 
 /// Check requirements: whether each check needs warehouse-id and/or scope-catalog.
 /// Derived from #23 checks table: checks using Statement Execution need warehouse-id;
@@ -17,30 +14,37 @@ struct CheckRequirements {
     needs_catalog: bool,
 }
 
-fn check_requirements(id: &str) -> CheckRequirements {
+fn check_requirements(id: CheckId) -> CheckRequirements {
     match id {
         // Offline/bundle-only checks (no warehouse or catalog needed)
-        "cli" | "validate" | "plan" | "state" | "v8" | "v1" | "api" | "v6" | "v10" | "v7" => {
-            CheckRequirements {
-                needs_warehouse: false,
-                needs_catalog: false,
-            }
-        }
+        CheckId::Cli
+        | CheckId::Validate
+        | CheckId::Plan
+        | CheckId::State
+        | CheckId::V8
+        | CheckId::V1
+        | CheckId::Api
+        | CheckId::V6
+        | CheckId::V10
+        | CheckId::V7 => CheckRequirements {
+            needs_warehouse: false,
+            needs_catalog: false,
+        },
         // Checks requiring warehouse (Statement Execution)
-        "v2" | "v9" | "v4" => CheckRequirements {
+        CheckId::V2 | CheckId::V9 | CheckId::V4 => CheckRequirements {
             needs_warehouse: true,
             needs_catalog: false,
         }, // v2: wait_timeout with SELECT 1; v9: Lineage via API; v4: Refresh history via API
         // Checks requiring both warehouse and catalog
-        "v3" | "v11" => CheckRequirements {
+        CheckId::V3 | CheckId::V11 => CheckRequirements {
             needs_warehouse: true,
             needs_catalog: true,
         }, // MV/metric-view checks
-        _ => CheckRequirements {
-            needs_warehouse: false,
-            needs_catalog: false,
-        },
     }
+}
+
+fn valid_check_ids() -> String {
+    CheckId::ALL.map(CheckId::as_str).join(", ")
 }
 
 /// Parse and validate the --only option. Returns a `HashSet` for efficient duplicate detection.
@@ -58,10 +62,10 @@ fn parse_only_option(parser: &mut Parser) -> Result<Option<Vec<String>>, String>
             if id.is_empty() {
                 return Err("--only: empty check ID (consecutive commas?)".to_string());
             }
-            if !VALID_CHECK_IDS.contains(&id.as_str()) {
+            if CheckId::parse(id).is_none() {
                 return Err(format!(
                     "--only: unknown check ID '{id}' (valid: {})",
-                    VALID_CHECK_IDS.join(", ")
+                    valid_check_ids()
                 ));
             }
             if !seen.insert(id.clone()) {
@@ -92,32 +96,29 @@ fn validate_mutation_inputs(parser: &mut Parser, allow_mutations: bool) -> Resul
 }
 
 /// Determine selected checks in canonical order based on --only option.
-fn determine_selected_checks(only: Option<&Vec<String>>) -> Vec<&'static str> {
-    let only_set: HashSet<String> = if let Some(checks) = only {
-        checks.iter().cloned().collect()
-    } else {
-        HashSet::new()
-    };
+fn determine_selected_checks(only: Option<&Vec<String>>) -> Vec<CheckId> {
+    let only_set: HashSet<&str> = only
+        .map(|checks| checks.iter().map(String::as_str).collect())
+        .unwrap_or_default();
 
     if only_set.is_empty() {
-        VALID_CHECK_IDS.to_vec()
+        CheckId::ALL.to_vec()
     } else {
-        VALID_CHECK_IDS
-            .iter()
-            .filter(|id| only_set.iter().any(|s| s.as_str() == **id))
-            .copied()
+        CheckId::ALL
+            .into_iter()
+            .filter(|id| only_set.contains(id.as_str()))
             .collect()
     }
 }
 
 /// Check resource requirements and collect checks that need each resource.
 fn check_resource_requirements(
-    selected_checks: &[&'static str],
+    selected_checks: &[CheckId],
 ) -> (bool, bool, Vec<&'static str>, Vec<&'static str>) {
     let mut needs_warehouse = false;
     let mut needs_catalog = false;
 
-    for check_id in selected_checks {
+    for &check_id in selected_checks {
         let reqs = check_requirements(check_id);
         if reqs.needs_warehouse {
             needs_warehouse = true;
@@ -129,13 +130,13 @@ fn check_resource_requirements(
 
     let warehouse_checks: Vec<&'static str> = selected_checks
         .iter()
-        .filter(|id| check_requirements(id).needs_warehouse)
-        .copied()
+        .filter(|&&id| check_requirements(id).needs_warehouse)
+        .map(|id| id.as_str())
         .collect();
     let catalog_checks: Vec<&'static str> = selected_checks
         .iter()
-        .filter(|id| check_requirements(id).needs_catalog)
-        .copied()
+        .filter(|&&id| check_requirements(id).needs_catalog)
+        .map(|id| id.as_str())
         .collect();
 
     (
@@ -148,17 +149,13 @@ fn check_resource_requirements(
 
 #[derive(Debug, Default)]
 pub(crate) struct LineageOptions {
-    #[allow(dead_code)] // Used by #30 (orchestration)
     pub(crate) bundle_root: Option<OsString>,
-    #[allow(dead_code)] // Used by #30
     pub(crate) target: Option<OsString>,
-    #[allow(dead_code)] // Used by #30
     pub(crate) profile: Option<OsString>,
-    #[allow(dead_code)] // Used by #30
+    #[allow(dead_code)] // Used by the SQL probes (#33)
     pub(crate) warehouse_id: Option<OsString>,
-    #[allow(dead_code)] // Used by #30
+    #[allow(dead_code)] // Used by the catalog-scoped probes (#33)
     pub(crate) scope_catalog: Option<OsString>,
-    #[allow(dead_code)] // Used by #30
     pub(crate) only: Option<Vec<String>>,
     #[allow(dead_code)] // Used by #37
     pub(crate) allow_mutations: bool,
@@ -168,8 +165,15 @@ pub(crate) struct LineageOptions {
     pub(crate) v10_scratch_schema: Option<OsString>,
     #[allow(dead_code)] // Used by #37
     pub(crate) v7_pipeline_id: Option<OsString>,
-    #[allow(dead_code)] // Used by #30
     pub(crate) promote_to: Option<OsString>,
+}
+
+impl LineageOptions {
+    /// The checks selected by `--only` (all checks without it), in canonical
+    /// order.
+    pub(crate) fn selected_checks(&self) -> Vec<CheckId> {
+        determine_selected_checks(self.only.as_ref())
+    }
 }
 
 pub(crate) fn parse_lineage_options(parser: &mut Parser) -> Result<LineageOptions, String> {
