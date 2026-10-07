@@ -53,7 +53,37 @@ Without a proxy, no check runs and behavior is unchanged, which keeps CI on the
 public index. The proxy URL is never printed, so it may contain credentials.
 
 Whichever index is used, every file must match a hash in
-`requirements/mdformat.txt`, so a mirror cannot substitute different packages.
+`requirements/mdformat.txt` (or `requirements/zizmor.txt` for the workflow
+scanner), so a mirror cannot substitute different packages.
+
+## Workflow Scanning
+
+GitHub Actions workflows and the Dependabot configuration are scanned with
+zizmor 1.30.1, installed from the hash-locked wheels in
+`requirements/zizmor.txt` into `target/tools/zizmor`:
+
+```console
+scripts/workflows.sh check
+```
+
+Like the Markdown script, it requires Python 3.11 or newer, uses the same
+[package index](#package-index) selection, and exits nonzero on any finding.
+Without `GH_TOKEN` it runs with `--offline`, which skips the audits that query
+the GitHub API, such as `impostor-commit`, `known-vulnerable-actions`, and
+`ref-confusion`. To run the full CI scan locally, export a token:
+
+```console
+GH_TOKEN="$(gh auth token)" scripts/workflows.sh check
+```
+
+The `Workflow security` CI workflow runs the same script on any change to
+`.github/`, `requirements/zizmor.txt`, or `scripts/workflows.sh`. Every
+`uses:` reference must be pinned to a full commit SHA with a version comment,
+for example `actions/checkout@<40-hex SHA> # v7.0.1`; a tag or branch fails the
+scan. Pass upstream values (step outputs, event fields) to `run:` scripts
+through `env:` rather than `${{ ... }}` in the script body. If a finding must be
+accepted, add `# zizmor: ignore[<audit>]` with a one-line reason on the flagged
+line; see [Workflow Scanning](security.md#workflow-scanning) for the policy.
 
 ## Test Layers
 
@@ -165,7 +195,7 @@ scripts/update-pins.py --help
 ## CI Platforms
 
 - Linux: Rust and Markdown formatting, Clippy, tests, coverage, analysis,
-  upstream contract, RustSec audit, and dependency policy
+  upstream contract, RustSec audit, dependency policy, and workflow scanning
 - macOS: native tests and analysis
 - Windows: native tests and analysis
 

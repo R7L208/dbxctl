@@ -45,7 +45,7 @@ jobs:
     needs: pins
     runs-on: ubuntu-24.04
     container:
-      image: ${{ needs.pins.outputs.rust_image }}
+      image: ${{ needs.pins.outputs.rust_image }} # zizmor: ignore[unpinned-images] digest-pinned via .github/pins.json
     timeout-minutes: 20
     permissions:
       contents: read
