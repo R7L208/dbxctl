@@ -144,9 +144,11 @@ re-verifies its checksum.
 
 The pin defines the tested version. `TESTED_DATABRICKS_VERSION` in
 `src/databricks.rs` mirrors it for `doctor`, and discovery and the pin updater
-tests fail when the two differ. The tested range runs from the minimum through
-the tested version. `doctor` rejects a CLI below the minimum. For a CLI newer
-than the tested version, it prints a warning to stderr and still exits 0. While
+tests fail when the two differ. CI exercises only the pinned version. Versions
+from the minimum through the tested version are supported without a warning,
+but once the pin moves above the minimum, the versions in between are not run
+in CI. `doctor` rejects a CLI below the minimum. For a CLI newer than the
+tested version, it prints a warning to stderr and still exits 0. While
 the tested version equals the minimum, a unit test checks that they agree.
 
 To raise the supported version, change these together in one reviewed pull

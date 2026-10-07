@@ -231,12 +231,13 @@ fn installed_version(binary: &OsStr, timeout: Duration) -> Result<Version, Strin
         .ok_or_else(|| format!("could not parse Databricks CLI version from {stdout:?}"))
 }
 
-/// A Databricks CLI version that meets the minimum, and whether it is within
-/// the tested range (from the minimum through the tested version).
+/// A Databricks CLI version that meets the minimum, and whether it is at or
+/// below the tested version. The fields are private so every value comes from
+/// `classify`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct SupportedVersion {
-    pub(crate) version: Version,
-    pub(crate) tested: bool,
+    version: Version,
+    tested: bool,
 }
 
 impl SupportedVersion {
@@ -254,12 +255,20 @@ impl SupportedVersion {
         })
     }
 
+    pub(crate) fn version(self) -> Version {
+        self.version
+    }
+
+    pub(crate) fn tested(self) -> bool {
+        self.tested
+    }
+
     /// The warning for an untested version, without a `warning: ` prefix.
     pub(crate) fn untested_warning(self) -> Option<String> {
-        (!self.tested).then(|| {
+        (!self.tested()).then(|| {
             format!(
                 "Databricks CLI {} is newer than the tested version {TESTED_DATABRICKS_VERSION}; output shapes may differ",
-                self.version
+                self.version()
             )
         })
     }
@@ -275,7 +284,7 @@ pub(crate) fn run_doctor(binary: &OsStr) -> ExitCode {
         Ok(supported) => {
             println!(
                 "Databricks CLI {} ({})",
-                supported.version,
+                supported.version(),
                 binary.display()
             );
             // stderr keeps doctor's stdout identical for tested and untested
@@ -361,11 +370,11 @@ mod tests {
         );
 
         let tested = SupportedVersion::classify(TESTED_DATABRICKS_VERSION).expect("tested");
-        assert!(tested.tested);
+        assert!(tested.tested());
         assert_eq!(tested.untested_warning(), None);
 
         let newer = SupportedVersion::classify(Version::new(1, 13, 1)).expect("newer");
-        assert!(!newer.tested);
+        assert!(!newer.tested());
         assert_eq!(
             newer.untested_warning().as_deref(),
             Some(
