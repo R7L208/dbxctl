@@ -17,10 +17,13 @@
 //!   integers and floats.
 //! - **Size:** input size is not limited here; captured output is bounded by
 //!   the transport (#31).
+//! - **Output:** documents the crate writes are built from [`Value`], which
+//!   has no floats, so every written number is an exact integer.
 
-// The probe orchestration (#30) is the first consumer of this module.
+// The probe orchestration (#30) uses only part of this module so far.
 #![cfg_attr(not(test), allow(dead_code))]
 
+use std::collections::BTreeMap;
 use std::fmt;
 
 /// A parsed JSON document.
@@ -40,6 +43,17 @@ pub(crate) enum Kind {
     String,
     Array,
     Object,
+}
+
+/// A JSON value under construction, for documents the crate writes.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum Value {
+    Null,
+    Bool(bool),
+    Integer(i64),
+    String(String),
+    Array(Vec<Value>),
+    Object(BTreeMap<String, Value>),
 }
 
 /// A JSON parse or serialization error.
@@ -75,6 +89,52 @@ pub(crate) fn parse(input: &str) -> Result<Document, Error> {
 /// Parses a JSON document from bytes, which must be UTF-8.
 pub(crate) fn parse_bytes(input: &[u8]) -> Result<Document, Error> {
     serde_json::from_slice(input).map(Document).map_err(Error)
+}
+
+impl Value {
+    /// An object from `(key, value)` members. A repeated key keeps the last
+    /// value, as in parsed input.
+    pub(crate) fn object<K: Into<String>>(members: impl IntoIterator<Item = (K, Value)>) -> Self {
+        Self::Object(
+            members
+                .into_iter()
+                .map(|(key, value)| (key.into(), value))
+                .collect(),
+        )
+    }
+
+    pub(crate) fn string(text: impl Into<String>) -> Self {
+        Self::String(text.into())
+    }
+
+    /// A string, or `null` when absent.
+    pub(crate) fn optional_string(text: Option<impl Into<String>>) -> Self {
+        text.map_or(Self::Null, Self::string)
+    }
+
+    fn into_serde(self) -> serde_json::Value {
+        match self {
+            Self::Null => serde_json::Value::Null,
+            Self::Bool(value) => serde_json::Value::Bool(value),
+            Self::Integer(value) => serde_json::Value::from(value),
+            Self::String(value) => serde_json::Value::String(value),
+            Self::Array(items) => {
+                serde_json::Value::Array(items.into_iter().map(Self::into_serde).collect())
+            }
+            Self::Object(members) => serde_json::Value::Object(
+                members
+                    .into_iter()
+                    .map(|(key, value)| (key, value.into_serde()))
+                    .collect(),
+            ),
+        }
+    }
+}
+
+impl From<Value> for Document {
+    fn from(value: Value) -> Self {
+        Self(value.into_serde())
+    }
 }
 
 impl Document {
@@ -231,7 +291,7 @@ fn with_newline(mut text: String) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{Kind, parse, parse_bytes};
+    use super::{Document, Kind, Value, parse, parse_bytes};
 
     fn doc(text: &str) -> super::Document {
         parse(text).expect("valid JSON")
@@ -482,6 +542,30 @@ mod tests {
                 .to_compact_string()
                 .expect("serialize"),
             "[1,2.5,\"s\",null,true]\n"
+        );
+    }
+
+    #[test]
+    fn built_values_match_parsed_documents() {
+        let built = Document::from(Value::object([
+            (
+                "z",
+                Value::Array(vec![Value::Integer(-1), Value::Bool(false)]),
+            ),
+            ("a", Value::optional_string(None::<&str>)),
+            ("m", Value::optional_string(Some("é"))),
+            (
+                "o",
+                Value::object([("k", Value::Null), ("k", Value::string("last"))]),
+            ),
+        ]));
+        assert_eq!(
+            built,
+            doc(r#"{"a":null,"m":"é","o":{"k":"last"},"z":[-1,false]}"#)
+        );
+        assert_eq!(
+            built.to_compact_string().expect("serialize"),
+            "{\"a\":null,\"m\":\"\u{e9}\",\"o\":{\"k\":\"last\"},\"z\":[-1,false]}\n"
         );
     }
 }
