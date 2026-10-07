@@ -1,3 +1,4 @@
+use std::convert::Infallible;
 use std::env;
 use std::ffi::{OsStr, OsString};
 use std::fmt;
@@ -251,26 +252,41 @@ pub(crate) fn run_doctor(binary: &OsStr) -> ExitCode {
     }
 }
 
-pub(crate) fn run_passthrough(binary: &OsStr, args: Vec<OsString>) -> Result<ExitCode, String> {
-    let status = Command::new(binary)
-        .args(args)
-        .status()
-        .map_err(|error| format!("failed to run Databricks CLI: {error}"))?;
-    std::process::exit(passthrough_exit_code(status));
+/// Runs the Databricks CLI in place of `dbxctl` and only returns if it could
+/// not be started.
+///
+/// On Unix the `dbxctl` process is replaced with the CLI (`execvp`), so the CLI
+/// keeps the same PID, process group, and terminal, and starts with the same
+/// signal state it would have if run directly (`exec` resets caught signals).
+/// It alone receives Ctrl-C, controls its own shutdown, and its exit status or
+/// terminating signal is what the caller observes.
+///
+/// Other platforms have no `exec`; there the CLI runs as a child and `dbxctl`
+/// exits with its exit code. See the passthrough interrupt decision in
+/// `docs/security.md`.
+pub(crate) fn run_passthrough(binary: &OsStr, args: Vec<OsString>) -> Result<Infallible, String> {
+    let mut command = Command::new(binary);
+    command.args(args);
+    Err(format!(
+        "failed to run Databricks CLI: {}",
+        hand_off(&mut command)
+    ))
 }
 
+// Each variant returns only the error that kept the CLI from starting.
 #[cfg(unix)]
-fn passthrough_exit_code(status: ExitStatus) -> i32 {
-    use std::os::unix::process::ExitStatusExt;
+fn hand_off(command: &mut Command) -> std::io::Error {
+    use std::os::unix::process::CommandExt;
 
-    status
-        .code()
-        .unwrap_or_else(|| 128 + status.signal().unwrap_or(0))
+    command.exec()
 }
 
 #[cfg(not(unix))]
-fn passthrough_exit_code(status: ExitStatus) -> i32 {
-    status.code().unwrap_or(1)
+fn hand_off(command: &mut Command) -> std::io::Error {
+    match command.status() {
+        Ok(status) => std::process::exit(status.code().unwrap_or(1)),
+        Err(error) => error,
+    }
 }
 
 #[cfg(test)]
