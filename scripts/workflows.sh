@@ -16,7 +16,13 @@ usage() {
 
 [[ $# -eq 1 && "$1" == check ]] || usage
 
-if [[ ! -x "${tool_root}/bin/python" ]]; then
+# Windows virtual environments put executables in Scripts/ rather than bin/.
+case "$(uname -s)" in
+  MINGW* | MSYS* | CYGWIN*) bin="${tool_root}/Scripts" exe=".exe" ;;
+  *) bin="${tool_root}/bin" exe="" ;;
+esac
+
+if [[ ! -x "${bin}/python${exe}" ]]; then
   "${python}" -c 'import sys; raise SystemExit(sys.version_info < (3, 11))'
   "${python}" -m venv "${tool_root}"
 fi
@@ -33,7 +39,7 @@ if [[ -z "${PIP_INDEX_URL:-}" ]]; then
   if [[ -z "${proxy}" && -f "${root}/.dbxctl.local" ]]; then
     proxy="$(sed -n 's/^DBXCTL_PYPI_PROXY=//p' "${root}/.dbxctl.local" | tail -n 1 | tr -d '\r')"
   fi
-  if [[ -n "${proxy}" ]] && ! "${tool_root}/bin/python" -c \
+  if [[ -n "${proxy}" ]] && ! "${bin}/python${exe}" -c \
     'import urllib.request; urllib.request.urlopen("https://pypi.org/simple/", timeout=3)' \
     2>/dev/null; then
     export PIP_INDEX_URL="${proxy}"
@@ -41,15 +47,12 @@ if [[ -z "${PIP_INDEX_URL:-}" ]]; then
   fi
 fi
 
-"${tool_root}/bin/python" -m pip install \
+"${bin}/python${exe}" -m pip install \
   --no-input --no-deps --require-hashes --only-binary=:all: \
   --requirement "${requirements}"
-"${tool_root}/bin/python" -m pip check
+"${bin}/python${exe}" -m pip check
 
-case "$(uname -s)" in
-  MINGW* | MSYS* | CYGWIN*) zizmor="${tool_root}/Scripts/zizmor.exe" ;;
-  *) zizmor="${tool_root}/bin/zizmor" ;;
-esac
+zizmor="${bin}/zizmor${exe}"
 [[ "$("${zizmor}" --version)" == "zizmor ${version}" ]]
 
 # The impostor-commit, known-vulnerable-actions, ref-confusion, and other

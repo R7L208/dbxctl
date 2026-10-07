@@ -1,5 +1,8 @@
 name: Workflow security
 
+# The paths filter means this job does not run on every pull request. Do not
+# make it a required status check while the filter exists, or pull requests
+# that touch none of these paths will wait for it indefinitely.
 on:
   pull_request:
     paths:
