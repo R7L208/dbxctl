@@ -2,7 +2,7 @@
 
 ## Toolchain
 
-Rust 1.89.0 is pinned in `rust-toolchain.toml` with Clippy, Rustfmt, and LLVM
+Rust 1.99.0 is pinned in `rust-toolchain.toml` with Clippy, Rustfmt, and LLVM
 coverage tools. Cargo builds must use the committed lockfile:
 
 ```console

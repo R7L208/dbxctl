@@ -16,7 +16,7 @@ access and deterministic output; see the recorded
 ## Requirements
 
 - Databricks CLI 1.13.0 or newer
-- Rust 1.89.0 for source builds
+- Rust 1.99.0 for source builds
 - Databricks authentication configured for commands that access a workspace
 
 The pinned Rust toolchain is selected automatically through
