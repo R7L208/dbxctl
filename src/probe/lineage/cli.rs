@@ -17,12 +17,13 @@ const TIMEOUT: Duration = Duration::from_secs(30);
 pub(crate) fn run(context: &Context<'_>) -> Result<Finding, String> {
     let args = [OsString::from("--version")];
     let result = run_captured(context.binary, &args, TIMEOUT);
-    let evidence =
-        vec![
-            context
-                .run
-                .record_invocation(CHECK.as_str(), "version", &args, &result)?,
-        ];
+    let evidence = vec![context.run.record_invocation(
+        CHECK.as_str(),
+        "version",
+        context.binary,
+        &args,
+        &result,
+    )?];
     let unknown = |reason: String| {
         Finding::unknown(
             CHECK,
@@ -35,7 +36,7 @@ pub(crate) fn run(context: &Context<'_>) -> Result<Finding, String> {
         )
     };
 
-    // The error text, which can name local paths, stays in the evidence.
+    // The error text stays in the evidence, with the binary path removed.
     let Ok(captured) = result else {
         return Ok(Finding::failed(
             CHECK,
@@ -167,6 +168,10 @@ mod tests {
         );
         let record =
             fs::read_to_string(run_dir.path().join("evidence/cli/version.json")).expect("read");
-        assert!(record.contains("no-such-databricks"), "{record}");
+        assert!(
+            record.contains("\"error\": \"could not execute databricks: "),
+            "{record}"
+        );
+        assert!(!record.contains("no-such-databricks"), "{record}");
     }
 }

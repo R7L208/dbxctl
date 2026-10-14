@@ -17,7 +17,7 @@
 //! This module names checks only by their string IDs, so it stays independent
 //! of the probe module that defines them.
 
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::fs::{self, DirBuilder, OpenOptions};
 use std::io::{ErrorKind, Write};
 use std::path::{Path, PathBuf};
@@ -209,12 +209,14 @@ impl RunDir {
     /// `<step>.stdout` and `<step>.stderr` when the process ran. Returns the
     /// reference to the JSON record.
     ///
-    /// The record names the program `databricks` rather than the resolved
-    /// path, so evidence does not depend on where the CLI is installed.
+    /// The record names the program `databricks` rather than `binary`, the
+    /// resolved path, and replaces that path in error text the same way, so
+    /// evidence does not depend on where the CLI is installed.
     pub(crate) fn record_invocation(
         &self,
         check: &str,
         step: &str,
+        binary: &OsStr,
         args: &[OsString],
         result: &Result<Captured, String>,
     ) -> Result<String, String> {
@@ -242,7 +244,7 @@ impl RunDir {
                 ]);
             }
             Err(problem) => record.extend([
-                ("error", Value::string(problem.as_str())),
+                ("error", Value::string(without_binary_path(problem, binary))),
                 ("exit_code", Value::Null),
                 ("signal", Value::Null),
                 ("stdout", Value::Null),
@@ -253,6 +255,16 @@ impl RunDir {
             .to_pretty_string()
             .map_err(|error| format!("could not serialize {step} evidence: {error}"))?;
         self.write_evidence(check, &format!("{step}.json"), text.as_bytes())
+    }
+}
+
+/// Replaces the resolved CLI path in `text` with `databricks`.
+fn without_binary_path(text: &str, binary: &OsStr) -> String {
+    let path = binary.display().to_string();
+    if path.is_empty() {
+        text.to_owned()
+    } else {
+        text.replace(&path, "databricks")
     }
 }
 
@@ -400,11 +412,11 @@ fn replace_with(temp: &Path, path: &Path, contents: &[u8]) -> std::io::Result<()
 
 #[cfg(test)]
 pub(crate) mod tests {
-    use std::ffi::OsString;
+    use std::ffi::{OsStr, OsString};
     use std::fs;
     use std::path::Path;
 
-    use super::{Clock, RunDir, SystemClock, UtcTime, check_name, timestamp};
+    use super::{Clock, RunDir, SystemClock, UtcTime, check_name, timestamp, without_binary_path};
     use crate::databricks::run_captured;
     use crate::test_support::{TempDir, fake_databricks};
 
@@ -712,7 +724,13 @@ pub(crate) mod tests {
             std::time::Duration::from_secs(5),
         );
         let reference = run
-            .record_invocation("cli", "jobs", &args, &captured)
+            .record_invocation(
+                "cli",
+                "jobs",
+                fake_databricks().as_os_str(),
+                &args,
+                &captured,
+            )
             .expect("record");
         assert_eq!(reference, "evidence/cli/jobs.json");
         assert_eq!(
@@ -737,8 +755,9 @@ pub(crate) mod tests {
             .record_invocation(
                 "cli",
                 "version",
+                OsStr::new("/home/alice/bin/databricks"),
                 &[OsString::from("--version")],
-                &Err("could not execute databricks: not found".to_owned()),
+                &Err("could not execute /home/alice/bin/databricks: not found".to_owned()),
             )
             .expect("record");
         let record = fs::read_to_string(run.path().join(reference)).expect("read record");
@@ -748,6 +767,19 @@ pub(crate) mod tests {
         );
         assert!(record.contains("\"stdout\": null"), "{record}");
         assert!(!run.path().join("evidence/cli/version.stdout").exists());
+    }
+
+    #[test]
+    fn removes_the_binary_path_from_error_text() {
+        let binary = OsStr::new("/opt/cli/databricks");
+        assert_eq!(
+            without_binary_path("/opt/cli/databricks timed out after 5 ms", binary),
+            "databricks timed out after 5 ms"
+        );
+        assert_eq!(
+            without_binary_path("unrelated", OsStr::new("")),
+            "unrelated"
+        );
     }
 
     #[cfg(unix)]
@@ -763,7 +795,7 @@ pub(crate) mod tests {
             status: std::process::ExitStatus::from_raw(6),
         };
         let reference = run
-            .record_invocation("cli", "abort", &[], &Ok(captured))
+            .record_invocation("cli", "abort", OsStr::new("databricks"), &[], &Ok(captured))
             .expect("record");
         let record = fs::read_to_string(run.path().join(reference)).expect("read record");
         assert!(record.contains("\"exit_code\": null"), "{record}");
