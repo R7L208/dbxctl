@@ -214,7 +214,7 @@ fn findings_markdown(run_dir: &RunDir, findings: &[Finding]) -> String {
     for finding in findings {
         let verdict = finding
             .verdict()
-            .map_or(String::new(), |verdict| format!("`{}`", verdict.as_str()));
+            .map_or(String::new(), |verdict| code_cell(verdict.as_str()));
         let _ = writeln!(
             text,
             "| `{}` | {} | {} | {} |",
@@ -228,7 +228,26 @@ fn findings_markdown(run_dir: &RunDir, findings: &[Finding]) -> String {
 }
 
 fn table_cell(text: &str) -> String {
-    text.replace('|', "\\|").replace('\n', " ")
+    text.replace('|', "\\|").replace(['\r', '\n'], " ")
+}
+
+/// A table cell holding `text` as inline code. The fence is one backtick
+/// longer than any run of backticks in `text`, so the text cannot end the
+/// code span early.
+fn code_cell(text: &str) -> String {
+    let text = table_cell(text);
+    let longest = text
+        .split(|character| character != '`')
+        .map(str::len)
+        .max()
+        .unwrap_or(0);
+    let fence = "`".repeat(longest + 1);
+    let pad = if text.starts_with('`') || text.ends_with('`') {
+        " "
+    } else {
+        ""
+    };
+    format!("{fence}{pad}{text}{pad}{fence}")
 }
 
 #[cfg(test)]
@@ -238,7 +257,7 @@ mod tests {
     use std::fs;
     use std::path::{Path, PathBuf};
 
-    use super::{Context, Plan, run, run_check, table_cell};
+    use super::{Context, Plan, code_cell, run, run_check, table_cell};
     use crate::args::Parser;
     use crate::evidence::tests::{FIXED_TIME, FixedClock};
     use crate::evidence::{Clock, RunDir};
@@ -493,6 +512,11 @@ mod tests {
     #[test]
     fn report_cells_cannot_break_the_table() {
         assert_eq!(table_cell("a|b\nc"), "a\\|b c");
+        assert_eq!(table_cell("a\r\nb"), "a  b");
+        assert_eq!(code_cell("1.13.0"), "`1.13.0`");
+        assert_eq!(code_cell("a|b\nc"), "`a\\|b c`");
+        assert_eq!(code_cell("`x`"), "`` `x` ``");
+        assert_eq!(code_cell("a``b"), "```a``b```");
     }
 
     #[test]
