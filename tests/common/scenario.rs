@@ -70,6 +70,16 @@ pub fn parse_invocation_log(log: &str) -> Vec<Vec<String>> {
         .collect()
 }
 
+fn is_help_request(argv: &[String]) -> bool {
+    match argv.split_last() {
+        Some((last, path)) => {
+            (last == "--help" || last == "-h")
+                && path.iter().all(|argument| !argument.starts_with('-'))
+        }
+        None => false,
+    }
+}
+
 fn unescape(value: &str) -> String {
     let mut text = String::with_capacity(value.len());
     let mut characters = value.chars();
@@ -93,13 +103,13 @@ fn unescape(value: &str) -> String {
 /// read-only command. The command path is the leading run of arguments that
 /// are not flags, so an argv that starts with any other flag fails: its
 /// command cannot be identified without knowing which flags take values.
+///
+/// A help request counts only as a command path followed by a single `--help`
+/// or `-h`. Help anywhere else, such as a flag value in
+/// `bundle deploy --var -h`, does not exempt the invocation.
 pub fn assert_no_mutations(invocations: &[Vec<String>]) {
     for argv in invocations {
-        if argv == &["--version"]
-            || argv
-                .iter()
-                .any(|argument| argument == "--help" || argument == "-h")
-        {
+        if argv == &["--version"] || is_help_request(argv) {
             continue;
         }
         let path: Vec<&str> = argv

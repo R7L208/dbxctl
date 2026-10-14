@@ -82,3 +82,40 @@ pub(crate) fn read_tree(root: &Path) -> Vec<(String, Vec<u8>)> {
     files.sort();
     files
 }
+
+#[cfg(test)]
+mod tests {
+    use std::panic::catch_unwind;
+
+    use super::assert_no_mutations;
+
+    fn argv(arguments: &[&str]) -> Vec<String> {
+        arguments
+            .iter()
+            .map(|&argument| argument.to_owned())
+            .collect()
+    }
+
+    #[test]
+    fn accepts_help_only_after_a_command_path() {
+        for allowed in [
+            &["--help"][..],
+            &["-h"],
+            &["bundle", "deploy", "--help"],
+            &["bundle", "plan", "-h"],
+        ] {
+            assert_no_mutations(&[argv(allowed)]);
+        }
+        for rejected in [
+            &["bundle", "deploy", "--var", "-h"][..],
+            &["bundle", "deploy", "--help", "--auto-approve"],
+            &["bundle", "deploy", "-t", "dev", "--help"],
+        ] {
+            let invocations = [argv(rejected)];
+            assert!(
+                catch_unwind(|| assert_no_mutations(&invocations)).is_err(),
+                "{rejected:?} must not count as a help request"
+            );
+        }
+    }
+}
