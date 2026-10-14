@@ -4,8 +4,9 @@
 //! anything is written below `.dbxctl/`, that directory gets a `.gitignore`
 //! containing `*`. `.dbxctl/probe/`, which only dbxctl writes to, always gets
 //! its own, so raw evidence stays ignored even if a repository commits a
-//! different `.dbxctl/.gitignore`. None of the state directories may be a
-//! symlink, so evidence cannot be redirected out of the ignored tree.
+//! different `.dbxctl/.gitignore`. None of the state directories or
+//! `.gitignore` files may be a symlink, so evidence cannot be redirected out
+//! of the ignored tree and nothing outside it is overwritten.
 //!
 //! The run ID is the run's UTC start time (`20260102T030405Z`), with a
 //! zero-padded `-0002`, `-0003`, ... suffix when an earlier run already used
@@ -137,7 +138,7 @@ impl RunDir {
         write_gitignore(&state.join(".gitignore"))?;
         let probe_root = state.join("probe");
         create_real_dir(&probe_root)?;
-        write(&probe_root.join(".gitignore"), GITIGNORE)?;
+        write_real_file(&probe_root.join(".gitignore"), GITIGNORE)?;
         let suite_root = probe_root.join(suite);
         create_real_dir(&suite_root)?;
 
@@ -289,7 +290,21 @@ fn write_gitignore(path: &Path) -> Result<(), String> {
         Ok(mut file) => file
             .write_all(GITIGNORE)
             .map_err(|error| format!("could not write {}: {error}", path.display())),
-        Err(error) if error.kind() == ErrorKind::AlreadyExists && path.is_file() => Ok(()),
+        // `create_new` does not follow a symlink, so check what is there.
+        Err(error) if error.kind() == ErrorKind::AlreadyExists => {
+            match fs::symlink_metadata(path) {
+                Ok(metadata) if metadata.is_file() => Ok(()),
+                Ok(metadata) if metadata.file_type().is_symlink() => Err(format!(
+                    "could not create {}: it is a symlink",
+                    path.display()
+                )),
+                Ok(_) => Err(format!(
+                    "could not create {}: it is not a file",
+                    path.display()
+                )),
+                Err(error) => Err(format!("could not create {}: {error}", path.display())),
+            }
+        }
         Err(error) => Err(format!("could not create {}: {error}", path.display())),
     }
 }
@@ -338,6 +353,17 @@ fn create_real_dir(path: &Path) -> Result<(), String> {
             "could not create directory {}: {error}",
             path.display()
         )),
+    }
+}
+
+/// Writes `path` unless it is a symlink, which `fs::write` would follow.
+fn write_real_file(path: &Path, contents: &[u8]) -> Result<(), String> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() => Err(format!(
+            "could not write {}: it is a symlink",
+            path.display()
+        )),
+        _ => write(path, contents),
     }
 }
 
@@ -459,6 +485,38 @@ pub(crate) mod tests {
                 0,
                 "{link}: nothing may be written through the symlink"
             );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rejects_symlinked_gitignore_files() {
+        use std::os::unix::fs::symlink;
+
+        for (link, dangling) in [
+            (".dbxctl/.gitignore", false),
+            (".dbxctl/.gitignore", true),
+            (".dbxctl/probe/.gitignore", false),
+        ] {
+            let temp = TempDir::new("evidence-symlinked-gitignore");
+            let target = temp.path().join("target");
+            if !dangling {
+                fs::write(&target, "keep\n").expect("write target");
+            }
+            let parent = Path::new(link).parent().expect("parent");
+            fs::create_dir_all(temp.path().join(parent)).expect("create parent");
+            symlink(&target, temp.path().join(link)).expect("symlink");
+            let error = RunDir::create(temp.path(), "lineage", FIXED_TIME).expect_err(link);
+            assert!(error.contains("is a symlink"), "{link}: {error}");
+            if dangling {
+                assert!(!target.exists(), "{link}: the target must not be created");
+            } else {
+                assert_eq!(
+                    fs::read_to_string(&target).expect("read target"),
+                    "keep\n",
+                    "{link}: the target must not be overwritten"
+                );
+            }
         }
     }
 
