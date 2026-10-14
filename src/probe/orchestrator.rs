@@ -233,14 +233,15 @@ fn table_cell(text: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::cell::Cell;
     use std::ffi::OsString;
     use std::fs;
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
 
     use super::{Context, Plan, run, run_check, table_cell};
     use crate::args::Parser;
-    use crate::evidence::RunDir;
     use crate::evidence::tests::{FIXED_TIME, FixedClock};
+    use crate::evidence::{Clock, RunDir};
     use crate::exit::Exit;
     use crate::probe::lineage::parse_lineage_options;
     use crate::probe::model::{CheckId, Finding, State};
@@ -450,6 +451,43 @@ mod tests {
         )
         .expect_err("blocked evidence");
         assert!(error.contains("could not create directory"), "{error}");
+    }
+
+    /// A fixed clock that blocks the final `run.json` write when it is asked
+    /// for the finish time, so `run` fails after the run directory exists.
+    struct BlockingClock {
+        run_dir: PathBuf,
+        calls: Cell<u32>,
+    }
+
+    impl Clock for BlockingClock {
+        fn now(&self) -> u64 {
+            self.calls.set(self.calls.get() + 1);
+            if self.calls.get() == 2 {
+                fs::create_dir(self.run_dir.join(".run.json.tmp")).expect("block run.json");
+            }
+            FIXED_TIME
+        }
+    }
+
+    #[test]
+    fn failures_after_creation_name_the_partial_run_directory() {
+        let (temp, cli) = setup("orchestrator-partial", VERSION_SCENARIO);
+        let bundle = temp.path().join("bundle");
+        let run_dir = bundle.join(".dbxctl/probe/lineage/20260102T030405Z");
+        let plan = plan(&bundle, &["--only", "cli"]).expect("plan");
+        let clock = BlockingClock {
+            run_dir: run_dir.clone(),
+            calls: Cell::new(0),
+        };
+        let error = run(&plan, cli.binary().as_os_str(), &clock).expect_err("blocked run.json");
+        assert!(
+            error.ends_with(&format!("(partial run directory: {})", run_dir.display())),
+            "{error}"
+        );
+        // The interrupted run keeps its first `run.json`.
+        let run_json = fs::read_to_string(run_dir.join("run.json")).expect("read run.json");
+        assert!(run_json.contains("\"status\": \"running\""), "{run_json}");
     }
 
     #[test]
