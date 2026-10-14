@@ -367,9 +367,35 @@ fn write_real_file(path: &Path, contents: &[u8]) -> Result<(), String> {
     }
 }
 
+/// Replaces `path` atomically: the contents go to a hidden temporary file in
+/// the same directory, which is then renamed over `path`. An interrupted
+/// write leaves the previous file, so `run.json` is never left truncated.
+/// Checked names cannot start with `.`, so the temporary name never collides
+/// with a real file.
 fn write(path: &Path, contents: &[u8]) -> Result<(), String> {
-    fs::write(path, contents)
-        .map_err(|error| format!("could not write {}: {error}", path.display()))
+    let mut temp_name = OsString::from(".");
+    temp_name.push(path.file_name().unwrap_or_default());
+    temp_name.push(".tmp");
+    let temp = path.with_file_name(temp_name);
+    let result = replace_with(&temp, path, contents);
+    if result.is_err() {
+        let _ = fs::remove_file(&temp);
+    }
+    result.map_err(|error| format!("could not write {}: {error}", path.display()))
+}
+
+fn replace_with(temp: &Path, path: &Path, contents: &[u8]) -> std::io::Result<()> {
+    // A stale temporary file, or a symlink planted in its place, is removed
+    // rather than followed.
+    match fs::remove_file(temp) {
+        Err(error) if error.kind() != ErrorKind::NotFound => return Err(error),
+        _ => {}
+    }
+    let mut file = OpenOptions::new().write(true).create_new(true).open(temp)?;
+    file.write_all(contents)?;
+    file.sync_all()?;
+    drop(file);
+    fs::rename(temp, path)
 }
 
 #[cfg(test)]
@@ -630,6 +656,49 @@ pub(crate) mod tests {
             .write_json("run.json", &crate::json::parse("{}").expect("parse"))
             .expect_err("blocked run.json");
         assert!(error.contains("could not write"), "{error}");
+        assert!(!run.path().join(".run.json.tmp").exists());
+    }
+
+    #[test]
+    fn replaces_run_files_atomically() {
+        let temp = TempDir::new("evidence-atomic");
+        let run = RunDir::create(temp.path(), "lineage", 0).expect("create");
+        run.write_file("run.json", b"first").expect("write");
+        run.write_file("run.json", b"second").expect("rewrite");
+        assert_eq!(
+            fs::read(run.path().join("run.json")).expect("read"),
+            b"second"
+        );
+        assert!(!run.path().join(".run.json.tmp").exists());
+
+        // A write that cannot complete leaves the previous contents.
+        fs::create_dir(run.path().join(".run.json.tmp")).expect("block temp");
+        let error = run
+            .write_file("run.json", b"third")
+            .expect_err("blocked temp");
+        assert!(error.contains("could not write"), "{error}");
+        assert_eq!(
+            fs::read(run.path().join("run.json")).expect("read"),
+            b"second"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn does_not_follow_a_symlinked_temporary_file() {
+        use std::os::unix::fs::symlink;
+
+        let temp = TempDir::new("evidence-temp-symlink");
+        let target = temp.path().join("target");
+        fs::write(&target, "keep\n").expect("write target");
+        fs::create_dir_all(temp.path().join(".dbxctl/probe")).expect("create probe dir");
+        symlink(&target, temp.path().join(".dbxctl/probe/..gitignore.tmp")).expect("symlink");
+        RunDir::create(temp.path(), "lineage", FIXED_TIME).expect("create");
+        assert_eq!(fs::read_to_string(&target).expect("read target"), "keep\n");
+        assert_eq!(
+            fs::read(temp.path().join(".dbxctl/probe/.gitignore")).expect("read"),
+            b"*\n"
+        );
     }
 
     #[test]
