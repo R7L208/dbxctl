@@ -13,7 +13,8 @@ pub(crate) enum Exit {
     /// An invocation or usage failure, such as an invalid option or an
     /// unwritable run directory.
     Usage,
-    /// A probe run completed, but one or more checks are unknown or blocked.
+    /// A probe run completed, but one or more checks did not resolve: their
+    /// state is unknown, skipped, or failed.
     Unresolved,
     /// Probe cleanup could not remove every created resource.
     // Constructed by `probe cleanup` once it is implemented.
