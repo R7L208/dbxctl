@@ -3,20 +3,21 @@
 //! #32 extends this check to verify the required command surfaces.
 
 use std::ffi::OsString;
-use std::time::Duration;
 
-use crate::databricks::{MINIMUM_DATABRICKS_VERSION, Version, run_captured};
+use crate::databricks::{
+    MINIMUM_DATABRICKS_VERSION, VERSION_COMMAND, VERSION_TIMEOUT, Version, run_captured,
+};
 use crate::probe::model::{CheckId, Finding, Verdict};
 use crate::probe::orchestrator::Context;
 
 const CHECK: CheckId = CheckId::Cli;
 /// The code that depends on the answer: the supported-version gate.
 const SITE: &str = "src/databricks.rs MINIMUM_DATABRICKS_VERSION";
-const TIMEOUT: Duration = Duration::from_secs(30);
 
 pub(crate) fn run(context: &Context<'_>) -> Result<Finding, String> {
-    let args = [OsString::from("--version")];
-    let result = run_captured(context.binary, &args, TIMEOUT);
+    // The same command and timeout `dbxctl doctor` uses for its gate.
+    let args = [OsString::from(VERSION_COMMAND)];
+    let result = run_captured(context.binary, &args, VERSION_TIMEOUT);
     let evidence = vec![context.run.record_invocation(
         CHECK.as_str(),
         "version",
@@ -40,7 +41,7 @@ pub(crate) fn run(context: &Context<'_>) -> Result<Finding, String> {
     let Ok(captured) = result else {
         return Ok(Finding::failed(
             CHECK,
-            "`databricks --version` could not be run to completion; see the evidence record",
+            "`databricks version` could not be run to completion; see the evidence record",
             evidence,
             SITE,
         ));
@@ -51,7 +52,7 @@ pub(crate) fn run(context: &Context<'_>) -> Result<Finding, String> {
             .code()
             .map_or_else(|| "a signal".to_owned(), |code| format!("exit code {code}"));
         return Ok(unknown(format!(
-            "`databricks --version` failed with {status}"
+            "`databricks version` failed with {status}"
         )));
     }
     let Some(version) = std::str::from_utf8(&captured.stdout)
@@ -59,7 +60,7 @@ pub(crate) fn run(context: &Context<'_>) -> Result<Finding, String> {
         .and_then(Version::parse)
     else {
         return Ok(unknown(
-            "`databricks --version` did not report a recognizable version".to_owned(),
+            "`databricks version` did not report a recognizable version".to_owned(),
         ));
     };
     if version < MINIMUM_DATABRICKS_VERSION {
@@ -93,7 +94,7 @@ mod tests {
     use crate::probe::orchestrator::Context;
     use crate::test_support::{ScenarioCli, TempDir, assert_no_mutations, fake_databricks};
 
-    /// Runs the check against a scenario answering `--version`.
+    /// Runs the check against a scenario answering `version`.
     fn check(name: &str, response: &str) -> (Finding, Vec<Vec<String>>, TempDir) {
         let temp = TempDir::new(name);
         let cli_dir = temp.path().join("cli");
@@ -103,7 +104,7 @@ mod tests {
         let cli = ScenarioCli::new(
             fake_databricks(),
             &cli_dir,
-            &format!("case\narg --version\n{response}\n"),
+            &format!("case\narg version\n{response}\n"),
         );
         let run_dir = RunDir::create(&bundle, "lineage", 0).expect("create run");
         let finding = run(&Context {
@@ -120,7 +121,7 @@ mod tests {
             check("cli-resolved", "stdout Databricks CLI v1.13.0\\n");
         assert_eq!(finding.state(), State::Resolved, "{finding:?}");
         assert_eq!(finding.verdict().map(Verdict::as_str), Some("1.13.0"));
-        assert_eq!(invocations, [["--version"]]);
+        assert_eq!(invocations, [["version"]]);
         assert_no_mutations(&invocations);
     }
 

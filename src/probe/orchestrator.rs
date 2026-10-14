@@ -290,7 +290,7 @@ mod tests {
             bundle.join(".dbxctl/probe/lineage/20260102T030405Z")
         );
         let invocations = cli.invocations();
-        assert_eq!(invocations, [["--version"]]);
+        assert_eq!(invocations, [["version"]]);
         assert_no_mutations(&invocations);
 
         let files: Vec<_> = read_tree(&outcome.run_dir)
@@ -412,12 +412,12 @@ mod tests {
             "{report}"
         );
         // Only the `cli` check runs a command so far.
-        assert_eq!(cli.invocations(), [["--version"]]);
+        assert_eq!(cli.invocations(), [["version"]]);
     }
 
     #[test]
     fn unresolved_cli_check_sets_the_unresolved_exit() {
-        let (temp, cli) = setup("orchestrator-unknown", "case\narg --version\nexit 2\n");
+        let (temp, cli) = setup("orchestrator-unknown", "case\narg version\nexit 2\n");
         let bundle = temp.path().join("bundle");
         let plan = plan(&bundle, &["--only", "cli"]).expect("plan");
         let outcome = run(&plan, cli.binary().as_os_str(), &FixedClock(0)).expect("run probe");

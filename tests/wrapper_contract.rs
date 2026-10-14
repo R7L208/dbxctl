@@ -401,7 +401,7 @@ fn probe_run_cli_check_runs_end_to_end() {
     }
 
     let invocations = fixture.cli.invocations();
-    assert_eq!(invocations, [["--version"]]);
+    assert_eq!(invocations, [["version"]]);
     assert_no_mutations(&invocations);
 }
 

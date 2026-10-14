@@ -99,8 +99,8 @@ fn unescape(value: &str) -> String {
     text
 }
 
-/// Fails unless every invocation is `--version`, asks for help, or is a known
-/// read-only command. The command path is the leading run of arguments that
+/// Fails unless every invocation asks for help or is a known read-only
+/// command. The command path is the leading run of arguments that
 /// are not flags, so an argv that starts with any other flag fails: its
 /// command cannot be identified without knowing which flags take values.
 ///
@@ -109,7 +109,7 @@ fn unescape(value: &str) -> String {
 /// `bundle deploy --var -h`, does not exempt the invocation.
 pub fn assert_no_mutations(invocations: &[Vec<String>]) {
     for argv in invocations {
-        if argv == &["--version"] || is_help_request(argv) {
+        if is_help_request(argv) {
             continue;
         }
         let path: Vec<&str> = argv

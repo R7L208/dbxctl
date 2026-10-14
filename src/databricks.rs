@@ -15,7 +15,11 @@ const POLL_INTERVAL: Duration = Duration::from_millis(10);
 // descendant that inherited them (for example Terraform under `databricks
 // bundle`) can keep them open after the CLI exits or is killed.
 const PIPE_CLOSE_GRACE: Duration = Duration::from_secs(1);
-const VERSION_TIMEOUT: Duration = Duration::from_secs(30);
+/// The subcommand that reports the installed version. `doctor` and the
+/// probe's `cli` check both run it, with the same timeout, so they cannot
+/// disagree about which version is installed.
+pub(crate) const VERSION_COMMAND: &str = "version";
+pub(crate) const VERSION_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Debug)]
 pub(crate) struct Captured {
@@ -211,7 +215,7 @@ fn installed_version(binary: &OsStr, timeout: Duration) -> Result<Version, Strin
         stdout,
         stderr,
         status,
-    } = run_captured(binary, &[OsString::from("version")], timeout)?;
+    } = run_captured(binary, &[OsString::from(VERSION_COMMAND)], timeout)?;
 
     if !status.success() {
         return Err(format!(
