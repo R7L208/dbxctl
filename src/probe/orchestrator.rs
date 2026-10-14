@@ -493,7 +493,12 @@ mod tests {
     fn failures_after_creation_name_the_partial_run_directory() {
         let (temp, cli) = setup("orchestrator-partial", VERSION_SCENARIO);
         let bundle = temp.path().join("bundle");
-        let run_dir = bundle.join(".dbxctl/probe/lineage/20260102T030405Z");
+        // Join each component so the separators match the error on Windows.
+        let run_dir = bundle
+            .join(".dbxctl")
+            .join("probe")
+            .join("lineage")
+            .join("20260102T030405Z");
         let plan = plan(&bundle, &["--only", "cli"]).expect("plan");
         let clock = BlockingClock {
             run_dir: run_dir.clone(),
