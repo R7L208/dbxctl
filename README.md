@@ -7,8 +7,9 @@ place for additional workflows and policy. Use `dbxctl doctor` to check that a
 supported Databricks CLI is installed; passthrough commands run the upstream
 binary directly without a redundant version probe on the hot path.
 
-The current release has no third-party Rust dependencies. Phase 0 will add
-`serde_json` behind a crate-private JSON abstraction; see the recorded
+Phase 0 adds `serde_json` as the first approved third-party Rust runtime
+dependency, wrapped by a crate-private JSON layer (`src/json.rs`) for defensive
+access and deterministic output; see the recorded
 [JSON design decision](docs/security.md#design-decisions). Phase 1 will use
 `petgraph` for its in-memory lineage graph.
 
