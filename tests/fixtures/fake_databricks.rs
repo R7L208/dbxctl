@@ -22,7 +22,13 @@ fn main() -> ExitCode {
     let program = argv.next().map(PathBuf::from);
     let args: Vec<_> = argv.collect();
 
-    if let Some(directory) = program.as_deref().and_then(Path::parent) {
+    // Run by bare name through `PATH`, the parent is empty; replay must not
+    // then read a scenario from the current directory.
+    if let Some(directory) = program
+        .as_deref()
+        .and_then(Path::parent)
+        .filter(|directory| !directory.as_os_str().is_empty())
+    {
         let scenario = directory.join(SCENARIO_FILE);
         if scenario.is_file() {
             return replay(&scenario, &directory.join(INVOCATION_LOG), &args);
