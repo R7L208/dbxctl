@@ -1,6 +1,7 @@
 //! Enforces the #23 layering rule: reusable crate-level modules never depend
-//! on the probe module. No source file outside `src/probe/` may contain
-//! `use crate::probe` or name `CheckId`.
+//! on the probe module. No source file outside the probe module
+//! (`src/probe.rs` and `src/probe/`) may contain `use crate::probe` or name
+//! `CheckId`.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -22,13 +23,16 @@ fn rust_sources(directory: &Path, files: &mut Vec<PathBuf>) {
 fn only_the_probe_module_names_probe_items() {
     let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     let probe = src.join("probe");
+    let probe_root = src.join("probe.rs");
     let mut files = Vec::new();
     rust_sources(&src, &mut files);
     files.sort();
 
-    let (inside, outside): (Vec<_>, Vec<_>) =
-        files.iter().partition(|path| path.starts_with(&probe));
+    let (inside, outside): (Vec<_>, Vec<_>) = files
+        .iter()
+        .partition(|path| path.starts_with(&probe) || **path == probe_root);
     // Guards against a scan that silently finds nothing.
+    assert!(inside.contains(&&probe_root), "expected src/probe.rs");
     assert!(outside.iter().any(|path| path.ends_with("main.rs")));
     assert!(outside.iter().any(|path| path.ends_with("evidence.rs")));
     assert!(
