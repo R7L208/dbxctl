@@ -155,6 +155,30 @@ fn doctor_accepts_supported_databricks_cli() {
         .expect("run dbxctl");
     assert!(output.status.success());
     assert!(String::from_utf8_lossy(&output.stdout).contains("Databricks CLI 1.13.0"));
+    // The tested version produces no warning.
+    assert!(
+        output.stderr.is_empty(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn doctor_warns_but_succeeds_for_a_newer_databricks_cli() {
+    let output = dbxctl()
+        .env("DATABRICKS_CLI_PATH", fake_databricks())
+        .env("FAKE_DATABRICKS_VERSION_MODE", "newer")
+        .arg("doctor")
+        .output()
+        .expect("run dbxctl");
+    assert_eq!(output.status.code(), Some(0));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Databricks CLI 1.19.0 ("), "{stdout}");
+    assert!(!stdout.contains("warning"), "{stdout}");
+    assert_eq!(
+        String::from_utf8_lossy(&output.stderr),
+        "warning: Databricks CLI 1.19.0 is newer than the tested version 1.13.0; output shapes may differ\n"
+    );
 }
 
 #[test]

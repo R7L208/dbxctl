@@ -84,6 +84,7 @@ fn write_bytes(stream: &mut impl Write, byte: u8, count: usize, name: &str) {
 fn version_response() -> ExitCode {
     match env::var("FAKE_DATABRICKS_VERSION_MODE").as_deref() {
         Ok("old") => println!("Databricks CLI v1.12.0"),
+        Ok("newer") => println!("Databricks CLI v1.19.0"),
         Ok("malformed") => println!("unexpected output"),
         Ok("non-utf8") => {
             io::stdout().write_all(&[0xff]).expect("write invalid UTF-8");

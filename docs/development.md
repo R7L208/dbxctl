@@ -65,7 +65,8 @@ executable and exercise the real process boundary. They cover:
 - upstream exit-code preservation;
 - missing and failing executables;
 - malformed and non-UTF-8 version output;
-- minimum supported Databricks CLI enforcement; and
+- minimum supported Databricks CLI enforcement;
+- the `doctor` warning for a Databricks CLI newer than the tested version; and
 - wrapper commands that do not require Databricks.
 
 Run them with:
@@ -139,14 +140,28 @@ The Databricks CLI is the exception: its pin is held at 1.13.0, which is also
 the minimum version `dbxctl doctor` accepts, so CI tests exactly the oldest
 supported release. Discovery reports the version already pinned in
 `.github/pins.json` instead of the latest release, and the updater only
-re-verifies its checksum. To raise the supported version, change these together
-in one reviewed pull request:
+re-verifies its checksum.
 
-1. `MINIMUM_DATABRICKS_VERSION` in `src/databricks.rs` and its boundary test.
+The pin defines the tested version. `TESTED_DATABRICKS_VERSION` in
+`src/databricks.rs` mirrors it for `doctor`, and discovery and the pin updater
+tests fail when the two differ. CI exercises only the pinned version. Versions
+from the minimum through the tested version are supported without a warning,
+but once the pin moves above the minimum, the versions in between are not run
+in CI. `doctor` rejects a CLI below the minimum. For a CLI newer than the
+tested version, it prints a warning to stderr and still exits 0. While
+the tested version equals the minimum, a unit test checks that they agree.
+
+To raise the supported version, change these together in one reviewed pull
+request:
+
+1. `MINIMUM_DATABRICKS_VERSION` and `TESTED_DATABRICKS_VERSION` in
+   `src/databricks.rs`, and their tests.
 1. The version and SHA-256 under `databricks_cli` in `.github/pins.json`, and
    the tool table in `docs/security.md` (`scripts/update-pins.py --databricks <version>` rewrites both).
-1. The fake CLI's reported versions in `tests/fixtures/fake_databricks.rs`, the
-   version assertions in the tests, and the requirement in `README.md`.
+1. The fake CLI's reported versions in `tests/fixtures/fake_databricks.rs`
+   (its `newer` mode must stay above the tested version), the version
+   assertions in the tests, and the requirement and warning example in
+   `README.md`.
 
 Configure a fine-grained `PIN_UPDATE_TOKEN` Actions secret with repository
 Contents and Pull requests read/write permissions. It needs no Workflows
