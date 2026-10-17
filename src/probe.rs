@@ -1,36 +1,41 @@
 mod lineage;
+mod model;
+mod orchestrator;
 
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::process::ExitCode;
 
 use crate::args::Parser;
+use crate::evidence::SystemClock;
+use crate::exit::Exit;
 
 #[derive(Debug)]
-#[allow(dead_code)] // Used by #30
 pub(crate) enum ProbeCommand {
     Run(Box<RunOptions>),
+    #[allow(dead_code)] // Read by `probe report` (#36)
     Report(ReportOptions),
+    #[allow(dead_code)] // Read by `probe cleanup` (#37)
     Cleanup(CleanupOptions),
     Help,
 }
 
 #[derive(Debug)]
 pub(crate) struct RunOptions {
-    #[allow(dead_code)] // Used by #30 (orchestration)
+    // Always `lineage`: `parse_run` rejects every other suite.
+    #[allow(dead_code)]
     pub(crate) suite: String,
-    #[allow(dead_code)] // Used by #30
     pub(crate) lineage: lineage::LineageOptions,
 }
 
 #[derive(Debug)]
 pub(crate) struct ReportOptions {
-    #[allow(dead_code)] // Used by #30
+    #[allow(dead_code)] // Used by `probe report` (#36)
     pub(crate) from: OsString,
 }
 
 #[derive(Debug)]
 pub(crate) struct CleanupOptions {
-    #[allow(dead_code)] // Used by #30
+    #[allow(dead_code)] // Used by `probe cleanup` (#37)
     pub(crate) from: OsString,
 }
 
@@ -119,31 +124,41 @@ fn parse_cleanup(args: &[OsString]) -> Result<ProbeCommand, String> {
     Ok(ProbeCommand::Cleanup(CleanupOptions { from }))
 }
 
-/// Execute a parsed probe command.
+/// Execute a parsed probe command with the resolved Databricks CLI `binary`.
 ///
-/// # Allow Justifications (#30: orchestration will evolve this)
-/// - `unnecessary_wraps`: Returns Result even though Err is never used currently, as the calling
-///   orchestration layer (#30) will need to propagate errors and stack different command results.
-/// - `needless_pass_by_value`: Takes `ProbeCommand` by value to allow consuming variants (`Box<RunOptions>`)
-///   and enable future orchestration layers to transfer ownership of command state.
-#[allow(clippy::unnecessary_wraps, clippy::needless_pass_by_value)]
-pub(crate) fn run_probe(command: ProbeCommand) -> Result<ExitCode, String> {
+/// `probe run` prints one line per finding and the run directory, and exits
+/// 0 only when every selected check resolved (see `src/exit.rs`).
+pub(crate) fn run_probe(command: ProbeCommand, binary: &OsStr) -> Result<ExitCode, String> {
     match command {
         ProbeCommand::Help => {
             // Help was already printed in parse phase; exit cleanly
-            Ok(ExitCode::SUCCESS)
+            Ok(Exit::Success.into())
         }
-        ProbeCommand::Run(_) => {
-            eprintln!("probe run: not implemented yet");
-            Ok(ExitCode::from(1))
+        ProbeCommand::Run(options) => {
+            let plan = orchestrator::Plan::from_options(&options.lineage)?;
+            let outcome = orchestrator::run(&plan, binary, &SystemClock)?;
+            for finding in &outcome.findings {
+                let detail = finding
+                    .verdict()
+                    .map(model::Verdict::as_str)
+                    .or(finding.reason())
+                    .unwrap_or_default();
+                println!(
+                    "{:<9} {:<9} {detail}",
+                    finding.check().as_str(),
+                    finding.state().as_str()
+                );
+            }
+            println!("run directory: {}", outcome.run_dir.display());
+            Ok(outcome.exit.into())
         }
         ProbeCommand::Report(_) => {
             eprintln!("probe report: not implemented yet");
-            Ok(ExitCode::from(1))
+            Ok(Exit::Usage.into())
         }
         ProbeCommand::Cleanup(_) => {
             eprintln!("probe cleanup: not implemented yet");
-            Ok(ExitCode::from(1))
+            Ok(Exit::Usage.into())
         }
     }
 }
