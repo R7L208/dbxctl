@@ -78,10 +78,12 @@ dbxctl doctor
 Probe a bundle for materialized-view lineage facts:
 
 ```console
-dbxctl probe run --suite lineage --bundle-root <path> --target <non-prod>
+dbxctl probe run --suite lineage --bundle-root <path> --target <non-prod> --only cli
 ```
 
-Only the `cli` check runs so far; the others are reported as skipped. See the
+Only the `cli` check runs so far. Without `--only`, every check is selected,
+so `--warehouse-id` and `--scope-catalog` are required and the unimplemented
+checks are reported as skipped (exit 10). See the
 [MV-lineage probe docs](docs/mv-lineage/README.md).
 
 ## Supported Platforms
