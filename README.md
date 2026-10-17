@@ -11,7 +11,9 @@ Phase 0 adds `serde_json` as the first approved third-party Rust runtime
 dependency, wrapped by a crate-private JSON layer (`src/json.rs`) for defensive
 access and deterministic output; see the recorded
 [JSON design decision](docs/security.md#design-decisions). Phase 1 will use
-`petgraph` for its in-memory lineage graph.
+`petgraph` for its in-memory lineage graph. See the
+[MV lineage documentation](docs/mv-lineage/README.md) for the Phase 0
+requirements, architecture, and plan.
 
 ## Requirements
 
@@ -51,7 +53,13 @@ dbxctl databricks jobs list --profile production
 ```
 
 Arguments are passed directly to the Databricks process without invoking a
-shell. The upstream process exit code is returned to the caller.
+shell, and it inherits the terminal, stdin, stdout, and stderr. On Linux and
+macOS, `dbxctl` replaces itself with the Databricks CLI, so the CLI alone
+handles Ctrl-C and finishes its own cleanup, and the caller sees its exit code
+or terminating signal exactly as if it had run `databricks` directly. On
+Windows, the CLI runs as a child process and its exit code is returned, but
+Ctrl-C reaches both processes and `dbxctl` may exit first; see the
+[passthrough interrupt decision](docs/security.md#passthrough-interrupts).
 
 By default, `dbxctl` resolves `databricks` from `PATH`. Set an explicit binary
 when the dependency is installed elsewhere:

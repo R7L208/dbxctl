@@ -103,15 +103,47 @@ fn enforces_minimum_databricks_version() {
 
 #[cfg(unix)]
 #[test]
-fn propagates_signal_termination_as_128_plus_signal() {
+fn propagates_signal_termination_as_the_signal() {
+    use std::os::unix::process::ExitStatusExt;
+
     let output = dbxctl()
         .env("DATABRICKS_CLI_PATH", fake_databricks())
         .env("FAKE_DATABRICKS_ABORT", "1")
         .args(["databricks", "jobs", "list"])
         .output()
         .expect("run dbxctl");
-    // SIGABRT is signal 6; the shell convention reports 128 + the signal.
-    assert_eq!(output.status.code(), Some(134));
+    // dbxctl is replaced by the CLI, so the caller sees the CLI's SIGABRT
+    // (signal 6) itself, exactly as if it had run the CLI directly. A shell
+    // reports that as 128 + 6 = 134.
+    assert_eq!(output.status.code(), None);
+    assert_eq!(output.status.signal(), Some(6));
+}
+
+#[cfg(unix)]
+#[test]
+fn passthrough_replaces_the_dbxctl_process() {
+    // The fake CLI prints its own PID. It equals the PID of the spawned
+    // dbxctl only if dbxctl replaced itself with the CLI instead of starting
+    // it as a child, which is what lets the CLI handle Ctrl-C on its own.
+    let child = dbxctl()
+        .env("DATABRICKS_CLI_PATH", fake_databricks())
+        .env("PRINT_PID", "1")
+        .args(["databricks", "jobs", "list"])
+        .stdout(Stdio::piped())
+        .spawn()
+        .expect("run dbxctl");
+    let dbxctl_pid = child.id();
+    let output = child.wait_with_output().expect("collect dbxctl output");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let cli_pid: u32 = stdout
+        .lines()
+        .find_map(|line| line.strip_prefix("pid: "))
+        .unwrap_or_else(|| panic!("fake CLI did not print its PID: {stdout}"))
+        .parse()
+        .expect("parse fake CLI PID");
+    assert_eq!(cli_pid, dbxctl_pid);
 }
 
 #[test]

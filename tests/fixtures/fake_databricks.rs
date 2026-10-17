@@ -41,6 +41,12 @@ fn main() -> ExitCode {
         write_bytes(&mut io::stderr(), b'e', bytes, "stderr");
     }
 
+    if env::var_os("PRINT_PID").is_some() {
+        // Lets a test check that passthrough replaced the dbxctl process
+        // rather than running the CLI as a separate child.
+        println!("pid: {}", std::process::id());
+    }
+
     for argument in args {
         println!("<{}>", argument.to_string_lossy());
     }
