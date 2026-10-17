@@ -4,8 +4,10 @@ What you need to run the Phase 0 lineage probes, and how to run them. The
 command shapes come from the contract in
 [01-requirements.md](01-requirements.md).
 
-> **Status:** `dbxctl probe` is not implemented yet. The commands below are the
-> planned interface from #23. #38 checks every command against the real
+> **Status:** `dbxctl probe run` works, but only the `cli` check resolves so
+> far; every other selected check is reported as skipped, so a full run exits
+> with code 10. `probe report` and `probe cleanup` are not implemented yet
+> (#36, #37). #38 checks every command against the real
 > `dbxctl probe ... --help` output.
 
 ## Prerequisites
@@ -49,7 +51,7 @@ dbxctl probe report --from <run-directory>
 ```
 
 Run directories live at `<bundle-root>/.dbxctl/probe/lineage/<run-id>/`.
-`.dbxctl/` will be git-ignored automatically (#30). The raw evidence in that directory is
+`.dbxctl/` is git-ignored automatically. The raw evidence in that directory is
 not redacted and must not be shared; only the redacted `findings.md` may be
 attached to issues, after the checks in #39.
 
