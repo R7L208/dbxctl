@@ -21,13 +21,13 @@ the boundary through which every workspace operation passes. It implements
 | `src/databricks.rs` | Resolving the `databricks` executable, captured execution with a timeout, passthrough, the minimum-version check, and `doctor`. | #27, #48 |
 | `src/json.rs` | The crate-private JSON layer from DP0-1: parsing into `Document`, borrowed `Node` views, JSON-pointer lookup, and deterministic serialization. No `serde_json` type appears in its API. | #24, #28 |
 | `src/args.rs` | A small reusable option parser over `OsString`. | #29 |
+| `src/exit.rs` | The exit-code table from [R3](01-requirements.md#r3-exit-codes). | #30 |
+| `src/evidence.rs` | Run-ID generation, the run directory, raw evidence writes, `run.json`, and the `.dbxctl/.gitignore`. | #30 |
 
 ### Planned Crate-Level Modules
 
 | Module | Will own | Issue |
 | --- | --- | --- |
-| `src/exit.rs` | The exit-code table from [R3](01-requirements.md#r3-exit-codes). | #30 |
-| `src/evidence.rs` | Run-ID generation, the run directory, raw evidence writes, `run.json`, and the `.dbxctl/.gitignore`. | #30 |
 | Transport (path not yet decided) | The `Runner` trait and `CliRunner::for_bundle(root, target, profile)`, captured API GETs, and Statement Execution with polling, pagination, and error classification. | #31 |
 | `src/safety.rs` | `is_read_statement` and, if #37 ships, the `Mutate` capability and `safety::grant`. | #31, #37 |
 | `src/uc/fqn.rs` | Parsing and formatting Unity Catalog three-part names, including backtick quoting. | #31 |
@@ -37,19 +37,22 @@ the boundary through which every workspace operation passes. It implements
 
 ### Implemented Probe Modules
 
-These parse and validate arguments only; running checks arrives with #30.
+`probe run` runs only the `cli` check so far; every other selected check is
+recorded as skipped and names the issue that adds it.
 
 | Module | Owns | Issue |
 | --- | --- | --- |
 | `src/probe.rs` | The `probe` command group, its argument parsing, and help. | #29 |
 | `src/probe/lineage.rs` | Lineage suite options from [R2](01-requirements.md#r2-run-options), including which checks need a warehouse or catalog. | #29 |
+| `src/probe/model.rs` | `CheckId`, verdict and state types, and the finding struct. | #30 |
+| `src/probe/orchestrator.rs` | Running selected checks in a fixed order and writing the run directory: `run.json`, raw evidence, `findings.json`, and the skeleton `findings.md`. | #30 |
+| `src/probe/lineage/cli.rs` | The minimal `cli` check: which Databricks CLI version is installed. | #30 |
 
 ### Planned Probe Modules
 
 | Module | Will own | Issue |
 | --- | --- | --- |
-| `src/probe/model.rs` | `CheckId`, verdict and state types, the finding struct, and the orchestrator that runs selected checks in a fixed order. | #30 |
-| `src/probe/lineage/` | The 15 checks from [R4](01-requirements.md#r4-checks), and nothing else. | #30, #32, #33, #34, #37 |
+| `src/probe/lineage/` | The remaining 14 checks from [R4](01-requirements.md#r4-checks), and nothing else. | #32, #33, #34, #37 |
 | `src/probe/lineage/sites.rs` | The mapping from each `CheckId` to the code or design sites its answer affects. | #36 |
 | `src/probe/report.rs` | `findings.json` and `findings.md` generation and redaction. | #36 |
 

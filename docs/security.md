@@ -4,7 +4,7 @@
 
 The Rust application's first and primary third-party runtime dependency is `serde_json`
 (version 1.0, approved under DP0-1 below) with transitive dependencies on `itoa`, `memchr`,
-`serde_core`, and `zmij`. `Cargo.lock` is committed, CI uses `--locked`, and unsafe Rust is forbidden.
+`serde`, `serde_core`, and `zmij`. `Cargo.lock` is committed, CI uses `--locked`, and unsafe Rust is forbidden.
 
 The Linux quality and supply-chain jobs run inside this platform-specific OCI
 manifest:

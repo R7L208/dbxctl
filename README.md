@@ -75,6 +75,15 @@ $env:DATABRICKS_CLI_PATH = "C:\Tools\databricks.exe"
 dbxctl doctor
 ```
 
+Probe a bundle for materialized-view lineage facts:
+
+```console
+dbxctl probe run --suite lineage --bundle-root <path> --target <non-prod>
+```
+
+Only the `cli` check runs so far; the others are reported as skipped. See the
+[MV-lineage probe docs](docs/mv-lineage/README.md).
+
 ## Supported Platforms
 
 The implementation and Rust test fixture are platform-neutral. CI runs native
@@ -118,8 +127,9 @@ which expire after 30 days. They are not yet published as durable assets on the
 repository's GitHub Releases page.
 
 See [Security and supply chain](docs/security.md) for the trust model and known
-gaps, [Release runbook](docs/releases.md) for the operator procedure, and
-[Project status](docs/status.md) for completed work and next steps.
+gaps, [Release runbook](docs/releases.md) for the operator procedure, and the
+[Phase 0 tracking issue](https://github.com/R7L208/dbxctl/issues/23) for
+completed work and next steps.
 
 ## License
 
