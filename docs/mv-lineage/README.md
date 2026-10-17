@@ -7,7 +7,8 @@ families (`R`, `T`, `V`, `v`, `DP`) are defined in the
 [design nomenclature and glossary](../design-nomenclature-and-glossary.md).
 
 > **Status:** Phase 0 is in progress under milestone 0.0.1. The `dbxctl probe`
-> command described here is not implemented yet. Pages marked as stubs are
+> command described here parses its arguments (#29) but does not run checks
+> yet. Pages marked as stubs are
 > completed by the issue they name. Tracking issue: #23.
 
 ## Purpose

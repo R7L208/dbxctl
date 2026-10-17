@@ -58,8 +58,8 @@ Every step runs the checks in
 | 1 | #24 Design decisions (JSON, graph) | #25, #27 | — |
 | 2 | #25 CLI 1.13.0 fixtures | #24, #27 | — |
 | 3 | #26 Documentation scaffold | #27, #28 | #24 |
-| 4 | #27 Databricks process layer | #24, #25, #28 | — |
-| 5 | #28 Shared JSON layer | #27 | #24 |
+| 4 | #27 Databricks process layer | #24, #25, #26, #28 | — |
+| 5 | #28 Shared JSON layer | #26, #27 | #24 |
 | 6 | #29 `probe` command and arguments | — | #27 |
 | 7 | #30 Evidence model, orchestration, minimal `cli` check | — | #25, #28, #29 |
 | 8 | #31 Read-only transport, SQL safety, UC identifiers | #34 | #30 |

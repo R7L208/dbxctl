@@ -20,9 +20,9 @@ command shapes come from the contract in
 - For catalog-scoped checks: a Unity Catalog catalog to scope queries to.
 - A `dbxctl` build from this repository (`cargo build --locked`).
 
-Which checks need a warehouse or catalog is defined per check by #29; until
-then, see the check table in
-[R4](01-requirements.md#r4-checks).
+`v2`, `v9`, and `v4` need `--warehouse-id`; `v3` and `v11` need both
+`--warehouse-id` and `--scope-catalog`; every other check needs neither. See
+the check table in [R4](01-requirements.md#r4-checks).
 
 ## Read-Only Run
 
@@ -49,7 +49,7 @@ dbxctl probe report --from <run-directory>
 ```
 
 Run directories live at `<bundle-root>/.dbxctl/probe/lineage/<run-id>/`.
-`.dbxctl/` is git-ignored automatically. The raw evidence in that directory is
+`.dbxctl/` will be git-ignored automatically (#30). The raw evidence in that directory is
 not redacted and must not be shared; only the redacted `findings.md` may be
 attached to issues, after the checks in #39.
 
@@ -70,7 +70,7 @@ See [05-workspace-probes.md](05-workspace-probes.md).
 
 | Exit code | Meaning |
 | --- | --- |
-| 0 | Every selected check resolved |
+| 0 | Run completed and every selected check resolved |
 | 1 | Invocation or usage failure |
 | 10 | One or more selected checks not resolved (unknown, skipped, or failed) |
 | 11 | Cleanup failure |

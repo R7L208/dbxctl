@@ -17,15 +17,15 @@ the boundary through which every workspace operation passes. It implements
 
 | Module | Owns | Issue |
 | --- | --- | --- |
-| `src/main.rs` | Top-level argument dispatch (`doctor`, `databricks`, `help`, `version`) and process exit. | — |
+| `src/main.rs` | Top-level argument dispatch (`doctor`, `databricks`, `probe`, `help`, `version`) and process exit. | #29 |
 | `src/databricks.rs` | Resolving the `databricks` executable, captured execution with a timeout, passthrough, the minimum-version check, and `doctor`. | #27, #48 |
 | `src/json.rs` | The crate-private JSON layer from DP0-1: parsing into `Document`, borrowed `Node` views, JSON-pointer lookup, and deterministic serialization. No `serde_json` type appears in its API. | #24, #28 |
+| `src/args.rs` | A small reusable option parser over `OsString`. | #29 |
 
 ### Planned Crate-Level Modules
 
 | Module | Will own | Issue |
 | --- | --- | --- |
-| `src/args.rs` | A small reusable option parser over `OsString`. | #29 |
 | `src/exit.rs` | The exit-code table from [R3](01-requirements.md#r3-exit-codes). | #30 |
 | `src/evidence.rs` | Run-ID generation, the run directory, raw evidence writes, `run.json`, and the `.dbxctl/.gitignore`. | #30 |
 | Transport (path not yet decided) | The `Runner` trait and `CliRunner::for_bundle(root, target, profile)`, captured API GETs, and Statement Execution with polling, pagination, and error classification. | #31 |
@@ -35,12 +35,19 @@ the boundary through which every workspace operation passes. It implements
 | `src/bundle/paths.rs` | Local-path resolution relative to the bundle root and workspace-path forms. | #32 |
 | `src/bundle/schema.rs` | Running `databricks bundle schema` and locating table-update trigger definitions. | #34 |
 
+### Implemented Probe Modules
+
+These parse and validate arguments only; running checks arrives with #30.
+
+| Module | Owns | Issue |
+| --- | --- | --- |
+| `src/probe.rs` | The `probe` command group, its argument parsing, and help. | #29 |
+| `src/probe/lineage.rs` | Lineage suite options from [R2](01-requirements.md#r2-run-options), including which checks need a warehouse or catalog. | #29 |
+
 ### Planned Probe Modules
 
 | Module | Will own | Issue |
 | --- | --- | --- |
-| `src/probe.rs` | The `probe` command group and suite dispatch. | #29 |
-| `src/probe/lineage.rs` | Lineage suite options from [R2](01-requirements.md#r2-run-options). | #29 |
 | `src/probe/model.rs` | `CheckId`, verdict and state types, the finding struct, and the orchestrator that runs selected checks in a fixed order. | #30 |
 | `src/probe/lineage/` | The 15 checks from [R4](01-requirements.md#r4-checks), and nothing else. | #30, #32, #33, #34, #37 |
 | `src/probe/lineage/sites.rs` | The mapping from each `CheckId` to the code or design sites its answer affects. | #36 |

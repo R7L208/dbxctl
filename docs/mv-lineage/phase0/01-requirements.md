@@ -6,7 +6,8 @@ wins and this page must be corrected. Requirements are numbered `R1`, `R2`, …
 as defined in the [glossary](../../design-nomenclature-and-glossary.md);
 headings are stable so code sites can link to them.
 
-> **Status:** None of the `probe` behavior below is implemented yet. Each
+> **Status:** Argument parsing for R1 and R2 is implemented (#29); running
+> checks is not implemented yet. Each
 > requirement names the issue that implements it.
 
 ## Goal
