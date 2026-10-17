@@ -68,7 +68,10 @@ fn run_with_binary(cli: Cli, binary: &OsStr) -> Result<ExitCode, String> {
             Ok(ExitCode::SUCCESS)
         }
         Cli::Doctor => Ok(databricks::run_doctor(binary)),
-        Cli::Databricks(args) => databricks::run_passthrough(binary, args),
+        Cli::Databricks(args) => {
+            // run_passthrough returns only when the CLI could not be started.
+            databricks::run_passthrough(binary, args).map(|never| match never {})
+        }
         Cli::Probe(args) => {
             // Check if top-level probe help is requested (no subcommand or --help as first arg)
             if args.is_empty() {
