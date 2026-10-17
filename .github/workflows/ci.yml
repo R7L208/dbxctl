@@ -169,7 +169,7 @@ jobs:
     runs-on: ubuntu-24.04
     needs: pins
     container:
-      image: ${{ needs.pins.outputs.rust_image }}
+      image: ${{ needs.pins.outputs.rust_image }} # zizmor: ignore[unpinned-images] digest-pinned via .github/pins.json
     env:
       RUST_VERSION: ${{ fromJSON(needs.pins.outputs.json).rust.version }}
       RUSTUP_TOOLCHAIN: ${{ fromJSON(needs.pins.outputs.json).rust.version }}-x86_64-unknown-linux-gnu
@@ -322,7 +322,7 @@ jobs:
     runs-on: ubuntu-24.04
     needs: pins
     container:
-      image: ${{ needs.pins.outputs.rust_image }}
+      image: ${{ needs.pins.outputs.rust_image }} # zizmor: ignore[unpinned-images] digest-pinned via .github/pins.json
     env:
       RUST_VERSION: ${{ fromJSON(needs.pins.outputs.json).rust.version }}
       RUSTUP_TOOLCHAIN: ${{ fromJSON(needs.pins.outputs.json).rust.version }}-x86_64-unknown-linux-gnu

@@ -1,0 +1,12 @@
+# zizmor configuration. See docs/security.md#workflow-scanning.
+#
+# Accept a finding only with an inline `# zizmor: ignore[<audit>]` comment and a
+# one-line reason on the flagged line, or with a narrowly scoped ignore here
+# that carries its own comment. Do not add blanket severity thresholds.
+rules:
+  unpinned-uses:
+    config:
+      policies:
+        # Every action and reusable workflow, including GitHub's own, must be
+        # pinned to a full commit SHA. Tags and branches are mutable.
+        "*": hash-pin

@@ -1,17 +1,28 @@
 version: 2
+# Each ecosystem waits a week after an upstream release before proposing it, so
+# a compromised release has time to be detected and yanked first. Security
+# updates are not delayed by the cooldown.
 updates:
   - package-ecosystem: cargo
     directory: "/"
     schedule:
       interval: weekly
+    cooldown:
+      default-days: 7
     open-pull-requests-limit: 5
   - package-ecosystem: github-actions
     directory: "/"
     schedule:
       interval: weekly
+    cooldown:
+      default-days: 7
     open-pull-requests-limit: 5
+  # Covers every hash-locked tool requirement in requirements/ (mdformat and
+  # zizmor). Dependabot regenerates the hashes; review them like any other pin.
   - package-ecosystem: pip
     directory: "/requirements"
     schedule:
       interval: weekly
+    cooldown:
+      default-days: 7
     open-pull-requests-limit: 5
