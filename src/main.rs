@@ -69,6 +69,7 @@ fn run_with_binary(cli: Cli, binary: &OsStr) -> Result<ExitCode, String> {
         }
         Cli::Doctor => Ok(databricks::run_doctor(binary)),
         Cli::Databricks(args) => {
+            // run_passthrough returns only when the CLI could not be started.
             databricks::run_passthrough(binary, args).map(|never| match never {})
         }
         Cli::Probe(args) => {
