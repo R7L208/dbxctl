@@ -10,7 +10,7 @@ The Linux quality and supply-chain jobs run inside this platform-specific OCI
 manifest:
 
 ```text
-rust:1.89.0-bookworm@sha256:c9ac3fa8945b61dede1e4500d25028aa8fd8a8fe46365fcf9c0422f8d999b9b0
+rust:1.99.1-bookworm@sha256:5f29c3b4cb8ad8c6f10df979595582dd67dd146ffebc70718e24ff2e5b4a194d
 ```
 
 This pins the Linux userspace, compiler, Cargo, and base utilities. GitHub
@@ -47,7 +47,7 @@ them automatically. Developers on networks that block pypi.org can select a
 local mirror (see [Package Index](development.md#package-index)); hashes are
 enforced regardless of the index, and no private index URL is committed.
 
-The Linux quality job also downloads the Rust 1.89.0 Clippy, LLVM tools, and
+The Linux quality job also downloads the Rust 1.99.1 Clippy, LLVM tools, and
 Rustfmt component archives directly from the dated Rust distribution path.
 Their SHA-256 values are pinned in `.github/pins.json` and verified before
 their installers run. This avoids allowing `rustup component add` to resolve and
@@ -57,12 +57,12 @@ so the repository's toolchain file cannot trigger implicit component setup.
 
 | Rust component | Archive SHA-256 |
 | --- | --- |
-| Clippy | `c6c362c6cd74567022e9ba0c16f6676f8c2b73d955adcf1f6f4c51cf15e57ce8` |
-| LLVM tools | `bb0ced899fd1ac628f26e375adabc970b415c516ec82fb7cf9ac3c63cb4d0fee` |
-| Rustfmt | `540eb7adf43e37b22936f981c630b10c63915f64f3c227d981a8b592ece33430` |
+| Clippy | `458339712a058e52cc4522ff9ef8b59cd1ea1340312216cd94194c464a3f6dc5` |
+| LLVM tools | `8429c5117debfb45c22cf2f97712ef00e0e94976c96cf92f661974a458ca7e84` |
+| Rustfmt | `e3b36c4c7ec3486c059d8067ff48787676612007123aad7a4e8ec12c48ee9ba2` |
 
 The macOS and Windows portability jobs similarly install Cargo, `rustc`, and
-the target standard library from dated Rust 1.89.0 standalone archives rather
+the target standard library from dated Rust 1.99.1 standalone archives rather
 than asking `rustup` to resolve the minimal toolchain. `.github/pins.json`
 holds the archive SHA-256 values for macOS Arm64, macOS x86-64, and Windows
 x86-64, and the workflows reject runner architectures without an explicit
@@ -72,9 +72,9 @@ commands.
 
 | Target | Cargo SHA-256 | rustc SHA-256 | standard library SHA-256 |
 | --- | --- | --- | --- |
-| `aarch64-apple-darwin` | `545517d16ac76789aa6ce801cbc3eeecc9acaf43f3ccb63148c3577f2bb4b8d3` | `6d2cf6164bef00ff3d2c37ca0a0658ffb7c9c3178882a72d78e35abeba888860` | `1f729f8ba21725618ab894f14cc38f01470f1d15ea76a81fac2da63291bed75c` |
-| `x86_64-apple-darwin` | `81fabf0d783af844c7dd74dfe10d0302dd063775789a914f29b33e3d46ee1cf0` | `04f3acf7ddfb998fa2713226fd8528e6157b9030f9a6ac6678133d82d5c099f9` | `09780642e83b12085500ea78dcb46112a546467352cc4a4dd229f22e03d4a5f0` |
-| `x86_64-pc-windows-msvc` | `8c0a40a5411746ff6600d93acd16652fef56702196bb25b940ff399d7e107f40` | `76f70bbd3dc8681ee189931bc5e270cd9524ff3d17738d87f609bba4980c466c` | `ba81500406fdf8a3a81078df2129bd6e4793b579c9e1a498563670bccad92611` |
+| `aarch64-apple-darwin` | `685e563d94db1f003ffa5f5831439eec02569b9950b69867953c8213269c1eaf` | `23948a0a9c162fd2952defb3fb0462c44e8fcfd1a4ab8a274a1e1bdb2cf810a3` | `fe79d6ab5a0321de26463999d8c112b8ad3eafbcbcf822d66a2300b45dde1031` |
+| `x86_64-apple-darwin` | `6636dabcec164909d1c6eb9e2c596148787c84f7d3a02ff68a141569077f80b5` | `203feef2c2165d7dda1f30ccf75590f72a6abc52ce259ed1c418de84a6887698` | `484d5b88b424ddd29df196e1eb9420c8335bb5fac90a3c37140253345a8c65c4` |
+| `x86_64-pc-windows-msvc` | `4adb46c3707dee790682f7769d86983841148111695f561c843c33daa2af0c9b` | `7da83c2af1f209606b0160f25174d2867c7c7b73667c32c9e5fbcef4f5f45348` | `4fe09430ded40b8b3092b49f0a651178eb1f8154ef4d1f1a73f2a3595b2d956f` |
 
 Tools and Cargo state are installed under the job's ephemeral `RUNNER_TEMP`.
 They are not restored from shared caches or written into the repository.
@@ -89,7 +89,7 @@ Pushing a version tag such as `v0.1.0` builds locked native packages for Linux
 x86-64, macOS Arm64 or x86-64 (matching the hosted runner), and Windows x86-64.
 The tag must exactly match the version in `Cargo.toml`. Each job packages the
 binary with its license and Cargo manifests, records the archive's SHA-256
-digest, and generates an SPDX JSON SBOM with checksum-pinned Syft 1.52.0.
+digest, and generates an SPDX JSON SBOM with checksum-pinned Syft 1.55.0.
 
 All platforms use the same package layout and normalized `tar.gz` format.
 Archive entry order, timestamps, ownership, user names, and gzip metadata are
