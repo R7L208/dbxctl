@@ -2,7 +2,7 @@ use std::convert::Infallible;
 use std::env;
 use std::ffi::{OsStr, OsString};
 use std::fmt;
-use std::io::Read;
+use std::io::{self, Read};
 use std::path::PathBuf;
 use std::process::{Child, Command, ExitCode, ExitStatus, Stdio};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
@@ -20,6 +20,10 @@ const PIPE_CLOSE_GRACE: Duration = Duration::from_secs(1);
 /// disagree about which version is installed.
 pub(crate) const VERSION_COMMAND: &str = "version";
 pub(crate) const VERSION_TIMEOUT: Duration = Duration::from_secs(30);
+/// The most output captured from one stream. Larger output is drained and
+/// discarded so the process can finish, and the run fails. Inline Statement
+/// Execution chunks are at most 25 MiB, and `bundle schema` is about 1 MB.
+const MAX_CAPTURED_BYTES: usize = 64 * 1024 * 1024;
 
 #[derive(Debug)]
 pub(crate) struct Captured {
@@ -93,7 +97,21 @@ pub(crate) fn run_captured(
     run_captured_command(&mut command, timeout)
 }
 
-fn run_captured_command(command: &mut Command, timeout: Duration) -> Result<Captured, String> {
+/// Runs a prepared command with stdin closed, capturing its output, and stops
+/// it at `timeout`. The transport (#31) uses this to set the working
+/// directory.
+pub(crate) fn run_captured_command(
+    command: &mut Command,
+    timeout: Duration,
+) -> Result<Captured, String> {
+    run_captured_limited(command, timeout, MAX_CAPTURED_BYTES)
+}
+
+fn run_captured_limited(
+    command: &mut Command,
+    timeout: Duration,
+    limit: usize,
+) -> Result<Captured, String> {
     let display = command.get_program().display().to_string();
     let mut child = command
         .stdin(Stdio::null())
@@ -114,8 +132,8 @@ fn run_captured_command(command: &mut Command, timeout: Duration) -> Result<Capt
     // either pipe fills its operating-system buffer. The readers report through
     // a channel so that collecting their output can be bounded by a deadline.
     let (sender, output) = mpsc::channel();
-    spawn_reader(Stream::Stdout, stdout, sender.clone());
-    spawn_reader(Stream::Stderr, stderr, sender);
+    spawn_reader(Stream::Stdout, stdout, limit, sender.clone());
+    spawn_reader(Stream::Stderr, stderr, limit, sender);
     let started = Instant::now();
 
     let status = loop {
@@ -165,13 +183,27 @@ type ReaderResult = (Stream, std::io::Result<Vec<u8>>);
 fn spawn_reader(
     stream: Stream,
     mut pipe: impl Read + Send + 'static,
+    limit: usize,
     sender: mpsc::Sender<ReaderResult>,
 ) {
     // The handle is dropped: a reader blocked on a pipe held open by a
     // descendant is abandoned at the deadline and ends when that pipe closes.
     thread::spawn(move || {
         let mut bytes = Vec::new();
-        let result = pipe.read_to_end(&mut bytes).map(|_| bytes);
+        let bound = u64::try_from(limit).unwrap_or(u64::MAX).saturating_add(1);
+        let result = (&mut pipe)
+            .take(bound)
+            .read_to_end(&mut bytes)
+            .and_then(|_| {
+                if bytes.len() <= limit {
+                    return Ok(bytes);
+                }
+                // Keep draining so the process never blocks on a full pipe.
+                io::copy(&mut pipe, &mut io::sink())?;
+                Err(io::Error::other(format!(
+                    "the output exceeds the {limit}-byte limit"
+                )))
+            });
         let _ = sender.send((stream, result));
     });
 }
@@ -301,7 +333,8 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use super::{
-        MINIMUM_DATABRICKS_VERSION, Version, run_captured, run_captured_command, validate,
+        MINIMUM_DATABRICKS_VERSION, Version, run_captured, run_captured_command,
+        run_captured_limited, validate,
     };
     use crate::test_support::fake_databricks;
 
@@ -437,5 +470,27 @@ mod tests {
         assert!(captured.status.success());
         assert_eq!(captured.stdout, vec![b'o'; BYTES]);
         assert_eq!(captured.stderr, vec![b'e'; BYTES]);
+    }
+
+    #[test]
+    fn refuses_output_over_the_limit_without_deadlock() {
+        const LIMIT: usize = 64 * 1024;
+        for (stream, variable) in [("stdout", "STDOUT_BYTES"), ("stderr", "STDERR_BYTES")] {
+            let mut command = Command::new(fake_databricks());
+            command.env(variable, (4 * LIMIT).to_string());
+            let error = run_captured_limited(&mut command, Duration::from_secs(5), LIMIT)
+                .expect_err("output over the limit");
+            assert!(
+                error.contains(&format!(
+                    "captured {stream}: the output exceeds the {LIMIT}-byte limit"
+                )),
+                "{error}"
+            );
+        }
+        let mut command = Command::new(fake_databricks());
+        command.env("STDOUT_BYTES", LIMIT.to_string());
+        let captured = run_captured_limited(&mut command, Duration::from_secs(5), LIMIT)
+            .expect("output at the limit");
+        assert_eq!(captured.stdout.len(), LIMIT);
     }
 }

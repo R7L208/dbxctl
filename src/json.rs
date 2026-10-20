@@ -15,8 +15,8 @@
 //!   including integers beyond `u64::MAX`, is an `f64` and may lose precision.
 //!   `-0` is the float negative zero. Typed getters never convert between
 //!   integers and floats.
-//! - **Size:** input size is not limited here; captured output is bounded by
-//!   the transport (#31).
+//! - **Size:** input size is not limited here; captured CLI output is bounded
+//!   at 64 MiB per stream by `run_captured_command` in `src/databricks.rs`.
 //! - **Output:** documents the crate writes are built from [`Value`], which
 //!   has no floats, so every written number is an exact integer.
 
