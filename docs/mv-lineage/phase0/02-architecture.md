@@ -23,15 +23,16 @@ the boundary through which every workspace operation passes. It implements
 | `src/args.rs` | A small reusable option parser over `OsString`. | #29 |
 | `src/exit.rs` | The exit-code table from [R3](01-requirements.md#r3-exit-codes). | #30 |
 | `src/evidence.rs` | Run-ID generation, the run directory, raw evidence writes, `run.json`, and the `.dbxctl/.gitignore`. | #30 |
+| `src/transport.rs` | The `Runner` trait and `CliRunner::for_bundle(binary, root, target, profile)`: captured CLI runs, API GETs through `databricks api get --debug` with HTTP status and `error_code`, and Statement Execution with polling, cancellation at a deadline, result chunks, and error classification. | #31 |
+| `src/safety.rs` | `is_read_statement`, the read-only SQL guard. | #31 |
+| `src/uc/fqn.rs` | Parsing and formatting Unity Catalog three-part names, including backtick quoting. | #31 |
+| `src/text.rs` | SQL string-literal and identifier quoting. | #31 |
 
 ### Planned Crate-Level Modules
 
 | Module | Will own | Issue |
 | --- | --- | --- |
-| Transport (path not yet decided) | The `Runner` trait and `CliRunner::for_bundle(root, target, profile)`, captured API GETs, and Statement Execution with polling, pagination, and error classification. | #31 |
-| `src/safety.rs` | `is_read_statement` and, if #37 ships, the `Mutate` capability and `safety::grant`. | #31, #37 |
-| `src/uc/fqn.rs` | Parsing and formatting Unity Catalog three-part names, including backtick quoting. | #31 |
-| `src/text.rs` | SQL string-literal and identifier quoting. | #31 |
+| `src/safety.rs` additions | If #37 ships, the `Mutate` capability and `safety::grant`. | #37 |
 | `src/bundle/paths.rs` | Local-path resolution relative to the bundle root and workspace-path forms. | #32 |
 | `src/bundle/schema.rs` | Running `databricks bundle schema` and locating table-update trigger definitions. | #34 |
 
@@ -74,7 +75,7 @@ Every workspace operation goes through the resolved `databricks` executable.
 There is no direct HTTP client, separate authentication implementation, shell
 invocation, or async runtime.
 
-What exists today in `src/databricks.rs`:
+What exists today in `src/databricks.rs` and `src/transport.rs`:
 
 - The executable is `DATABRICKS_CLI_PATH` when set, otherwise `databricks`
   resolved from `PATH`.
@@ -82,19 +83,25 @@ What exists today in `src/databricks.rs`:
   stdin connected to null, and stdout and stderr captured. Both pipes are
   drained concurrently, and the process is killed if it exceeds the caller's
   timeout.
+- Captured output is limited to 64 MiB per stream. Larger output is drained
+  and discarded so the process can finish, and the run fails.
 - Passthrough (`dbxctl databricks ...`) inherits stdio and returns the upstream
   exit code.
+- `CliRunner` (#31) runs every probe call with the bundle root as its working
+  directory, then `-t <target>`, and `-p <profile>` when set.
+- Statements that `is_read_statement` does not accept are refused before any
+  process starts ([R9](01-requirements.md#r9-read-only-by-default)). It
+  allows one `SELECT`, `WITH … SELECT`, `SHOW`, or `DESCRIBE` statement, reads
+  literals, quoted identifiers, and nested comments as Databricks SQL does,
+  and refuses any write keyword outside them.
+- Statement Execution is a POST even for a read. Only the submit and cancel
+  paths are posted, and only for statements the guard accepted.
+- `Authorization` headers, bearer tokens, and `dapi` tokens are scrubbed from
+  captured output before it is returned for the evidence record. Full
+  redaction is #36.
 
 What is planned:
 
-- #31 builds the read-only transport on `run_captured`. Every probe call runs
-  with the bundle root as its working directory, `-t <target>`, and
-  `-p <profile>` when set.
-- Write SQL is refused before any process starts
-  ([R9](01-requirements.md#r9-read-only-by-default)).
-- Credentials are scrubbed from captured debug output before it is stored.
-- Captured output size is not yet bounded; `src/json.rs` documents that #31
-  owns this limit.
 - Mutating transport methods, if #37 ships, require a `&Mutate` capability
   ([R10](01-requirements.md#r10-mutation-capability-and-cleanup)).
 
@@ -117,6 +124,5 @@ should not depend on graph types.
 
 ## Open Items
 
-- The transport module's path and exact API (#31).
 - Where workspace and authentication context is recorded (#55, outside the
   Phase 0 contract).
