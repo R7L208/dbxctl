@@ -35,5 +35,36 @@ Stub (#32).
 
 ## v6
 
-Stub (#34, part A: offline `bundle schema`). Part B is in
+Part A (#34) answers offline whether table-update triggers are job fields.
+Part B, which checks a live job, is in
 [05-workspace-probes.md](05-workspace-probes.md).
+
+**Runs:** `databricks bundle schema`, with a 60 second timeout. It needs no
+bundle or workspace.
+
+**Reads:** `$defs` nests definitions by Go import path, one object per path
+segment, so the trigger definition is at
+`$defs/github.com/databricks/databricks-sdk-go/service/jobs.TriggerSettings`.
+An object with a JSON Schema keyword is a definition; any other object is a
+path segment. A definition declares `table_update` if its own `properties`,
+or the `properties` of one of its `oneOf`, `anyOf`, or `allOf` branches,
+contain it.
+
+**Evidence:** `evidence/v6/schema.json` records the invocation, with the
+schema itself in `schema.stdout`.
+
+| Outcome | State | Verdict or reason |
+| --- | --- | --- |
+| Only `jobs` definitions declare `table_update` | resolved | `jobs` |
+| Definitions in other packages declare it too | resolved | Every package, sorted, such as `jobs, pipelines` |
+| No definition declares it, or there is no `$defs` object | unknown | The reason names which |
+| Output is not valid JSON, or the CLI exits non-zero or on a signal | unknown | The reason names which |
+| The CLI cannot be run to completion | failed | See the evidence record |
+
+**Fallback for unknown:** assume table-update triggers are job fields, as
+[R5](01-requirements.md#r5-cli-baseline) expects, until part B checks a live
+job.
+
+CLI 1.21.0 resolves `jobs`. The ignored `bundle_schema_trigger_contract` test
+checks the pinned CLI, and the fixture `tests/fixtures/bundle-schema-jobs.json`
+is a trimmed excerpt of the 1.21.0 schema.
