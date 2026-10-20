@@ -140,6 +140,7 @@ fn complete(
 fn run_check(check: CheckId, context: &Context<'_>) -> Result<Finding, String> {
     match check {
         CheckId::Cli => lineage::cli::run(context),
+        CheckId::V6 => lineage::v6::run(context),
         _ => Ok(Finding::skipped(
             check,
             format!("not implemented yet; {} adds this check", check.issue()),

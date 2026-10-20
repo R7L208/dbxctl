@@ -1,4 +1,5 @@
 pub(crate) mod cli;
+pub(crate) mod v6;
 
 use std::collections::HashSet;
 use std::ffi::{OsStr, OsString};

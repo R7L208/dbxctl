@@ -428,15 +428,35 @@ fn probe_run_directory_is_ignored_by_git() {
 #[test]
 fn probe_run_with_unresolved_checks_exits_10() {
     let fixture = ProbeFixture::new("probe-unresolved", CLI_VERSION_SCENARIO);
-    let output = fixture.run(&["--only", "v6,cli"]);
+    let output = fixture.run(&["--only", "validate,cli"]);
     assert_eq!(output.status.code(), Some(10));
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
         stdout.starts_with(
-            "cli       resolved  1.13.0\nv6        skipped   not implemented yet; #34 adds this check\n"
+            "cli       resolved  1.13.0\nvalidate  skipped   not implemented yet; #32 adds this check\n"
         ),
         "{stdout}"
     );
+}
+
+#[test]
+fn probe_run_answers_v6_offline() {
+    let schema = include_str!("fixtures/bundle-schema-jobs.json");
+    let scenario = format!(
+        "{CLI_VERSION_SCENARIO}\ncase\narg bundle\narg schema\nstdout {}\n",
+        schema.replace('\\', "\\\\").replace('\n', "\\n")
+    );
+    let fixture = ProbeFixture::new("probe-v6", &scenario);
+    let output = fixture.run(&["--only", "cli,v6"]);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(output.status.code(), Some(0), "{stdout}");
+    assert!(
+        stdout.starts_with("cli       resolved  1.13.0\nv6        resolved  jobs\n"),
+        "{stdout}"
+    );
+    let invocations = fixture.cli.invocations();
+    assert_eq!(invocations, [vec!["version"], vec!["bundle", "schema"]]);
+    assert_no_mutations(&invocations);
 }
 
 #[test]
