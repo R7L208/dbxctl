@@ -70,6 +70,20 @@ pub fn parse_invocation_log(log: &str) -> Vec<Vec<String>> {
         .collect()
 }
 
+/// Statement Execution is a POST even for a read: submitting a statement, and
+/// cancelling one. `src/safety.rs` refuses any statement that is not a read
+/// before the CLI runs, so these never mutate.
+fn is_statement_post(path: &[&str]) -> bool {
+    match path {
+        ["api", "post", "/api/2.0/sql/statements"] => true,
+        ["api", "post", url] => url
+            .strip_prefix("/api/2.0/sql/statements/")
+            .and_then(|rest| rest.strip_suffix("/cancel"))
+            .is_some_and(|id| !id.is_empty() && !id.contains('/')),
+        _ => false,
+    }
+}
+
 fn is_help_request(argv: &[String]) -> bool {
     match argv.split_last() {
         Some((last, path)) => {
@@ -117,8 +131,13 @@ pub fn assert_no_mutations(invocations: &[Vec<String>]) {
             .map(String::as_str)
             .take_while(|argument| !argument.starts_with('-'))
             .collect();
+        // Trailing positionals, such as the path in `api get <path>`, are
+        // arguments to a read-only command, not a different command.
         assert!(
-            READ_ONLY_COMMANDS.contains(&path.as_slice()),
+            READ_ONLY_COMMANDS
+                .iter()
+                .any(|command| path.starts_with(command))
+                || is_statement_post(&path),
             "invocation {argv:?} is not a known read-only command"
         );
     }
