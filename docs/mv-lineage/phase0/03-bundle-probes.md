@@ -44,20 +44,20 @@ bundle or workspace.
 
 **Reads:** `$defs` nests definitions by Go import path, one object per path
 segment, so the trigger definition is at
-`$defs/github.com/databricks/databricks-sdk-go/service/jobs.TriggerSettings`.
-A path segment holds only objects, so an object is a definition if it is
-empty, has a member that is not an object, is the target of a `$ref`, or
-reads as a schema: every object member is a keyword holding what that
-keyword holds, such as `properties` mapping names to schemas. Any other
-object is a path segment. A definition declares `table_update` if its
-own `properties` contain it, or if a `oneOf`, `anyOf`, or `allOf` branch at
-any depth, or a schema it names with `$ref`, declares it. Each `$ref` is
-followed once, so a cycle ends. Each definition's package is its full import path. Verdicts name
-SDK service packages without the `github.com/databricks/databricks-sdk-go/service/`
-prefix, or the same prefix with a major version such as `v2/` before
-`service/`, so only the SDK's package is `jobs`. A package directly under
-`$defs` is named `$defs/` and its name, such as `$defs/jobs`; any other
-package keeps its full path.
+`$defs/github.com/databricks/databricks-sdk-go/service/jobs.TriggerSettings`. A
+path segment holds only objects, so an object is a definition if it is empty,
+has a member that is not an object, is the target of a `$ref`, or reads as a
+schema: every object member is a keyword holding what that keyword holds, such
+as `properties` mapping names to schemas. Any other object is a path segment. A
+definition declares `table_update` if its own `properties` contain it, or if a
+`oneOf`, `anyOf`, or `allOf` branch at any depth, or a schema it names with
+`$ref`, declares it. Each `$ref` is followed once and its answer reused, so a
+cycle ends. Each definition's package is its full import path. Verdicts name
+SDK service packages without the
+`github.com/databricks/databricks-sdk-go/service/` prefix, or the same prefix
+with a major version such as `v2/` before `service/`, so only the SDK's package
+is `jobs`. A package directly under `$defs` is named `$defs/` and its name,
+such as `$defs/jobs`; any other package keeps its full path.
 
 **Evidence:** `evidence/v6/schema.json` records the invocation, with the
 schema itself in `schema.stdout`.

@@ -5,9 +5,9 @@ command shapes come from the contract in
 [01-requirements.md](01-requirements.md).
 
 > **Status:** `dbxctl probe run` works, but only the `cli` and `v6` checks
-> resolve so far; every other selected check is reported as skipped, so a full run exits
-> with code 10. `probe report` and `probe cleanup` are not implemented yet
-> (#36, #37). #38 checks every command against the real
+> resolve so far; every other selected check is reported as skipped, so a
+> full run exits with code 10. `probe report` and `probe cleanup` are not
+> implemented yet (#36, #37). #38 checks every command against the real
 > `dbxctl probe ... --help` output.
 
 ## Prerequisites
