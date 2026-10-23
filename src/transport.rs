@@ -306,10 +306,10 @@ impl CliRunner {
         let status_path = format!("{STATEMENTS}/{statement_id}");
         match self.wait(body, started, &statement_id, &status_path, calls) {
             Ok(body) => self.result_set(&body, started, statement_id, &status_path, calls),
-            Err(error) => {
-                // Unless it ended on its own, the statement may still be
-                // running, so cancel it rather than leave it on the warehouse.
-                if !matches!(error, Error::Sql { .. }) {
+            Err(Stopped { error, running }) => {
+                // A statement that may still be running is cancelled rather
+                // than left on the warehouse; one that ended is not.
+                if running {
                     self.cancel(&status_path, calls);
                 }
                 Err(error)
@@ -318,7 +318,9 @@ impl CliRunner {
     }
 
     /// Polls a submitted statement until it succeeds and returns the final
-    /// response.
+    /// response. A success after the deadline is a timeout, because the
+    /// deadline bounds the whole statement, but the statement has ended, so
+    /// it is not cancelled.
     fn wait(
         &self,
         mut body: Document,
@@ -326,9 +328,14 @@ impl CliRunner {
         statement_id: &str,
         status_path: &str,
         calls: &mut Vec<Call>,
-    ) -> Result<Document, Error> {
-        let timeout = || Error::Timeout {
-            statement_id: statement_id.to_owned(),
+    ) -> Result<Document, Stopped> {
+        let ended = |error| Stopped {
+            error,
+            running: false,
+        };
+        let running = |error| Stopped {
+            error,
+            running: true,
         };
         loop {
             let state = body
@@ -340,13 +347,17 @@ impl CliRunner {
             match state.as_str() {
                 // A result that came back after the deadline is too late.
                 "SUCCEEDED" if started.elapsed() > self.limits.deadline => {
-                    return Err(timeout());
+                    return Err(ended(Error::Timeout {
+                        statement_id: statement_id.to_owned(),
+                    }));
                 }
                 "SUCCEEDED" => return Ok(body),
                 "PENDING" | "RUNNING" => {
                     // Neither the sleep nor the poll may outlast the deadline.
                     thread::sleep(self.limits.poll.min(self.remaining(started)));
-                    body = self.bounded_get(status_path, started, statement_id, calls)?;
+                    body = self
+                        .bounded_get(status_path, started, statement_id, calls)
+                        .map_err(running)?;
                 }
                 "FAILED" | "CANCELED" | "CLOSED" => {
                     let error = body.root().pointer("/status/error");
@@ -356,21 +367,21 @@ impl CliRunner {
                             .and_then(Node::as_str)
                             .map(str::to_owned)
                     };
-                    return Err(Error::Sql {
+                    return Err(ended(Error::Sql {
                         state,
                         error_code: text("error_code"),
                         message: text("message"),
-                    });
+                    }));
                 }
                 "" => {
-                    return Err(Error::Transport(
+                    return Err(running(Error::Transport(
                         "the statement response has no `status.state`".to_owned(),
-                    ));
+                    )));
                 }
                 other => {
-                    return Err(Error::Transport(format!(
+                    return Err(running(Error::Transport(format!(
                         "the statement is in an unexpected state {other:?}"
-                    )));
+                    ))));
                 }
             }
         }
@@ -485,8 +496,9 @@ impl CliRunner {
     }
 
     /// A GET during a statement, stopped at the deadline: a poll or a
-    /// result chunk. Past the deadline it is a timeout, whether no time was
-    /// left to start it or it was stopped before it finished.
+    /// result chunk. It is a timeout when no time was left to start it or
+    /// the run was stopped at the deadline; a run that finished keeps its
+    /// own error, such as an HTTP 403, even past the deadline.
     fn bounded_get(
         &self,
         path: &str,
@@ -502,7 +514,7 @@ impl CliRunner {
         }
         let limit = self.limits.call.min(self.remaining(started));
         match self.statement_call("get", path, None, limit, calls) {
-            Err(_) if self.remaining(started).is_zero() => Err(timeout()),
+            Err(_) if stopped_at_deadline(calls.last(), self.remaining(started)) => Err(timeout()),
             result => result,
         }
     }
@@ -573,6 +585,18 @@ impl Runner for CliRunner {
         let result = self.statement_rows(sql, warehouse_id, &mut calls);
         Outcome { calls, result }
     }
+}
+
+/// Why a statement stopped without a result, and whether it may still be
+/// running on the warehouse.
+struct Stopped {
+    error: Error,
+    running: bool,
+}
+
+/// Whether the last run was stopped at the deadline rather than finished.
+fn stopped_at_deadline(call: Option<&Call>, remaining: Duration) -> bool {
+    remaining.is_zero() && call.is_some_and(|call| call.result.is_err())
 }
 
 /// The submit request: inline `JSON_ARRAY` results, and a pending statement
@@ -948,8 +972,8 @@ mod tests {
     use std::process::ExitStatus;
 
     use super::{
-        CliRunner, Error, Limits, ResultSet, Runner, STATEMENT_EVIDENCE_BYTES, STATEMENTS,
-        WAIT_TIMEOUT, error_body, http_status, scrub, scrubbed, submit_body,
+        Call, CliRunner, Error, Limits, ResultSet, Runner, STATEMENT_EVIDENCE_BYTES, STATEMENTS,
+        WAIT_TIMEOUT, error_body, http_status, scrub, scrubbed, stopped_at_deadline, submit_body,
     };
     use crate::databricks::Captured;
     use crate::json::Node;
@@ -1343,8 +1367,7 @@ mod tests {
         // The warehouse answers the submit late with a finished statement.
         let late = submit_waiting(Duration::ZERO, &succeeded(r#"{"data_array":[["1",null]]}"#))
             .replace("exit 0", "sleep 300\nexit 0");
-        let scenario = [late, cancel_case()].concat();
-        let fixture = Fixture::new("transport-late-success", &scenario);
+        let fixture = Fixture::new("transport-late-success", &late);
         let runner = fixture.runner(QUICK).with_limits(Limits {
             call: Duration::from_secs(10),
             deadline: Duration::from_millis(100),
@@ -1357,7 +1380,29 @@ mod tests {
                 statement_id: ID.to_owned()
             })
         );
-        assert_no_mutations(&fixture.invocations());
+        // The statement has ended, so it is not cancelled.
+        assert_eq!(fixture.invocations().len(), 1);
+    }
+
+    #[test]
+    fn only_a_run_stopped_at_the_deadline_is_a_timeout() {
+        let finished = Call {
+            args: Vec::new(),
+            result: Ok(Captured {
+                stdout: Vec::new(),
+                stderr: Vec::new(),
+                status: ExitStatus::default(),
+            }),
+        };
+        let stopped = Call {
+            args: Vec::new(),
+            result: Err("timed out".to_owned()),
+        };
+        // A run that finished, such as one answering 403, keeps its error.
+        assert!(!stopped_at_deadline(Some(&finished), Duration::ZERO));
+        assert!(stopped_at_deadline(Some(&stopped), Duration::ZERO));
+        assert!(!stopped_at_deadline(Some(&stopped), Duration::from_secs(1)));
+        assert!(!stopped_at_deadline(None, Duration::ZERO));
     }
 
     #[test]
