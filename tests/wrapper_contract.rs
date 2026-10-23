@@ -441,6 +441,33 @@ fn probe_run_with_unresolved_checks_exits_10() {
 }
 
 #[test]
+fn probe_run_with_skipped_checks_exits_10() {
+    // Whichever checks are still unimplemented come back skipped, so this
+    // checks every skipped line rather than naming one, and holds as checks
+    // land. Once every check is implemented there is nothing left to skip.
+    let fixture = ProbeFixture::new("probe-skipped", CLI_VERSION_SCENARIO);
+    let output = fixture.run(&["--warehouse-id", "w", "--scope-catalog", "c"]);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let skipped: Vec<&str> = stdout
+        .lines()
+        .filter(|line| line.get(10..20) == Some("skipped   "))
+        .collect();
+    for line in &skipped {
+        let reason = &line[20..];
+        let issue = reason
+            .strip_prefix("not implemented yet; #")
+            .and_then(|rest| rest.strip_suffix(" adds this check"));
+        assert!(
+            issue.is_some_and(|issue| !issue.is_empty() && issue.bytes().all(|b| b.is_ascii_digit())),
+            "{line}"
+        );
+    }
+    if !skipped.is_empty() {
+        assert_eq!(output.status.code(), Some(10), "{stdout}");
+    }
+}
+
+#[test]
 fn probe_run_answers_v6_offline() {
     let schema = include_str!("fixtures/bundle-schema-jobs.json");
     let scenario = format!(
