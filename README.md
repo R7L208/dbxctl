@@ -83,7 +83,10 @@ dbxctl probe run --suite lineage --bundle-root <path> --target <non-prod> --only
 
 Only the `cli` check runs so far. Without `--only`, every check is selected,
 so `--warehouse-id` and `--scope-catalog` are required and the unimplemented
-checks are reported as skipped (exit 10). See the
+checks are reported as skipped. The run exits 10 whenever a selected check is
+not resolved, so `--only cli` also exits 10 if it cannot confirm Databricks
+CLI 1.13.0 or newer; see the
+[exit codes](docs/mv-lineage/phase0/00-kit.md#interpreting-results) and the
 [MV-lineage probe docs](docs/mv-lineage/README.md).
 
 ## Supported Platforms
