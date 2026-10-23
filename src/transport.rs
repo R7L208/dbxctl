@@ -210,8 +210,14 @@ impl CliRunner {
         (result, call)
     }
 
-    /// One `databricks api <method>` call.
-    fn api(&self, method: &str, path: &str, body: Option<&str>) -> (Call, Result<Response, Error>) {
+    /// One `databricks api <method>` call, stopped after `timeout`.
+    fn api(
+        &self,
+        method: &str,
+        path: &str,
+        body: Option<&str>,
+        timeout: Duration,
+    ) -> (Call, Result<Response, Error>) {
         if let Err(problem) = check_path(path) {
             let call = Call {
                 args: Vec::new(),
@@ -224,7 +230,7 @@ impl CliRunner {
             args.extend(["--json", body]);
         }
         args.push("--debug");
-        let (result, call) = self.capture(&args, self.limits.call);
+        let (result, call) = self.capture(&args, timeout);
         (call, response(method, &result))
     }
 
@@ -236,7 +242,8 @@ impl CliRunner {
     ) -> Result<ResultSet, Error> {
         let started = Instant::now();
         let submit = submit_body(sql, warehouse_id);
-        let mut body = self.statement_call("post", STATEMENTS, Some(&submit), calls)?;
+        let mut body =
+            self.statement_call("post", STATEMENTS, Some(&submit), self.limits.call, calls)?;
         let statement_id = body
             .root()
             .get("statement_id")
@@ -257,15 +264,20 @@ impl CliRunner {
             match state.as_str() {
                 "SUCCEEDED" => break,
                 "PENDING" | "RUNNING" => {
-                    if started.elapsed() >= self.limits.deadline {
-                        let cancel = format!("{status_path}/cancel");
-                        // A failed cancel is recorded but does not change the outcome.
-                        let (call, _) = self.api("post", &cancel, Some("{}"));
-                        calls.push(call);
-                        return Err(Error::Timeout { statement_id });
+                    // Neither the sleep nor the poll may outlast the deadline.
+                    let remaining = || self.limits.deadline.saturating_sub(started.elapsed());
+                    thread::sleep(self.limits.poll.min(remaining()));
+                    if remaining().is_zero() {
+                        return Err(self.cancel(&status_path, statement_id, calls));
                     }
-                    thread::sleep(self.limits.poll);
-                    body = self.statement_call("get", &status_path, None, calls)?;
+                    let timeout = self.limits.call.min(remaining());
+                    match self.statement_call("get", &status_path, None, timeout, calls) {
+                        Ok(next) => body = next,
+                        Err(_) if remaining().is_zero() => {
+                            return Err(self.cancel(&status_path, statement_id, calls));
+                        }
+                        Err(error) => return Err(error),
+                    }
                 }
                 "FAILED" | "CANCELED" | "CLOSED" => {
                     let error = body.root().pointer("/status/error");
@@ -319,7 +331,7 @@ impl CliRunner {
             }
             last_index = Some(index);
             let path = format!("{status_path}/result/chunks/{index}");
-            owned = self.statement_call("get", &path, None, calls)?;
+            owned = self.statement_call("get", &path, None, self.limits.call, calls)?;
             chunk = Some(owned.root());
         }
         Ok(ResultSet {
@@ -329,15 +341,25 @@ impl CliRunner {
         })
     }
 
+    /// Sends a cancel for a statement that outlasted the deadline. A failed
+    /// cancel is recorded but does not change the outcome.
+    fn cancel(&self, status_path: &str, statement_id: String, calls: &mut Vec<Call>) -> Error {
+        let cancel = format!("{status_path}/cancel");
+        let (call, _) = self.api("post", &cancel, Some("{}"), self.limits.call);
+        calls.push(call);
+        Error::Timeout { statement_id }
+    }
+
     /// One API call during a statement; its body must be present.
     fn statement_call(
         &self,
         method: &str,
         path: &str,
         body: Option<&str>,
+        timeout: Duration,
         calls: &mut Vec<Call>,
     ) -> Result<Document, Error> {
-        let (call, response) = self.api(method, path, body);
+        let (call, response) = self.api(method, path, body, timeout);
         calls.push(call);
         response?.body.ok_or_else(|| {
             Error::Transport(format!(
@@ -353,7 +375,7 @@ impl Runner for CliRunner {
     }
 
     fn api_get(&self, path: &str) -> Outcome<Response> {
-        let (call, result) = self.api("get", path, None);
+        let (call, result) = self.api("get", path, None, self.limits.call);
         Outcome {
             calls: vec![call],
             result,
@@ -613,7 +635,7 @@ mod tests {
     use std::fmt::Write as _;
     use std::fs;
     use std::path::PathBuf;
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     use super::{
         CliRunner, Error, Limits, ResultSet, Runner, STATEMENTS, http_status, scrub, submit_body,
@@ -1069,6 +1091,53 @@ mod tests {
         assert_eq!(invocations.len(), 2);
         assert_eq!(invocations[1][2], cancel);
         assert_no_mutations(&invocations);
+    }
+
+    #[test]
+    fn neither_the_poll_interval_nor_a_slow_poll_outlasts_the_deadline() {
+        let cancel = format!("{}/cancel", status_path());
+        let cancel_case = case(
+            &["api", "post", &cancel, "--json", "{}", "--debug"],
+            "{}",
+            &debug_log("post", &cancel, "200 OK"),
+            0,
+        );
+        let slow_poll =
+            get(&status_path(), &state("RUNNING")).replace("exit 0", "sleep 20000\nexit 0");
+        for (name, poll, scenario, polls) in [
+            (
+                "transport-long-interval",
+                Duration::from_secs(20),
+                [submit(&state("PENDING")), cancel_case.clone()].concat(),
+                0,
+            ),
+            (
+                "transport-slow-poll",
+                Duration::ZERO,
+                [submit(&state("PENDING")), slow_poll, cancel_case.clone()].concat(),
+                1,
+            ),
+        ] {
+            let fixture = Fixture::new(name, &scenario);
+            let runner = fixture.runner(QUICK).with_limits(Limits {
+                call: Duration::from_secs(20),
+                deadline: Duration::from_millis(500),
+                poll,
+            });
+            let started = Instant::now();
+            let outcome = runner.statement(SQL, WAREHOUSE);
+            assert!(started.elapsed() < Duration::from_secs(10), "{name}");
+            assert_eq!(
+                outcome.result,
+                Err(Error::Timeout {
+                    statement_id: ID.to_owned()
+                }),
+                "{name}"
+            );
+            let invocations = fixture.invocations();
+            assert_eq!(invocations.len(), 2 + polls, "{name}");
+            assert_eq!(invocations.last().map(|args| &args[2]), Some(&cancel));
+        }
     }
 
     #[test]
