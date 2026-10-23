@@ -554,6 +554,19 @@ mod tests {
     }
 
     #[test]
+    fn ambiguous_shapes_are_read_as_documented() {
+        // Unnamed, with only a member that is not a keyword: a segment, so
+        // its `x-meta` child is the definition. `y`, holding only a segment
+        // named `properties`, reads as a schema, so it is one definition and
+        // the `jobs.T` under it is not searched.
+        let schema = r#"{"$defs": {
+            "x": {"jobs.T": {"x-meta": {"properties": {"table_update": {}}}}},
+            "y": {"properties": {"jobs.T": {"properties": {"table_update": {}}}}}
+        }}"#;
+        assert_eq!(found(schema), Some(vec!["x/jobs.T/x-meta".to_owned()]));
+    }
+
+    #[test]
     fn walks_each_ref_in_a_dense_cycle_once() {
         // Every definition refs every other and none declares the property,
         // so a walk that forgot each "no" would visit every path: about 12!.

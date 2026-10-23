@@ -23,7 +23,7 @@ the boundary through which every workspace operation passes. It implements
 | `src/args.rs` | A small reusable option parser over `OsString`. | #29 |
 | `src/exit.rs` | The exit-code table from [R3](01-requirements.md#r3-exit-codes). | #30 |
 | `src/evidence.rs` | Run-ID generation, the run directory, raw evidence writes, `run.json`, and the `.dbxctl/.gitignore`. | #30 |
-| `src/bundle/schema.rs` | The `databricks bundle schema` command and timeout, and finding the packages whose definitions declare a property, such as `table_update`. | #34 |
+| `src/bundle/schema.rs` | The `databricks bundle schema` command and timeout, and finding the packages whose definitions declare a property, such as `table_update`: telling definitions from path segments, resolving `$ref`s, and walking each ref once per definition. | #34 |
 
 ### Planned Crate-Level Modules
 
@@ -47,7 +47,7 @@ is recorded as skipped and names the issue that adds it.
 | `src/probe/model.rs` | `CheckId`, verdict and state types, and the finding struct. | #30 |
 | `src/probe/orchestrator.rs` | Running selected checks in a fixed order and writing the run directory: `run.json`, raw evidence, `findings.json`, and the skeleton `findings.md`. | #30 |
 | `src/probe/lineage/cli.rs` | The minimal `cli` check: which Databricks CLI version is installed. | #30 |
-| `src/probe/lineage/v6.rs` | `v6` part A: running `databricks bundle schema` and deciding whether it declares table-update triggers only on jobs. | #34 |
+| `src/probe/lineage/v6.rs` | `v6` part A: running `databricks bundle schema`, naming each package that declares table-update triggers, and building the verdict: `jobs`, the jobs packages and `; also: ` the others, or `not jobs: `. | #34 |
 
 ### Planned Probe Modules
 
