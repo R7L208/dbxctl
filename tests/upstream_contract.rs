@@ -97,3 +97,32 @@ fn bundle_schema_trigger_contract() {
         "the pinned CLI no longer defines table-update triggers only under jobs: {stdout}"
     );
 }
+
+#[test]
+#[ignore = "requires the pinned Databricks CLI binary"]
+fn offline_bundle_checks_contract() {
+    let binary = env::var_os("DATABRICKS_CLI_PATH")
+        .expect("DATABRICKS_CLI_PATH must identify the pinned upstream binary");
+
+    // `cli` reads only help and `v1` only the schema, so neither needs a
+    // bundle or workspace.
+    let temp = TempDir::new("contract-offline-bundle");
+    let output = dbxctl()
+        .env("DATABRICKS_CLI_PATH", &binary)
+        .args(["probe", "run", "--suite", "lineage", "--bundle-root"])
+        .arg(temp.path())
+        .args(["--target", "contract", "--only", "cli,v1"])
+        .output()
+        .expect("run dbxctl probe run");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(output.status.code(), Some(0), "{stdout}");
+    let lines: Vec<_> = stdout.lines().take(2).collect();
+    assert!(
+        lines[0].starts_with("cli       resolved  "),
+        "the pinned CLI lacks a command the suite runs: {stdout}"
+    );
+    assert_eq!(
+        lines[1], "v1        resolved  not rejected: experimental.scripts accepts any key",
+        "the pinned CLI's schema changed how experimental scripts are keyed: {stdout}"
+    );
+}

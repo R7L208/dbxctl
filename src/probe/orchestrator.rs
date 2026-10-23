@@ -7,13 +7,14 @@
 
 use std::ffi::OsStr;
 use std::fmt::Write as _;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::evidence::{Clock, RunDir, timestamp};
 use crate::exit::Exit;
 use crate::json::{Document, Value};
 use crate::probe::lineage::{self, LineageOptions};
 use crate::probe::model::{CheckId, Finding, State};
+use crate::transport::{CliRunner, Runner};
 
 const SUITE: &str = "lineage";
 /// Version of the `run.json` and `findings.json` layouts.
@@ -24,6 +25,11 @@ pub(crate) struct Context<'a> {
     /// The resolved Databricks CLI executable.
     pub(crate) binary: &'a OsStr,
     pub(crate) run: &'a RunDir,
+    pub(crate) bundle_root: &'a Path,
+    pub(crate) target: &'a str,
+    /// Runs read-only CLI commands from the bundle root for the target and
+    /// profile, with credentials scrubbed from their output.
+    pub(crate) cli: &'a dyn Runner,
 }
 
 /// A validated `probe run --suite lineage` request.
@@ -103,9 +109,18 @@ fn complete(
         &run_document(plan, run_dir, started, None).into(),
     )?;
 
+    let cli = CliRunner::for_bundle(
+        binary,
+        &plan.bundle_root,
+        &plan.target,
+        plan.profile.as_deref(),
+    );
     let context = Context {
         binary,
         run: run_dir,
+        bundle_root: &plan.bundle_root,
+        target: &plan.target,
+        cli: &cli,
     };
     let findings = plan
         .checks
@@ -262,11 +277,13 @@ mod tests {
     use crate::evidence::tests::{FIXED_TIME, FixedClock};
     use crate::evidence::{Clock, RunDir};
     use crate::exit::Exit;
+    use crate::probe::lineage::cli::SURFACES;
     use crate::probe::lineage::parse_lineage_options;
     use crate::probe::model::{CheckId, Finding, State};
     use crate::test_support::{
         ScenarioCli, TempDir, assert_no_mutations, fake_databricks, read_tree,
     };
+    use crate::transport::CliRunner;
 
     const VERSION_SCENARIO: &str = include_str!("../../tests/fixtures/scenarios/cli-version.txt");
 
@@ -308,15 +325,23 @@ mod tests {
             outcome.run_dir,
             bundle.join(".dbxctl/probe/lineage/20260102T030405Z")
         );
-        let invocations = cli.invocations();
-        assert_eq!(invocations, [["version"]]);
-        assert_no_mutations(&invocations);
+        assert_eq!(
+            cli.invocations().len(),
+            1 + SURFACES.len(),
+            "version, then help"
+        );
+        assert_no_mutations(&cli.invocations());
 
         let files: Vec<_> = read_tree(&outcome.run_dir)
             .into_iter()
             .map(|(path, bytes)| (path, String::from_utf8(bytes).expect("UTF-8 output")))
             .collect();
-        let names: Vec<_> = files.iter().map(|(path, _)| path.as_str()).collect();
+        // The help records are listed in `findings.json` below.
+        let names: Vec<_> = files
+            .iter()
+            .map(|(path, _)| path.as_str())
+            .filter(|path| !path.starts_with("evidence/cli/help-"))
+            .collect();
         assert_eq!(
             names,
             [
@@ -361,7 +386,12 @@ mod tests {
     {
       "check": "cli",
       "evidence": [
-        "evidence/cli/version.json"
+        "evidence/cli/version.json",
+        "evidence/cli/help-bundle-validate.json",
+        "evidence/cli/help-bundle-plan.json",
+        "evidence/cli/help-bundle-schema.json",
+        "evidence/cli/help-api-get.json",
+        "evidence/cli/help-api-post.json"
       ],
       "fallback": null,
       "reason": null,
@@ -384,6 +414,14 @@ mod tests {
             file("evidence/cli/version.stdout"),
             "Databricks CLI v1.13.0\n"
         );
+    }
+
+    #[test]
+    fn a_run_ignores_its_directory() {
+        let (temp, cli) = setup("orchestrator-gitignore", VERSION_SCENARIO);
+        let bundle = temp.path().join("bundle");
+        let plan = plan(&bundle, &["--only", "cli"]).expect("plan");
+        run(&plan, cli.binary().as_os_str(), &FixedClock(FIXED_TIME)).expect("run probe");
         assert_eq!(
             fs::read(bundle.join(".dbxctl/.gitignore")).expect("read gitignore"),
             b"*\n"
@@ -431,7 +469,7 @@ mod tests {
             "{report}"
         );
         // The skipped `v7` runs no command; only `cli` does.
-        assert_eq!(cli.invocations(), [["version"]]);
+        assert_eq!(cli.invocations().len(), 1 + SURFACES.len());
     }
 
     #[test]
@@ -458,14 +496,19 @@ mod tests {
     #[test]
     fn evidence_write_failures_are_errors() {
         let (temp, cli) = setup("orchestrator-blocked-evidence", VERSION_SCENARIO);
-        let run_dir = RunDir::create(&temp.path().join("bundle"), "lineage", 0).expect("create");
+        let bundle = temp.path().join("bundle");
+        let run_dir = RunDir::create(&bundle, "lineage", 0).expect("create");
         // A file where the evidence directory belongs.
         fs::write(run_dir.path().join("evidence"), "").expect("block evidence");
+        let runner = CliRunner::for_bundle(cli.binary().as_os_str(), &bundle, "dev", None);
         let error = run_check(
             CheckId::Cli,
             &Context {
                 binary: cli.binary().as_os_str(),
                 run: &run_dir,
+                bundle_root: &bundle,
+                target: "dev",
+                cli: &runner,
             },
         )
         .expect_err("blocked evidence");
