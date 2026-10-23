@@ -21,9 +21,10 @@ const WRITE_WORDS: [&str; 21] = [
 ///
 /// Comments, string literals, and backtick-quoted identifiers are skipped
 /// as Databricks SQL reads them: `--` and nested `/* */` comments, `'` and `"`
-/// literals with backslash escapes, and backtick identifiers with doubled
-/// backticks. Anything that cannot be read, such as an unterminated literal,
-/// is refused. One trailing semicolon is allowed.
+/// literals with backslash escapes, raw `r'…'` and `r"…"` literals without
+/// them, and backtick identifiers with doubled backticks. Anything that
+/// cannot be read, such as an unterminated literal, is refused. One trailing
+/// semicolon is allowed.
 pub(crate) fn is_read_statement(sql: &str) -> bool {
     let Some(tokens) = tokenize(sql) else {
         return false;
@@ -86,7 +87,13 @@ fn tokenize(sql: &str) -> Option<Vec<Token<'_>>> {
                 index += 1;
             }
             // Word bytes are ASCII, so these are character boundaries.
-            tokens.push(Token::Word(&sql[start..index]));
+            let word = &sql[start..index];
+            if word.eq_ignore_ascii_case("r") && matches!(bytes.get(index), Some(b'\'' | b'"')) {
+                index = raw_literal_end(bytes, index)?;
+                tokens.push(Token::Other);
+            } else {
+                tokens.push(Token::Word(word));
+            }
         } else {
             // Punctuation or a non-ASCII byte outside any literal; step over
             // a whole character so `index` stays on a boundary.
@@ -146,6 +153,12 @@ fn literal_end(bytes: &[u8], start: usize) -> Option<usize> {
     None
 }
 
+/// The index after the raw literal whose quote is `bytes[start]`. A
+/// backslash is an ordinary byte, so the first matching quote ends it.
+fn raw_literal_end(bytes: &[u8], start: usize) -> Option<usize> {
+    find_byte(bytes[start], bytes, start + 1).map(|end| end + 1)
+}
+
 /// The index after the backtick identifier starting at `start`. A doubled
 /// backtick is a literal backtick.
 fn identifier_end(bytes: &[u8], start: usize) -> Option<usize> {
@@ -183,6 +196,8 @@ mod tests {
             "SELECT \"it\\\"s\" AS text, 'it\\'s' AS other",
             "SELECT * FROM `update` JOIN `a``b` USING (id)",
             "SELECT 'naïve ☃' AS text, x·y FROM t",
+            "SELECT r'C:\\temp\\' AS path, R\"\\d+\" AS pattern",
+            "SELECT r FROM (SELECT 'a' AS r)",
             "SELECT * FROM system.lakeflow.pipelines WHERE name = :name",
         ] {
             assert!(is_read_statement(sql), "{sql}");
@@ -209,6 +224,10 @@ mod tests {
             "SELECT /* /* nested */ unterminated",
             "SELECT 'unterminated",
             "SELECT 'escaped quote at end\\'",
+            "SELECT r'\\'; DROP TABLE t; --'",
+            "WITH t AS (SELECT r'\\') INSERT INTO u SELECT 1 --'",
+            "SELECT R\"\\\"; DROP TABLE t; --\"",
+            "SELECT r'unterminated",
             "SELECT `unterminated",
             "REFRESH MATERIALIZED VIEW mv",
             "SET spark.x = 1",
