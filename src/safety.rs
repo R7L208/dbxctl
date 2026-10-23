@@ -11,6 +11,7 @@ const READ_STARTS: [&str; 5] = ["DESC", "DESCRIBE", "SELECT", "SHOW", "WITH"];
 /// which also catches a write after a common table expression such as
 /// `WITH t AS (…) INSERT INTO …`. `INTO` is refused too, so no form of
 /// `SELECT … INTO` can write. Quote an identifier with one of these names.
+/// The one exception is `SHOW CREATE TABLE`, which reads a definition.
 const WRITE_WORDS: [&str; 22] = [
     "ALTER", "ANALYZE", "CACHE", "CALL", "COPY", "CREATE", "DELETE", "DROP", "GRANT", "INSERT",
     "INTO", "LOAD", "MERGE", "MSCK", "OPTIMIZE", "REFRESH", "RESTORE", "REVOKE", "TRUNCATE",
@@ -18,7 +19,8 @@ const WRITE_WORDS: [&str; 22] = [
 ];
 
 /// Whether `sql` is a single statement that only reads: `SELECT`,
-/// `WITH … SELECT`, `SHOW`, or `DESCRIBE`/`DESC`.
+/// `WITH … SELECT`, `SHOW` (including `SHOW CREATE TABLE`), or
+/// `DESCRIBE`/`DESC`.
 ///
 /// Comments, string literals, and backtick-quoted identifiers are skipped
 /// as Databricks SQL reads them: `--` and nested `/* */` comments, `'` and `"`
@@ -44,10 +46,14 @@ pub(crate) fn is_read_statement(sql: &str) -> bool {
     let Some(first) = words.first() else {
         return false;
     };
+    // `SHOW CREATE` names the statement whose text it shows; a SHOW
+    // statement cannot hold another statement.
+    let show_create = first == "SHOW" && words.get(1).is_some_and(|word| word == "CREATE");
     READ_STARTS.contains(&first.as_str())
         && !words
             .iter()
-            .any(|word| WRITE_WORDS.contains(&word.as_str()))
+            .enumerate()
+            .any(|(at, word)| WRITE_WORDS.contains(&word.as_str()) && !(show_create && at == 1))
 }
 
 #[derive(Debug, PartialEq)]
@@ -215,6 +221,8 @@ mod tests {
             "SHOW TABLES IN main.default",
             "DESCRIBE HISTORY main.default.t",
             "DESC EXTENDED t",
+            "SHOW CREATE TABLE main.default.mv",
+            "show create table `a`.`b`.`c` AS SERDE",
             "-- leading\n/* block /* nested */ still */ SELECT 1",
             "SELECT 'DROP TABLE t; -- not a comment' AS text",
             "SELECT \"it\\\"s\" AS text, 'it\\'s' AS other",
@@ -269,6 +277,10 @@ mod tests {
             "SELECT * INTO u FROM t",
             "WITH t AS (SELECT 1 AS x) SELECT x INTO v FROM t",
             "OPTIMIZE t",
+            "SHOW CREATE TABLE t; DROP TABLE t",
+            "SHOW CREATE CREATE TABLE t",
+            "SHOW TABLES CREATE TABLE t",
+            "CREATE TABLE t AS SELECT 1",
         ] {
             assert!(!is_read_statement(sql), "{sql}");
         }
