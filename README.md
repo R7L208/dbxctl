@@ -81,9 +81,10 @@ Probe a bundle for materialized-view lineage facts:
 dbxctl probe run --suite lineage --bundle-root <path> --target <non-prod> --only cli
 ```
 
-Only the `cli` check runs so far. Without `--only`, every check is selected,
-so `--warehouse-id` and `--scope-catalog` are required and the unimplemented
-checks are reported as skipped. The run exits 10 whenever a selected check is
+Only the `cli` check runs so far. Without `--only`, every check is selected and
+the unimplemented ones are reported as skipped. The
+[kit's prerequisites](docs/mv-lineage/phase0/00-kit.md#prerequisites) list the
+checks that need `--warehouse-id` and `--scope-catalog`. The run exits 10 whenever a selected check is
 not resolved, so `--only cli` also exits 10 if it cannot confirm Databricks
 CLI 1.13.0 or newer; see the
 [exit codes](docs/mv-lineage/phase0/00-kit.md#interpreting-results) and the

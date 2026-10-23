@@ -23,8 +23,10 @@ command shapes come from the contract in
 - A `dbxctl` build from this repository (`cargo build --locked`).
 
 `v2`, `v9`, and `v4` need `--warehouse-id`; `v3` and `v11` need both
-`--warehouse-id` and `--scope-catalog`; every other check needs neither. See
-the check table in [R4](01-requirements.md#r4-checks).
+`--warehouse-id` and `--scope-catalog`; every other check needs neither. Only
+implemented checks require them, so until #33 implements those checks a run
+needs neither option. See the check table in
+[R4](01-requirements.md#r4-checks).
 
 ## Read-Only Run
 
