@@ -407,11 +407,20 @@ impl CliRunner {
         let columns = columns(body.root())?;
         let mut rows = Vec::new();
         let mut chunk = body.root().get("result");
-        let mut chunks = u64::from(chunk.is_some());
+        // An inline result is a chunk when it is numbered or holds rows; an
+        // empty result set comes back with an empty one and no chunks.
+        let inline = chunk.filter(|result| {
+            result.get("chunk_index").is_some()
+                || result
+                    .get("data_array")
+                    .and_then(Node::elements)
+                    .is_some_and(|mut rows| rows.next().is_some())
+        });
+        let mut chunks = u64::from(inline.is_some());
         let mut owned: Document;
         // The inline chunk counts too, so it cannot point back at itself. It
         // is the first chunk when the response does not number it.
-        let mut last_index = chunk.map(|result| {
+        let mut last_index = inline.map(|result| {
             result
                 .get("chunk_index")
                 .and_then(Node::as_u64)
@@ -1691,6 +1700,25 @@ mod tests {
                 matches!(&error, Error::Transport(text) if text.contains(problem)),
                 "{name}: {error:?}"
             );
+        }
+    }
+
+    #[test]
+    fn an_empty_result_set_has_no_chunks() {
+        let empty = |result: &str| {
+            format!(
+                r#"{{"statement_id":"{ID}","status":{{"state":"SUCCEEDED"}},"manifest":{{"total_chunk_count":0,"total_row_count":0,"schema":{{"columns":[{{"name":"one"}},{{"name":"nothing"}}]}}}}{result}}}"#
+            )
+        };
+        for (name, result) in [
+            ("transport-empty-object", r#","result":{}"#),
+            ("transport-empty-row-count", r#","result":{"row_count":0}"#),
+            ("transport-empty-array", r#","result":{"data_array":[]}"#),
+            ("transport-empty-absent", ""),
+        ] {
+            let fixture = Fixture::new(name, &submit(&empty(result)));
+            let outcome = fixture.runner(QUICK).statement(SQL, WAREHOUSE);
+            assert_eq!(outcome.result, Ok(rows(&[])), "{name}");
         }
     }
 
