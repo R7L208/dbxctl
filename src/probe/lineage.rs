@@ -352,14 +352,47 @@ mod tests {
         assert_eq!(implemented, [CheckId::Cli]);
     }
 
-    /// Parses `extra` after the required options as if every check were
-    /// implemented, so the requirement errors run before #33 lands.
-    fn parse_all_implemented(extra: &[&str]) -> Result<LineageOptions, String> {
+    /// Parses `extra` after the required options as if `implemented` named
+    /// the implemented checks.
+    fn parse_implementing(
+        implemented: fn(CheckId) -> bool,
+        extra: &[&str],
+    ) -> Result<LineageOptions, String> {
         let mut values = vec!["--bundle-root", "/tmp", "--target", "dev"];
         values.extend_from_slice(extra);
         let input = args(&values);
         let mut parser = Parser::new(args_refs(&input));
-        parse_with(&mut parser, |_| true)
+        parse_with(&mut parser, implemented)
+    }
+
+    /// Parses `extra` as if every check were implemented, so the
+    /// requirement errors run before #33 lands.
+    fn parse_all_implemented(extra: &[&str]) -> Result<LineageOptions, String> {
+        parse_implementing(|_| true, extra)
+    }
+
+    /// Parses `extra` as if only `v2` were implemented, as partway
+    /// through #33.
+    fn parse_only_v2_implemented(extra: &[&str]) -> Result<LineageOptions, String> {
+        parse_implementing(|id| id == CheckId::V2, extra)
+    }
+
+    #[test]
+    fn partial_implementation_names_only_implemented_checks() {
+        // v3, v11, v9, and v4 also read the warehouse once implemented, but
+        // only v2 is reported until then.
+        assert_eq!(
+            parse_only_v2_implemented(&[]).unwrap_err(),
+            "--warehouse-id is required by selected checks: v2"
+        );
+    }
+
+    #[test]
+    fn partial_implementation_defers_the_catalog_requirement() {
+        // v3 and v11 need --scope-catalog, but neither is implemented yet.
+        let opts = parse_only_v2_implemented(&["--warehouse-id", "w"]).unwrap();
+        assert_eq!(opts.warehouse_id.unwrap().to_string_lossy(), "w");
+        assert!(opts.scope_catalog.is_none());
     }
 
     #[test]
