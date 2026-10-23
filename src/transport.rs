@@ -576,27 +576,45 @@ fn response(method: &str, result: &Result<Captured, String>) -> Result<Response,
     })
 }
 
-/// The status of the last response in a debug log.
+/// The last response in a debug log: its status and the lines logged with
+/// it, without their `<` prefix.
+struct Logged<'a> {
+    status: u16,
+    lines: Vec<&'a str>,
+}
+
+/// The last response in a debug log.
 ///
 /// The SDK logs each response as a `< HTTP/<version> <code>` line, after an
 /// optional timestamp, followed by its headers and body on lines that also
 /// start with `<`. Those lines belong to the response, so text in a body that
 /// looks like a status line cannot be taken for one.
-fn http_status(stderr: &str) -> Option<u16> {
-    let mut status = None;
+fn logged_response(stderr: &str) -> Option<Logged<'_>> {
+    let mut last: Option<Logged<'_>> = None;
     let mut in_response = false;
     for line in stderr.lines() {
         let content = without_timestamp(line);
-        if in_response && content.starts_with('<') {
+        if in_response && let Some(rest) = content.strip_prefix('<') {
+            if let Some(last) = &mut last {
+                last.lines.push(rest.strip_prefix(' ').unwrap_or(rest));
+            }
             continue;
         }
         in_response = false;
-        if let Some(code) = status_code(content) {
-            status = Some(code);
+        if let Some(status) = status_code(content) {
+            last = Some(Logged {
+                status,
+                lines: Vec::new(),
+            });
             in_response = true;
         }
     }
-    status
+    last
+}
+
+/// The status of the last response in a debug log.
+fn http_status(stderr: &str) -> Option<u16> {
+    logged_response(stderr).map(|logged| logged.status)
 }
 
 /// `line` without a leading log timestamp such as `2024/10/23 10:30:45 `.
@@ -611,11 +629,31 @@ fn status_code(content: &str) -> Option<u16> {
     code.parse().ok().filter(|code| (100..600).contains(code))
 }
 
-/// The JSON error body the CLI prints after a failed request: the first
-/// object that starts a line, ending on that line when it closes there or
-/// else on the next line that starts with `}`. Output after it is ignored,
-/// and each line is read once.
+/// The JSON error body of a failed request.
+///
+/// The CLI logs it with the last response, as `< {` through `< }` followed
+/// by ` pid=… sdk=true`. Failing that, it is the first object that starts a
+/// line of the log, ending on that line when it closes there or else on the
+/// next line that starts with `}`. Output after it is ignored, and each line
+/// is read once.
 fn error_body(stderr: &str) -> Option<Document> {
+    logged_response(stderr)
+        .and_then(|logged| logged_object(&logged.lines))
+        .or_else(|| first_object(stderr))
+}
+
+/// The JSON object in a logged response: from its first line that starts
+/// with `{` to the last `}`, which drops the log fields after it.
+fn logged_object(lines: &[&str]) -> Option<Document> {
+    let start = lines.iter().position(|line| line.starts_with('{'))?;
+    let text = lines[start..].join("\n");
+    let end = text.rfind('}')?;
+    json::parse(&text[..=end])
+        .ok()
+        .filter(|document| document.root().kind() == Kind::Object)
+}
+
+fn first_object(stderr: &str) -> Option<Document> {
     let mut lines = stderr.split_inclusive('\n');
     let mut offset = 0;
     while let Some(line) = lines.next() {
@@ -1630,6 +1668,41 @@ mod tests {
         assert_eq!(code(compact).as_deref(), Some("BAD"));
         assert_eq!(code("{\n  \"unterminated\": 1\n"), None);
         assert_eq!(code("[1]\n"), None);
+    }
+
+    /// `databricks api get --debug` for a 404, as CLI 1.13.0 and 1.21.0 log
+    /// it: the error body is part of the logged response.
+    const LOGGED_404: &str = "09:56:51 Info: start pid=42698 version=1.13.0 args=\"databricks, api, get, /api/2.0/pipelines/missing, --debug\"\n09:56:51 Debug: GET /.well-known/databricks-config\n< HTTP/1.0 200 OK\n< {\n<   \"error_code\": \"NOT_THIS_ONE\"\n< } pid=42698 sdk=true\n09:56:51 Debug: GET /api/2.0/pipelines/missing\n< HTTP/1.0 404 Not Found\n< {\n<   \"error_code\": \"RESOURCE_NOT_FOUND\",\n<   \"message\": \"Pipeline not found\"\n< } pid=42698 sdk=true\n09:56:51 Debug: non-retriable error: Pipeline not found pid=42698 sdk=true\nError: Pipeline not found\n09:56:51 Info: failed execution pid=42698 exit_code=1 error=\"Pipeline not found\"\n";
+
+    #[test]
+    fn reads_the_error_body_the_cli_logs_with_the_response() {
+        assert_eq!(http_status(LOGGED_404), Some(404));
+        let body = error_body(LOGGED_404).expect("logged error body");
+        assert_eq!(
+            body.root().get("error_code").and_then(Node::as_str),
+            Some("RESOURCE_NOT_FOUND")
+        );
+        let compact = "Debug: POST /api/x\n< HTTP/1.1 400 Bad Request\n< {\"error_code\":\"BAD\",\"message\":\"m\"} pid=1 sdk=true\nError: m\n";
+        let code = error_body(compact)
+            .and_then(|body| body.root().get("error_code")?.as_str().map(str::to_owned));
+        assert_eq!(code.as_deref(), Some("BAD"));
+        let text = "Debug: GET /api/x\n< HTTP/1.1 502 Bad Gateway\n< <html>bad gateway</html> pid=1 sdk=true\n";
+        assert!(error_body(text).is_none());
+    }
+
+    #[test]
+    fn api_get_reads_the_error_body_from_a_real_debug_log() {
+        let scenario = case(&["api", "get", "/api/x", "--debug"], "", LOGGED_404, 1);
+        let fixture = Fixture::new("transport-logged-404", &scenario);
+        let outcome = fixture.runner(QUICK).api_get("/api/x");
+        assert_eq!(
+            outcome.result.expect_err("404"),
+            Error::Http {
+                status: 404,
+                error_code: Some("RESOURCE_NOT_FOUND".to_owned()),
+                message: Some("Pipeline not found".to_owned()),
+            }
+        );
     }
 
     #[test]
