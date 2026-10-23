@@ -17,6 +17,10 @@ const CHECK: CheckId = CheckId::V6;
 /// The expectation the answer confirms or corrects.
 const SITE: &str = "docs/mv-lineage/phase0/01-requirements.md#r5-cli-baseline";
 const PROPERTY: &str = "table_update";
+/// The package R5 expects to declare the trigger.
+const JOBS: &str = "jobs";
+/// Starts a verdict in which no `jobs` definition declares the trigger.
+const OUTSIDE_JOBS: &str = "not jobs: ";
 const FALLBACK: &str = "Assume table-update triggers are job fields, as R5 expects, until v6 part B (#37) checks a live job.";
 
 pub(crate) fn run(context: &Context<'_>) -> Result<Finding, String> {
@@ -62,18 +66,28 @@ pub(crate) fn run(context: &Context<'_>) -> Result<Finding, String> {
             "no definition in the bundle schema has a `table_update` property",
         ));
     }
-    // `jobs` alone answers yes; any other package names where else they live.
     let packages: BTreeSet<_> = definitions
         .iter()
         .map(|definition| definition.package.as_str())
         .collect();
-    let verdict = packages.into_iter().collect::<Vec<_>>().join(", ");
     Ok(Finding::resolved(
         CHECK,
-        Verdict::new(verdict),
+        Verdict::new(verdict(&packages)),
         evidence,
         SITE,
     ))
+}
+
+/// `jobs` alone answers yes, and other packages name where else the trigger
+/// lives. Without `jobs` the answer is no, which contradicts R5, so the
+/// verdict says so before naming the packages.
+fn verdict(packages: &BTreeSet<&str>) -> String {
+    let names = packages.iter().copied().collect::<Vec<_>>().join(", ");
+    if packages.contains(JOBS) {
+        names
+    } else {
+        format!("{OUTSIDE_JOBS}{names}")
+    }
 }
 
 #[cfg(test)]
@@ -134,6 +148,20 @@ mod tests {
         assert_eq!(
             finding.verdict().map(Verdict::as_str),
             Some("jobs, pipelines")
+        );
+    }
+
+    #[test]
+    fn says_when_no_jobs_definition_has_the_trigger() {
+        let schema = r#"{"$defs": {"service": {
+            "pipelines.PipelineTrigger": {"properties": {"table_update": {}}},
+            "jobs.TriggerSettings": {"properties": {"periodic": {}}}
+        }}}"#;
+        let (finding, _, _temp) = check("v6-not-jobs", &schema_response(schema));
+        assert_eq!(finding.state(), State::Resolved, "{finding:?}");
+        assert_eq!(
+            finding.verdict().map(Verdict::as_str),
+            Some("not jobs: pipelines")
         );
     }
 

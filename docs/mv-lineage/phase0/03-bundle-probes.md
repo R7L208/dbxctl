@@ -57,6 +57,7 @@ schema itself in `schema.stdout`.
 | --- | --- | --- |
 | Only `jobs` definitions declare `table_update` | resolved | `jobs` |
 | Definitions in other packages declare it too | resolved | Every package, sorted, such as `jobs, pipelines` |
+| Only definitions outside `jobs` declare it, contradicting R5 | resolved | `not jobs: ` and every package, such as `not jobs: pipelines` |
 | No definition declares it, or there is no `$defs` object | unknown | The reason names which |
 | Output is not valid JSON, or the CLI exits non-zero or on a signal | unknown | The reason names which |
 | The CLI cannot be run to completion | failed | See the evidence record |
