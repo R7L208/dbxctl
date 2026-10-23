@@ -1,6 +1,32 @@
-# Databricks CLI 1.13.0 answering the minimal `cli` check (#30).
+# Databricks CLI 1.13.0 answering the `cli` check (#30, #32): its version,
+# and the help for each command the suite runs.
 # Format: tests/fixtures/fake_databricks.rs, `replay`.
 case
 arg version
 stdout Databricks CLI v1.13.0\n
 exit 0
+case
+arg bundle
+arg validate
+arg --help
+stdout Usage:\n  databricks bundle validate [flags]\n
+case
+arg bundle
+arg plan
+arg --help
+stdout Usage:\n  databricks bundle plan [flags]\n
+case
+arg bundle
+arg schema
+arg --help
+stdout Usage:\n  databricks bundle schema [flags]\n
+case
+arg api
+arg get
+arg --help
+stdout Usage:\n  databricks api get PATH [flags]\n
+case
+arg api
+arg post
+arg --help
+stdout Usage:\n  databricks api post PATH [flags]\n

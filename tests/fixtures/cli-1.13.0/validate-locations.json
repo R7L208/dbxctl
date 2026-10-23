@@ -1,0 +1,262 @@
+{
+  "__locations": {
+    "files": [
+      "databricks.yml",
+      "resources/extra.yml"
+    ],
+    "locations": {
+      "bundle": [
+        [
+          0,
+          2,
+          3
+        ]
+      ],
+      "include": [
+        [
+          0,
+          6,
+          3
+        ]
+      ],
+      "resources": [
+        [
+          0,
+          12,
+          3
+        ],
+        [
+          1,
+          2,
+          3
+        ]
+      ],
+      "resources.jobs": [
+        [
+          0,
+          13,
+          5
+        ],
+        [
+          1,
+          3,
+          5
+        ]
+      ],
+      "resources.jobs.gold_job": [
+        [
+          1,
+          4,
+          7
+        ]
+      ],
+      "resources.jobs.gold_job.tasks": [
+        [
+          1,
+          6,
+          9
+        ]
+      ],
+      "resources.jobs.gold_job.tasks[0]": [
+        [
+          1,
+          6,
+          11
+        ]
+      ],
+      "resources.jobs.gold_job.tasks[1]": [
+        [
+          1,
+          9,
+          11
+        ]
+      ],
+      "resources.jobs.refresh_silver": [
+        [
+          0,
+          14,
+          7
+        ]
+      ],
+      "resources.jobs.refresh_silver.tasks": [
+        [
+          0,
+          18,
+          9
+        ]
+      ],
+      "resources.jobs.refresh_silver.tasks[0]": [
+        [
+          0,
+          18,
+          11
+        ]
+      ],
+      "resources.pipelines": [
+        [
+          0,
+          30,
+          5
+        ]
+      ],
+      "resources.pipelines.dlt_pipeline": [
+        [
+          0,
+          31,
+          7
+        ]
+      ],
+      "workspace": [
+        [
+          0,
+          9,
+          3
+        ],
+        [
+          0,
+          50,
+          7
+        ]
+      ]
+    },
+    "version": 1
+  },
+  "bundle": {
+    "engine": "direct",
+    "environment": "dev",
+    "git": {
+      "bundle_root_path": "."
+    },
+    "name": "example-analytics",
+    "target": "dev"
+  },
+  "include": [
+    "resources/extra.yml"
+  ],
+  "resources": {
+    "jobs": {
+      "gold_job": {
+        "deployment": {
+          "kind": "BUNDLE",
+          "metadata_file_path": "/Workspace/Users/user@example.test/projects/example-dev/state/metadata.json"
+        },
+        "edit_mode": "UI_LOCKED",
+        "format": "MULTI_TASK",
+        "max_concurrent_runs": 1,
+        "name": "gold_job",
+        "queue": {
+          "enabled": true
+        },
+        "tasks": [
+          {
+            "notebook_task": {
+              "notebook_path": "/Workspace/Users/user@example.test/projects/example-dev/files/notebooks/silver"
+            },
+            "task_key": "gold"
+          },
+          {
+            "sql_task": {
+              "file": {
+                "path": "/Workspace/Users/user@example.test/projects/example-dev/files/src/gold/g.sql"
+              },
+              "warehouse_id": "abc123"
+            },
+            "task_key": "sql"
+          }
+        ]
+      },
+      "refresh_silver": {
+        "deployment": {
+          "kind": "BUNDLE",
+          "metadata_file_path": "/Workspace/Users/user@example.test/projects/example-dev/state/metadata.json"
+        },
+        "description": "Refresh silver table from raw data",
+        "edit_mode": "UI_LOCKED",
+        "format": "MULTI_TASK",
+        "job_clusters": [
+          {
+            "job_cluster_key": "default",
+            "new_cluster": {
+              "node_type_id": "i3.xlarge",
+              "num_workers": 2,
+              "spark_version": "13.3.x-scala2.12"
+            }
+          }
+        ],
+        "max_concurrent_runs": 1,
+        "name": "refresh_silver",
+        "queue": {
+          "enabled": true
+        },
+        "tasks": [
+          {
+            "job_cluster_key": "default",
+            "notebook_task": {
+              "notebook_path": "/Workspace/Users/user@example.test/projects/example-dev/files/notebooks/silver"
+            },
+            "task_key": "refresh_task"
+          }
+        ]
+      }
+    },
+    "pipelines": {
+      "dlt_pipeline": {
+        "channel": "CURRENT",
+        "clusters": [
+          {
+            "label": "default",
+            "spark_conf": {
+              "spark.databricks.cluster.profile": "singleNode"
+            }
+          }
+        ],
+        "configuration": {
+          "query_table": "table"
+        },
+        "deployment": {
+          "kind": "BUNDLE",
+          "metadata_file_path": "/Workspace/Users/user@example.test/projects/example-dev/state/metadata.json"
+        },
+        "edition": "ADVANCED",
+        "libraries": [
+          {
+            "file": {
+              "path": "/Workspace/Users/user@example.test/projects/example-dev/files/src/silver.sql"
+            }
+          },
+          {
+            "file": {
+              "path": "/Workspace/Users/user@example.test/projects/example-dev/files/src/q.sql"
+            }
+          },
+          {
+            "file": {
+              "path": "/Workspace/Users/user@example.test/projects/example-dev/files/src/gold/g.sql"
+            }
+          }
+        ],
+        "name": "dlt_pipeline",
+        "storage": "/Workspace/Users/user@example.test/projects/example-dev/storage"
+      }
+    }
+  },
+  "sync": {
+    "paths": [
+      "."
+    ]
+  },
+  "workspace": {
+    "artifact_path": "/Workspace/Users/user@example.test/projects/example-dev/artifacts",
+    "current_user": {
+      "active": true,
+      "domain_friendly_name": "user",
+      "id": "9876543210",
+      "short_name": "user",
+      "userName": "user@example.test"
+    },
+    "file_path": "/Workspace/Users/user@example.test/projects/example-dev/files",
+    "resource_path": "/Workspace/Users/user@example.test/projects/example-dev/resources",
+    "root_path": "/Workspace/Users/user@example.test/projects/example-dev",
+    "state_path": "/Workspace/Users/user@example.test/projects/example-dev/state"
+  }
+}

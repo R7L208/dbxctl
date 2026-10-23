@@ -335,6 +335,22 @@ fn probe_run_requires_target() {
 
 const CLI_VERSION_SCENARIO: &str = include_str!("fixtures/scenarios/cli-version.txt");
 
+/// What the `cli` check runs: `version`, then the help for each command the
+/// suite runs.
+fn cli_check_invocations() -> Vec<Vec<String>> {
+    [
+        &["version"][..],
+        &["bundle", "validate", "--help"],
+        &["bundle", "plan", "--help"],
+        &["bundle", "schema", "--help"],
+        &["api", "get", "--help"],
+        &["api", "post", "--help"],
+    ]
+    .iter()
+    .map(|argv| argv.iter().map(|argument| (*argument).to_owned()).collect())
+    .collect()
+}
+
 /// A bundle root and a scenario-backed fake CLI in one scratch directory.
 struct ProbeFixture {
     temp: TempDir,
@@ -408,7 +424,7 @@ fn probe_run_cli_check_runs_end_to_end() {
     }
 
     let invocations = fixture.cli.invocations();
-    assert_eq!(invocations, [["version"]]);
+    assert_eq!(invocations, cli_check_invocations());
     assert_no_mutations(&invocations);
 }
 
@@ -490,8 +506,91 @@ fn probe_run_answers_v6_offline() {
         "{stdout}"
     );
     let invocations = fixture.cli.invocations();
-    assert_eq!(invocations, [vec!["version"], vec!["bundle", "schema"]]);
+    let mut expected = cli_check_invocations();
+    expected.push(vec!["bundle".to_owned(), "schema".to_owned()]);
+    assert_eq!(invocations, expected);
     assert_no_mutations(&invocations);
+}
+
+/// Copies the files of the fixture bundle at `from` into `to`.
+fn copy_tree(from: &std::path::Path, to: &std::path::Path) {
+    for entry in std::fs::read_dir(from).expect("read fixture bundle") {
+        let entry = entry.expect("read entry");
+        let target = to.join(entry.file_name());
+        if entry.file_type().expect("file type").is_dir() {
+            std::fs::create_dir_all(&target).expect("create directory");
+            copy_tree(&entry.path(), &target);
+        } else {
+            std::fs::copy(entry.path(), target).expect("copy file");
+        }
+    }
+}
+
+#[test]
+fn probe_run_answers_the_bundle_checks() {
+    let fixture_file = |name: &str| {
+        std::fs::read_to_string(format!(
+            "{}/tests/fixtures/cli-1.13.0/{name}",
+            env!("CARGO_MANIFEST_DIR")
+        ))
+        .expect("read fixture")
+    };
+    let bundle_case = |args: &[&str], stdout: &str| {
+        let mut case = String::from("case\n");
+        for argument in args.iter().chain(&["-t", "dev"]) {
+            case.push_str("arg ");
+            case.push_str(argument);
+            case.push('\n');
+        }
+        case + &stdout_line(stdout) + "\n"
+    };
+    let validate = ["bundle", "validate", "-o", "json"];
+    let scenario = [
+        CLI_VERSION_SCENARIO.to_owned(),
+        bundle_case(&validate, &fixture_file("validate.json")),
+        bundle_case(
+            &["bundle", "plan", "-o", "json"],
+            &fixture_file("plan-mixed.json"),
+        ),
+        bundle_case(
+            &["bundle", "validate", "-o", "json", "--include-locations"],
+            &fixture_file("validate-locations.json"),
+        ),
+        format!(
+            "case\narg bundle\narg schema\n{}\n",
+            stdout_line(include_str!("fixtures/bundle-schema-scripts.json"))
+        ),
+    ]
+    .concat();
+    let fixture = ProbeFixture::new("probe-bundle-checks", &scenario);
+    copy_tree(
+        std::path::Path::new(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/cli-1.13.0/bundle"
+        )),
+        &fixture.bundle(),
+    );
+    let state = fixture.bundle().join(".databricks/bundle/dev");
+    std::fs::create_dir_all(&state).expect("create state dir");
+    std::fs::write(state.join("resources.json"), fixture_file("resources.json"))
+        .expect("write state");
+
+    let output = fixture.run(&["--only", "cli,validate,plan,state,v8,v1"]);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(output.status.code(), Some(0), "{stdout}");
+    let lines: Vec<_> = stdout.lines().take(6).collect();
+    assert_eq!(
+        lines,
+        [
+            "cli       resolved  1.13.0",
+            "validate  resolved  engine direct; workspace paths: artifact_path, file_path, resource_path, root_path, state_path; resources: jobs 2, pipelines 1; experimental scripts: none; scripts: none",
+            "plan      resolved  plan_version 2; skip: validate; update: new_state.value",
+            "state     resolved  state_version 2; ids at /state/resources.<type>.<key>/__id__; config in state; resources: jobs 2, pipelines 1",
+            "v8        resolved  paths: file_path 6 (4 files, 2 notebooks without extension); origins: databricks.yml 2, resources/extra.yml 1",
+            "v1        resolved  not rejected: experimental.scripts accepts any key",
+        ]
+    );
+    assert_no_mutations(&fixture.cli.invocations());
 }
 
 #[test]

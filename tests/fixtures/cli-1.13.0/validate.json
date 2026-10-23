@@ -1,12 +1,56 @@
 {
   "bundle": {
     "engine": "direct",
-    "name": "example-analytics"
+    "environment": "dev",
+    "git": {
+      "bundle_root_path": "."
+    },
+    "name": "example-analytics",
+    "target": "dev"
   },
+  "include": [
+    "resources/extra.yml"
+  ],
   "resources": {
     "jobs": {
+      "gold_job": {
+        "deployment": {
+          "kind": "BUNDLE",
+          "metadata_file_path": "/Workspace/Users/user@example.test/projects/example-dev/state/metadata.json"
+        },
+        "edit_mode": "UI_LOCKED",
+        "format": "MULTI_TASK",
+        "max_concurrent_runs": 1,
+        "name": "gold_job",
+        "queue": {
+          "enabled": true
+        },
+        "tasks": [
+          {
+            "notebook_task": {
+              "notebook_path": "/Workspace/Users/user@example.test/projects/example-dev/files/notebooks/silver"
+            },
+            "task_key": "gold"
+          },
+          {
+            "sql_task": {
+              "file": {
+                "path": "/Workspace/Users/user@example.test/projects/example-dev/files/src/gold/g.sql"
+              },
+              "warehouse_id": "abc123"
+            },
+            "task_key": "sql"
+          }
+        ]
+      },
       "refresh_silver": {
+        "deployment": {
+          "kind": "BUNDLE",
+          "metadata_file_path": "/Workspace/Users/user@example.test/projects/example-dev/state/metadata.json"
+        },
         "description": "Refresh silver table from raw data",
+        "edit_mode": "UI_LOCKED",
+        "format": "MULTI_TASK",
         "job_clusters": [
           {
             "job_cluster_key": "default",
@@ -19,6 +63,9 @@
         ],
         "max_concurrent_runs": 1,
         "name": "refresh_silver",
+        "queue": {
+          "enabled": true
+        },
         "tasks": [
           {
             "job_cluster_key": "default",
@@ -44,6 +91,11 @@
         "configuration": {
           "query_table": "table"
         },
+        "deployment": {
+          "kind": "BUNDLE",
+          "metadata_file_path": "/Workspace/Users/user@example.test/projects/example-dev/state/metadata.json"
+        },
+        "edition": "ADVANCED",
         "libraries": [
           {
             "file": {
@@ -62,12 +114,27 @@
           }
         ],
         "name": "dlt_pipeline",
-        "pipeline_type": "TRIGGERED",
         "storage": "/Workspace/Users/user@example.test/projects/example-dev/storage"
       }
     }
   },
+  "sync": {
+    "paths": [
+      "."
+    ]
+  },
   "workspace": {
-    "root_path": "/Workspace/Users/user@example.test/projects/example-dev"
+    "artifact_path": "/Workspace/Users/user@example.test/projects/example-dev/artifacts",
+    "current_user": {
+      "active": true,
+      "domain_friendly_name": "user",
+      "id": "9876543210",
+      "short_name": "user",
+      "userName": "user@example.test"
+    },
+    "file_path": "/Workspace/Users/user@example.test/projects/example-dev/files",
+    "resource_path": "/Workspace/Users/user@example.test/projects/example-dev/resources",
+    "root_path": "/Workspace/Users/user@example.test/projects/example-dev",
+    "state_path": "/Workspace/Users/user@example.test/projects/example-dev/state"
   }
 }

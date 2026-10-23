@@ -1,8 +1,14 @@
 pub(crate) mod cli;
+pub(crate) mod plan;
+pub(crate) mod state;
+pub(crate) mod v1;
 pub(crate) mod v6;
+pub(crate) mod v8;
+pub(crate) mod validate;
 
 use std::collections::HashSet;
 use std::ffi::{OsStr, OsString};
+use std::process::ExitStatus;
 use std::time::Duration;
 
 use crate::args::Parser;
@@ -20,6 +26,11 @@ pub(crate) type Runner = fn(&Context<'_>) -> Result<Finding, String>;
 pub(crate) fn runner(check: CheckId) -> Option<Runner> {
     match check {
         CheckId::Cli => Some(cli::run),
+        CheckId::Validate => Some(validate::run),
+        CheckId::Plan => Some(plan::run),
+        CheckId::State => Some(state::run),
+        CheckId::V8 => Some(v8::run),
+        CheckId::V1 => Some(v1::run),
         CheckId::V6 => Some(v6::run),
         _ => None,
     }
@@ -298,15 +309,186 @@ pub(crate) fn run_step(
             site,
         )),
         Ok(captured) if captured.status.success() => Step::Succeeded(captured.stdout),
-        Ok(captured) => {
-            let status = captured
-                .status
-                .code()
-                .map_or_else(|| "a signal".to_owned(), |code| format!("exit code {code}"));
-            Step::Unsuccessful(format!("{command} failed with {status}"))
-        }
+        Ok(captured) => Step::Unsuccessful(format!(
+            "{command} failed with {}",
+            exit_text(captured.status)
+        )),
     };
     Ok((evidence, step))
+}
+
+/// How a non-zero exit is named in a reason: `exit code 1` or `a signal`.
+pub(crate) fn exit_text(status: ExitStatus) -> String {
+    status
+        .code()
+        .map_or_else(|| "a signal".to_owned(), |code| format!("exit code {code}"))
+}
+
+/// What one bundle CLI step produced.
+pub(crate) enum Ran {
+    /// The CLI ran to completion, successfully or not.
+    Completed { status: ExitStatus, stdout: Vec<u8> },
+    /// The CLI could not be run to completion, or the command was refused.
+    Failed(Finding),
+}
+
+/// Runs `databricks <args>` for the bundle, from its root with its target
+/// and profile, as `step` of `check`, and records the invocation with
+/// credentials scrubbed. Unlike [`run_step`], a non-zero exit keeps its
+/// output: `bundle validate` prints JSON even when it exits 1. Returns an
+/// error if the evidence cannot be written.
+pub(crate) fn run_bundle_step(
+    context: &Context<'_>,
+    check: CheckId,
+    step: &str,
+    args: &[&str],
+    timeout: Duration,
+    site: &'static str,
+) -> Result<(Vec<String>, Ran), String> {
+    let call = context.cli.run(args, timeout);
+    let evidence = vec![context.run.record_invocation(
+        check.as_str(),
+        step,
+        context.binary,
+        &call.args,
+        &call.result,
+    )?];
+    let ran = match call.result {
+        Ok(captured) => Ran::Completed {
+            status: captured.status,
+            stdout: captured.stdout,
+        },
+        Err(_) => Ran::Failed(Finding::failed(
+            check,
+            format!(
+                "`databricks {}` could not be run to completion; see the evidence record",
+                args.join(" ")
+            ),
+            evidence.clone(),
+            site,
+        )),
+    };
+    Ok((evidence, ran))
+}
+
+/// `text` with control characters escaped, so a name taken from CLI output
+/// keeps a verdict on one line.
+pub(crate) fn one_line(text: &str) -> String {
+    let mut line = String::with_capacity(text.len());
+    for character in text.chars() {
+        if character.is_control() {
+            line.extend(character.escape_default());
+        } else {
+            line.push(character);
+        }
+    }
+    line
+}
+
+/// Runs checks against a scenario-backed fake CLI in unit tests.
+#[cfg(test)]
+pub(crate) mod testing {
+    use std::fs;
+    use std::path::{Path, PathBuf};
+
+    use super::Runner;
+    use crate::evidence::RunDir;
+    use crate::probe::model::Finding;
+    use crate::probe::orchestrator::Context;
+    use crate::test_support::{ScenarioCli, TempDir, fake_databricks};
+    use crate::transport::CliRunner;
+
+    /// The target every check test uses.
+    pub(crate) const TARGET: &str = "dev";
+
+    /// A scratch bundle root, run directory, and fake CLI replaying a
+    /// scenario.
+    pub(crate) struct Fixture {
+        pub(crate) temp: TempDir,
+        pub(crate) cli: ScenarioCli,
+        pub(crate) run_dir: RunDir,
+    }
+
+    impl Fixture {
+        pub(crate) fn new(name: &str, scenario: &str) -> Self {
+            let temp = TempDir::new(name);
+            let cli_dir = temp.path().join("cli");
+            fs::create_dir_all(&cli_dir).expect("create CLI dir");
+            fs::create_dir_all(temp.path().join("bundle")).expect("create bundle");
+            let cli = ScenarioCli::new(fake_databricks(), &cli_dir, scenario);
+            let run_dir =
+                RunDir::create(&temp.path().join("bundle"), "lineage", 0).expect("create run");
+            Self { temp, cli, run_dir }
+        }
+
+        pub(crate) fn bundle(&self) -> PathBuf {
+            self.temp.path().join("bundle")
+        }
+
+        pub(crate) fn run(&self, check: Runner) -> Finding {
+            run_with(
+                check,
+                self.cli.binary().as_os_str(),
+                &self.run_dir,
+                &self.bundle(),
+            )
+        }
+
+        pub(crate) fn invocations(&self) -> Vec<Vec<String>> {
+            self.cli.invocations()
+        }
+
+        /// The evidence file `name` that `check` wrote.
+        pub(crate) fn evidence(&self, check: &str, name: &str) -> String {
+            fs::read_to_string(self.run_dir.path().join("evidence").join(check).join(name))
+                .expect("read evidence")
+        }
+    }
+
+    /// Runs `check` with `binary` as the CLI and `bundle` as the root.
+    pub(crate) fn run_with(
+        check: Runner,
+        binary: &std::ffi::OsStr,
+        run_dir: &RunDir,
+        bundle: &Path,
+    ) -> Finding {
+        let cli = CliRunner::for_bundle(binary, bundle, TARGET, None);
+        check(&Context {
+            binary,
+            run: run_dir,
+            bundle_root: bundle,
+            target: TARGET,
+            cli: &cli,
+        })
+        .expect("run check")
+    }
+
+    /// A scenario case answering `args`, then `-t dev`, the way the bundle
+    /// runner calls the CLI.
+    pub(crate) fn bundle_case(args: &[&str], response: &str) -> String {
+        let mut case = String::from("case\n");
+        for argument in args.iter().chain(&["-t", TARGET]) {
+            case.push_str("arg ");
+            case.push_str(argument);
+            case.push('\n');
+        }
+        case.push_str(response);
+        case.push('\n');
+        case
+    }
+
+    /// A scenario case answering `args` exactly.
+    pub(crate) fn case(args: &[&str], response: &str) -> String {
+        let mut case = String::from("case\n");
+        for argument in args {
+            case.push_str("arg ");
+            case.push_str(argument);
+            case.push('\n');
+        }
+        case.push_str(response);
+        case.push('\n');
+        case
+    }
 }
 
 #[cfg(test)]
@@ -400,12 +582,23 @@ mod tests {
     }
 
     #[test]
-    fn only_the_cli_and_v6_checks_are_implemented() {
+    fn the_bundle_checks_and_v6_are_implemented() {
         let implemented: Vec<_> = CheckId::ALL
             .into_iter()
             .filter(|&id| is_implemented(id))
             .collect();
-        assert_eq!(implemented, [CheckId::Cli, CheckId::V6]);
+        assert_eq!(
+            implemented,
+            [
+                CheckId::Cli,
+                CheckId::Validate,
+                CheckId::Plan,
+                CheckId::State,
+                CheckId::V8,
+                CheckId::V1,
+                CheckId::V6
+            ]
+        );
     }
 
     /// Parses `extra` after the required options as if `implemented` named

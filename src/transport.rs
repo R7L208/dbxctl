@@ -951,7 +951,7 @@ fn is_token_byte(byte: u8) -> bool {
 /// JSON Web Token, and a personal access token (`dapi` and 32 hex digits).
 /// Only the credential itself is replaced, so the rest of a line is kept.
 /// Output without any is returned as is.
-fn scrub(output: Vec<u8>) -> Vec<u8> {
+pub(crate) fn scrub(output: Vec<u8>) -> Vec<u8> {
     let changed = {
         let text = String::from_utf8_lossy(&output);
         let mut scrubbed = String::with_capacity(text.len());

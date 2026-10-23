@@ -152,31 +152,20 @@ mod tests {
 
     use super::run;
     use crate::evidence::RunDir;
+    use crate::probe::lineage::testing::{Fixture, run_with};
     use crate::probe::model::{Finding, State, Verdict};
-    use crate::probe::orchestrator::Context;
-    use crate::test_support::{
-        ScenarioCli, TempDir, assert_no_mutations, fake_databricks, stdout_line,
-    };
+    use crate::test_support::{TempDir, assert_no_mutations, stdout_line};
 
     /// The real nesting of `jobs.TriggerSettings`, trimmed from CLI 1.21.0.
     const JOBS_SCHEMA: &str = include_str!("../../../tests/fixtures/bundle-schema-jobs.json");
 
     /// Runs the check against a scenario answering `bundle schema`.
     fn check(name: &str, response: &str) -> (Finding, Vec<Vec<String>>, TempDir) {
-        let temp = TempDir::new(name);
-        let cli_dir = temp.path().join("cli");
-        let bundle = temp.path().join("bundle");
-        fs::create_dir_all(&cli_dir).expect("create CLI dir");
-        fs::create_dir_all(&bundle).expect("create bundle");
         let scenario = format!("case\narg bundle\narg schema\n{response}\n");
-        let cli = ScenarioCli::new(fake_databricks(), &cli_dir, &scenario);
-        let run_dir = RunDir::create(&bundle, "lineage", 0).expect("create run");
-        let finding = run(&Context {
-            binary: cli.binary().as_os_str(),
-            run: &run_dir,
-        })
-        .expect("run check");
-        (finding, cli.invocations(), temp)
+        let fixture = Fixture::new(name, &scenario);
+        let finding = fixture.run(run);
+        let invocations = fixture.invocations();
+        (finding, invocations, fixture.temp)
     }
 
     /// A schema whose `definitions` sit in the SDK's service packages.
@@ -361,11 +350,7 @@ mod tests {
         let temp = TempDir::new("v6-missing");
         let run_dir = RunDir::create(temp.path(), "lineage", 0).expect("create run");
         let missing = temp.path().join("no-such-databricks");
-        let finding = run(&Context {
-            binary: missing.as_os_str(),
-            run: &run_dir,
-        })
-        .expect("run check");
+        let finding = run_with(run, missing.as_os_str(), &run_dir, temp.path());
         assert_eq!(finding.state(), State::Failed);
         let reason = finding.reason().unwrap_or_default();
         assert!(
