@@ -17,7 +17,10 @@ const CHECK: CheckId = CheckId::V6;
 /// The expectation the answer confirms or corrects.
 const SITE: &str = "docs/mv-lineage/phase0/01-requirements.md#r5-cli-baseline";
 const PROPERTY: &str = "table_update";
-/// The package R5 expects to declare the trigger.
+/// SDK service packages are named without this prefix, so the SDK's jobs
+/// package is `jobs`. Any other package keeps its full import path.
+const SDK_SERVICE: &str = "github.com/databricks/databricks-sdk-go/service/";
+/// The package R5 expects to declare the trigger: the SDK's jobs package.
 const JOBS: &str = "jobs";
 /// Starts a verdict in which no `jobs` definition declares the trigger.
 const OUTSIDE_JOBS: &str = "not jobs: ";
@@ -68,7 +71,10 @@ pub(crate) fn run(context: &Context<'_>) -> Result<Finding, String> {
     }
     let packages: BTreeSet<_> = definitions
         .iter()
-        .map(|definition| definition.package.as_str())
+        .map(|definition| {
+            let package = definition.package.as_str();
+            package.strip_prefix(SDK_SERVICE).unwrap_or(package)
+        })
         .collect();
     Ok(Finding::resolved(
         CHECK,
@@ -121,6 +127,13 @@ mod tests {
         (finding, cli.invocations(), temp)
     }
 
+    /// A schema whose `definitions` sit in the SDK's service packages.
+    fn sdk_schema(definitions: &str) -> String {
+        format!(
+            r#"{{"$defs": {{"github.com": {{"databricks": {{"databricks-sdk-go": {{"service": {{{definitions}}}}}}}}}}}}}"#
+        )
+    }
+
     fn schema_response(schema: &str) -> String {
         format!(
             "stdout {}",
@@ -139,11 +152,11 @@ mod tests {
 
     #[test]
     fn names_every_package_that_defines_the_trigger() {
-        let schema = r#"{"$defs": {"service": {
-            "pipelines.PipelineTrigger": {"properties": {"table_update": {}}},
-            "jobs.TriggerSettings": {"oneOf": [{"properties": {"table_update": {}}}]}
-        }}}"#;
-        let (finding, _, _temp) = check("v6-elsewhere", &schema_response(schema));
+        let schema = sdk_schema(
+            r#""pipelines.PipelineTrigger": {"properties": {"table_update": {}}},
+            "jobs.TriggerSettings": {"oneOf": [{"properties": {"table_update": {}}}]}"#,
+        );
+        let (finding, _, _temp) = check("v6-elsewhere", &schema_response(&schema));
         assert_eq!(finding.state(), State::Resolved, "{finding:?}");
         assert_eq!(
             finding.verdict().map(Verdict::as_str),
@@ -153,15 +166,28 @@ mod tests {
 
     #[test]
     fn says_when_no_jobs_definition_has_the_trigger() {
-        let schema = r#"{"$defs": {"service": {
-            "pipelines.PipelineTrigger": {"properties": {"table_update": {}}},
-            "jobs.TriggerSettings": {"properties": {"periodic": {}}}
-        }}}"#;
-        let (finding, _, _temp) = check("v6-not-jobs", &schema_response(schema));
+        let schema = sdk_schema(
+            r#""pipelines.PipelineTrigger": {"properties": {"table_update": {}}},
+            "jobs.TriggerSettings": {"properties": {"periodic": {}}}"#,
+        );
+        let (finding, _, _temp) = check("v6-not-jobs", &schema_response(&schema));
         assert_eq!(finding.state(), State::Resolved, "{finding:?}");
         assert_eq!(
             finding.verdict().map(Verdict::as_str),
             Some("not jobs: pipelines")
+        );
+    }
+
+    #[test]
+    fn a_jobs_package_outside_the_sdk_is_not_jobs() {
+        let schema = r#"{"$defs": {"github.com": {"databricks": {"cli": {"libs": {
+            "jobs.Settings": {"properties": {"table_update": {}}}
+        }}}}}}"#;
+        let (finding, _, _temp) = check("v6-other-jobs", &schema_response(schema));
+        assert_eq!(finding.state(), State::Resolved, "{finding:?}");
+        assert_eq!(
+            finding.verdict().map(Verdict::as_str),
+            Some("not jobs: github.com/databricks/cli/libs/jobs")
         );
     }
 

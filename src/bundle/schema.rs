@@ -38,7 +38,9 @@ const BRANCHES: [&str; 3] = ["allOf", "anyOf", "oneOf"];
 pub(crate) struct Definition {
     /// The slash-separated path below `$defs`.
     pub(crate) path: String,
-    /// The Go package that declares it: `jobs` for `…/service/jobs.TriggerSettings`.
+    /// The import path of the Go package that declares it:
+    /// `github.com/databricks/databricks-sdk-go/service/jobs` for
+    /// `jobs.TriggerSettings` at that path.
     pub(crate) package: String,
 }
 
@@ -75,7 +77,7 @@ fn collect<'a>(
             if has_property(child, property) {
                 found.push(Definition {
                     path: path.join("/"),
-                    package: package(key).to_owned(),
+                    package: package(path),
                 });
             }
         } else {
@@ -104,9 +106,20 @@ fn has_property(definition: Node<'_>, property: &str) -> bool {
         })
 }
 
-/// `jobs` for `jobs.TriggerSettings`; a name without a package is its own.
-fn package(name: &str) -> &str {
-    name.split_once('.').map_or(name, |(package, _)| package)
+/// The segments above the definition joined with the text before the first
+/// `.` of its name: `…/service/jobs` for `…/service/jobs.TriggerSettings`. A
+/// name without a package is its own.
+fn package(path: &[&str]) -> String {
+    let Some((name, parents)) = path.split_last() else {
+        return String::new();
+    };
+    let own = name.split_once('.').map_or(*name, |(package, _)| package);
+    parents
+        .iter()
+        .copied()
+        .chain([own])
+        .collect::<Vec<_>>()
+        .join("/")
 }
 
 #[cfg(test)]
@@ -143,11 +156,11 @@ mod tests {
         assert_eq!(
             found(schema),
             Some(vec![
-                (format!("{SDK}/jobs.Direct"), "jobs".to_owned()),
-                (format!("{SDK}/jobs.TriggerSettings"), "jobs".to_owned()),
+                (format!("{SDK}/jobs.Direct"), format!("{SDK}/jobs")),
+                (format!("{SDK}/jobs.TriggerSettings"), format!("{SDK}/jobs")),
                 (
                     format!("{SDK}/pipelines.PipelineTrigger"),
-                    "pipelines".to_owned()
+                    format!("{SDK}/pipelines")
                 ),
             ])
         );
@@ -160,6 +173,20 @@ mod tests {
             "settings": {"type": "object", "properties": {"table_update": {}}}
         }}}}}"#;
         assert_eq!(found(schema), Some(Vec::new()));
+    }
+
+    #[test]
+    fn keeps_the_import_path_of_same_named_packages() {
+        let schema = r#"{"$defs": {"github.com": {"databricks": {"cli": {"libs": {
+            "jobs.Settings": {"type": "object", "properties": {"table_update": {}}}
+        }}}}}}"#;
+        assert_eq!(
+            found(schema),
+            Some(vec![(
+                "github.com/databricks/cli/libs/jobs.Settings".to_owned(),
+                "github.com/databricks/cli/libs/jobs".to_owned()
+            )])
+        );
     }
 
     #[test]

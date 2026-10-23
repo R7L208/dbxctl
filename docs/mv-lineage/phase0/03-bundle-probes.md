@@ -48,7 +48,10 @@ segment, so the trigger definition is at
 An object with a JSON Schema keyword is a definition; any other object is a
 path segment. A definition declares `table_update` if its own `properties`,
 or the `properties` of one of its `oneOf`, `anyOf`, or `allOf` branches,
-contain it.
+contain it. Each definition's package is its full import path. Verdicts name
+SDK service packages without the `github.com/databricks/databricks-sdk-go/service/`
+prefix, so only the SDK's package is `jobs`; any other package keeps its full
+path.
 
 **Evidence:** `evidence/v6/schema.json` records the invocation, with the
 schema itself in `schema.stdout`.
