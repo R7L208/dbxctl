@@ -46,8 +46,10 @@ bundle or workspace.
 segment, so the trigger definition is at
 `$defs/github.com/databricks/databricks-sdk-go/service/jobs.TriggerSettings`.
 A path segment holds only objects, so an object is a definition if it is
-empty, has a member that is not an object, or is the target of a `$ref`; any
-other object is a path segment. A definition declares `table_update` if its
+empty, has a member that is not an object, is the target of a `$ref`, or
+reads as a schema: every object member is a keyword holding what that
+keyword holds, such as `properties` mapping names to schemas. Any other
+object is a path segment. A definition declares `table_update` if its
 own `properties` contain it, or if a `oneOf`, `anyOf`, or `allOf` branch at
 any depth, or a schema it names with `$ref`, declares it. Each `$ref` is
 followed once, so a cycle ends. Each definition's package is its full import path. Verdicts name
@@ -71,6 +73,9 @@ schema itself in `schema.stdout`.
 [R5](01-requirements.md#r5-cli-baseline) expects, until part B checks a live
 job.
 
-CLI 1.21.0 resolves `jobs`. The ignored `bundle_schema_trigger_contract` test
-checks the pinned CLI, and the fixture `tests/fixtures/bundle-schema-jobs.json`
-is a trimmed excerpt of the 1.21.0 schema.
+The pinned CLI 1.13.0 and CLI 1.21.0 both resolve `jobs`. The ignored
+`bundle_schema_trigger_contract` test runs v6 against the CLI at
+`DATABRICKS_CLI_PATH`; CI runs it against the pinned 1.13.0, and it passes on
+both versions. The fixture `tests/fixtures/bundle-schema-jobs.json` is a
+trimmed excerpt of the 1.21.0 schema, which nests `jobs.TriggerSettings` as
+1.13.0 does.
