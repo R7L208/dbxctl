@@ -69,7 +69,7 @@ fn tokenize(sql: &str) -> Option<Vec<Token<'_>>> {
         if byte.is_ascii_whitespace() {
             index += 1;
         } else if rest.starts_with(b"--") {
-            index = find_byte(b'\n', bytes, index).map_or(bytes.len(), |end| end + 1);
+            index = line_comment_end(bytes, index)?;
         } else if rest.starts_with(b"/*") {
             index = block_comment_end(bytes, index)?;
         } else if byte == b'\'' || byte == b'"' {
@@ -113,6 +113,22 @@ fn find_byte(needle: u8, bytes: &[u8], from: usize) -> Option<usize> {
         .iter()
         .position(|&byte| byte == needle)
         .map(|offset| from + offset)
+}
+
+/// The index of the line break that ends the `--` comment starting at
+/// `start`, or the end of `sql`. As in Spark, `\r` ends it as well as `\n`.
+/// Spark continues a comment past a backslash before `\n`; that is refused
+/// rather than followed, so the guard never has to agree on where it ends.
+fn line_comment_end(bytes: &[u8], start: usize) -> Option<usize> {
+    let mut index = start + 2;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'\\' if bytes.get(index + 1) == Some(&b'\n') => return None,
+            b'\r' | b'\n' => return Some(index),
+            _ => index += 1,
+        }
+    }
+    Some(index)
 }
 
 /// The index after the comment starting at `start`. Comments nest.
@@ -187,6 +203,7 @@ mod tests {
             "SELECT 1",
             "select 1;",
             "  SELECT 1 ;  -- trailing comment",
+            "-- one\r\n-- two\rSELECT 1 -- three \\ still one line",
             "WITH t AS (SELECT 1 AS x) SELECT x FROM t",
             "SHOW TABLES IN main.default",
             "DESCRIBE HISTORY main.default.t",
@@ -216,6 +233,10 @@ mod tests {
             "SELECT 1; DROP TABLE t",
             "SELECT 1;;",
             "SELECT '--'; DROP TABLE t",
+            "WITH t AS (SELECT 1) --\rINSERT INTO u SELECT * FROM t",
+            "SELECT 1 --\r; DROP TABLE t",
+            "SELECT 1 --\\\n'\n; DROP TABLE t\n--'",
+            "SELECT 1 -- continued \\\n",
             "SELECT \"--\"; DROP TABLE t",
             "SELECT `--`; DROP TABLE t",
             "SELECT '/*'; DROP TABLE t; --*/",
