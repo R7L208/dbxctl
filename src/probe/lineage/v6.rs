@@ -4,6 +4,7 @@
 //! Answered offline, with no bundle or workspace. Part B (#37) checks a live
 //! job.
 
+use std::borrow::Cow;
 use std::collections::BTreeSet;
 
 use crate::bundle::schema::{SCHEMA_COMMAND, SCHEMA_TIMEOUT, packages_with_property};
@@ -54,16 +55,25 @@ pub(crate) fn run(context: &Context<'_>) -> Result<Finding, String> {
             "no definition in the bundle schema has a `table_update` property",
         ));
     }
-    let packages: BTreeSet<_> = packages
-        .iter()
-        .map(|package| sdk_service(package).unwrap_or(package))
-        .collect();
+    let packages: BTreeSet<_> = packages.iter().map(|package| name(package)).collect();
     Ok(Finding::resolved(
         CHECK,
         Verdict::new(verdict(&packages)),
         evidence,
         SITE,
     ))
+}
+
+/// How the verdict names `package`: an SDK service package by its own name,
+/// a package directly under `$defs` as `$defs/` and its name, so that a
+/// top-level `jobs` is not taken for the SDK's, and any other package by its
+/// import path.
+fn name(package: &str) -> Cow<'_, str> {
+    match sdk_service(package) {
+        Some(name) => Cow::Borrowed(name),
+        None if !package.contains('/') => Cow::Owned(format!("$defs/{package}")),
+        None => Cow::Borrowed(package),
+    }
 }
 
 /// The name of `package` if it is an SDK service package, such as `jobs` for
@@ -89,8 +99,12 @@ fn is_major_version(segment: &str) -> bool {
 /// `jobs` alone answers yes, and other packages name where else the trigger
 /// lives. Without `jobs` the answer is no, which contradicts R5, so the
 /// verdict says so before naming the packages.
-fn verdict(packages: &BTreeSet<&str>) -> String {
-    let names = packages.iter().copied().collect::<Vec<_>>().join(", ");
+fn verdict(packages: &BTreeSet<Cow<'_, str>>) -> String {
+    let names = packages
+        .iter()
+        .map(AsRef::as_ref)
+        .collect::<Vec<&str>>()
+        .join(", ");
     if packages.contains(JOBS) {
         names
     } else {
@@ -185,6 +199,19 @@ mod tests {
         assert_eq!(
             finding.verdict().map(Verdict::as_str),
             Some("not jobs: github.com/databricks/cli/libs/jobs")
+        );
+    }
+
+    #[test]
+    fn a_top_level_jobs_package_is_not_the_sdks() {
+        let schema = r#"{"$defs": {
+            "jobs.Settings": {"type": "object", "properties": {"table_update": {}}}
+        }}"#;
+        let (finding, _, _temp) = check("v6-top-level-jobs", &stdout_line(schema));
+        assert_eq!(finding.state(), State::Resolved, "{finding:?}");
+        assert_eq!(
+            finding.verdict().map(Verdict::as_str),
+            Some("not jobs: $defs/jobs")
         );
     }
 
