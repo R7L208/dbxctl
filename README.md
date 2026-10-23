@@ -82,9 +82,9 @@ dbxctl probe run --suite lineage --bundle-root <path> --target <non-prod> --only
 ```
 
 Only the `cli` check runs so far. Without `--only`, every check is selected,
-including the mutation checks `v6`, `v10`, and `v7`, and the unimplemented ones
-are reported as skipped. The mutation steps never run without
-`--allow-mutations` and their own inputs
+including the checks with mutation steps (`v6` part B, `v10`, and `v7`), and
+the unimplemented ones are reported as skipped. The mutation steps never run
+without `--allow-mutations` and their own inputs
 ([R10](docs/mv-lineage/phase0/01-requirements.md#r10-mutation-capability-and-cleanup)).
 The [kit's prerequisites](docs/mv-lineage/phase0/00-kit.md#prerequisites) list
 the checks that need `--warehouse-id` and `--scope-catalog`. A run that
