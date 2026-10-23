@@ -54,8 +54,9 @@ own `properties` contain it, or if a `oneOf`, `anyOf`, or `allOf` branch at
 any depth, or a schema it names with `$ref`, declares it. Each `$ref` is
 followed once, so a cycle ends. Each definition's package is its full import path. Verdicts name
 SDK service packages without the `github.com/databricks/databricks-sdk-go/service/`
-prefix, so only the SDK's package is `jobs`; any other package keeps its full
-path.
+prefix, or the same prefix with a major version such as `v2/` before
+`service/`, so only the SDK's package is `jobs`; any other package keeps its
+full path.
 
 **Evidence:** `evidence/v6/schema.json` records the invocation, with the
 schema itself in `schema.stdout`.

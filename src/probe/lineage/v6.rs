@@ -16,9 +16,10 @@ const CHECK: CheckId = CheckId::V6;
 /// The expectation the answer confirms or corrects.
 const SITE: &str = "docs/mv-lineage/phase0/01-requirements.md#r5-cli-baseline";
 const PROPERTY: &str = "table_update";
-/// SDK service packages are named without this prefix, so the SDK's jobs
+/// The SDK module. Its service packages are named by what follows `service/`,
+/// with or without a major version such as `v2/` before it, so the SDK's jobs
 /// package is `jobs`. Any other package keeps its full import path.
-const SDK_SERVICE: &str = "github.com/databricks/databricks-sdk-go/service/";
+const SDK_MODULE: &str = "github.com/databricks/databricks-sdk-go/";
 /// The package R5 expects to declare the trigger: the SDK's jobs package.
 const JOBS: &str = "jobs";
 /// Starts a verdict in which no `jobs` definition declares the trigger.
@@ -55,7 +56,7 @@ pub(crate) fn run(context: &Context<'_>) -> Result<Finding, String> {
     }
     let packages: BTreeSet<_> = packages
         .iter()
-        .map(|package| package.strip_prefix(SDK_SERVICE).unwrap_or(package))
+        .map(|package| sdk_service(package).unwrap_or(package))
         .collect();
     Ok(Finding::resolved(
         CHECK,
@@ -63,6 +64,26 @@ pub(crate) fn run(context: &Context<'_>) -> Result<Finding, String> {
         evidence,
         SITE,
     ))
+}
+
+/// The name of `package` if it is an SDK service package, such as `jobs` for
+/// `github.com/databricks/databricks-sdk-go/v2/service/jobs`.
+fn sdk_service(package: &str) -> Option<&str> {
+    let rest = package.strip_prefix(SDK_MODULE)?;
+    let rest = match rest.split_once('/') {
+        Some((major, after)) if is_major_version(major) => after,
+        _ => rest,
+    };
+    rest.strip_prefix("service/")
+        .filter(|name| !name.is_empty() && !name.contains('/'))
+}
+
+/// Whether `segment` is a Go major version suffix: `v` and a number above 1.
+fn is_major_version(segment: &str) -> bool {
+    segment
+        .strip_prefix('v')
+        .and_then(|number| number.parse::<u32>().ok())
+        .is_some_and(|number| number > 1 && !segment[1..].starts_with('0'))
 }
 
 /// `jobs` alone answers yes, and other packages name where else the trigger
@@ -164,6 +185,24 @@ mod tests {
         assert_eq!(
             finding.verdict().map(Verdict::as_str),
             Some("not jobs: github.com/databricks/cli/libs/jobs")
+        );
+    }
+
+    #[test]
+    fn a_versioned_sdk_module_is_still_the_sdk() {
+        let schema = r#"{"$defs": {"github.com": {"databricks": {"databricks-sdk-go": {
+            "v2": {"service": {
+                "jobs.TriggerSettings": {"type": "object", "properties": {"table_update": {}}}
+            }},
+            "v0": {"service": {
+                "pipelines.T": {"type": "object", "properties": {"table_update": {}}}
+            }}
+        }}}}}"#;
+        let (finding, _, _temp) = check("v6-versioned-sdk", &stdout_line(schema));
+        assert_eq!(finding.state(), State::Resolved, "{finding:?}");
+        assert_eq!(
+            finding.verdict().map(Verdict::as_str),
+            Some("github.com/databricks/databricks-sdk-go/v0/service/pipelines, jobs")
         );
     }
 
