@@ -2,6 +2,8 @@
 
 pub mod scenario;
 
+#[path = "../../src/json.rs"]
+mod json;
 #[path = "../../src/safety.rs"]
 mod safety;
 

@@ -4,6 +4,17 @@
 //! warehouse. The transport calls it before it starts any CLI process, so a
 //! refused statement never reaches the workspace.
 
+/// The CLI commands known to be read-only, by their full command path. The
+/// transport runs no other command, and the tests' fake CLI counts any
+/// other invocation as a mutation. Each check that adds a CLI surface
+/// extends this list. `api get <path>` is read-only too.
+pub(crate) const READ_ONLY_COMMANDS: &[&[&str]] = &[
+    &["version"],
+    &["bundle", "validate"],
+    &["bundle", "plan"],
+    &["bundle", "schema"],
+];
+
 /// Words that may start a read-only statement.
 const READ_STARTS: [&str; 5] = ["DESC", "DESCRIBE", "SELECT", "SHOW", "WITH"];
 /// Words that start a statement that writes or changes state. One anywhere

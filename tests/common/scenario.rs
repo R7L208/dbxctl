@@ -9,22 +9,13 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-// The transport's own guard (`src/safety.rs`), so a statement submit is
-// checked the same way. The including module provides it.
-use super::safety;
+// The transport's own guard and read-only command list (`src/safety.rs`),
+// so an invocation is checked the same way, and its JSON layer
+// (`src/json.rs`). The including module provides both.
+use super::{json, safety};
 
 const SCENARIO_FILE: &str = "fake-scenario.txt";
 const INVOCATION_LOG: &str = "fake-invocations.log";
-
-/// Command paths known to be read-only. Each later check that adds a CLI
-/// surface extends this list; anything not listed counts as a mutation.
-/// `api get <path>` is read-only too.
-const READ_ONLY_COMMANDS: &[&[&str]] = &[
-    &["version"],
-    &["bundle", "validate"],
-    &["bundle", "plan"],
-    &["bundle", "schema"],
-];
 
 /// A fake Databricks CLI that replays one scenario.
 pub struct ScenarioCli {
@@ -84,43 +75,18 @@ fn is_statement_post(argv: &[String], path: &[&str]) -> bool {
             .iter()
             .position(|argument| argument == "--json")
             .and_then(|at| argv.get(at + 1))
-            .and_then(|body| json_string_field(body, "statement"))
-            .is_some_and(|sql| safety::is_read_statement(&sql)),
+            .and_then(|body| json::parse(body).ok())
+            .is_some_and(|body| {
+                body.root()
+                    .get("statement")
+                    .and_then(json::Node::as_str)
+                    .is_some_and(safety::is_read_statement)
+            }),
         ["api", "post", url] => url
             .strip_prefix("/api/2.0/sql/statements/")
             .and_then(|rest| rest.strip_suffix("/cancel"))
             .is_some_and(|id| !id.is_empty() && !id.contains('/')),
         _ => false,
-    }
-}
-
-/// The string value of `key` in a compact JSON object, as the transport
-/// writes it. Inside a JSON string every `"` is escaped, so `"key":"` can
-/// only be the key itself.
-fn json_string_field(body: &str, key: &str) -> Option<String> {
-    let start = body.find(&format!("\"{key}\":\""))? + key.len() + 4;
-    let mut value = String::new();
-    let mut characters = body[start..].chars();
-    loop {
-        match characters.next()? {
-            '"' => return Some(value),
-            '\\' => match characters.next()? {
-                'n' => value.push('\n'),
-                'r' => value.push('\r'),
-                't' => value.push('\t'),
-                'b' => value.push('\u{8}'),
-                'f' => value.push('\u{c}'),
-                'u' => {
-                    let hex: String = characters.by_ref().take(4).collect();
-                    let unit = u32::from_str_radix(&hex, 16).ok()?;
-                    // Surrogate pairs are not needed for the statements tests
-                    // send; one that appears fails the check.
-                    value.push(char::from_u32(unit)?);
-                }
-                other => value.push(other),
-            },
-            other => value.push(other),
-        }
     }
 }
 
@@ -175,7 +141,7 @@ pub fn assert_no_mutations(invocations: &[Vec<String>]) {
         // name a different command.
         let api_get = matches!(path.as_slice(), ["api", "get", url] if url.starts_with('/'));
         assert!(
-            READ_ONLY_COMMANDS.contains(&path.as_slice())
+            safety::READ_ONLY_COMMANDS.contains(&path.as_slice())
                 || api_get
                 || is_statement_post(argv, &path),
             "invocation {argv:?} is not a known read-only command"

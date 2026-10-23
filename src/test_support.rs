@@ -10,8 +10,9 @@ use std::sync::OnceLock;
 mod scenario;
 
 pub(crate) use scenario::{ScenarioCli, assert_no_mutations};
-// For `scenario`, which reaches the guard through its parent module.
-use crate::safety;
+// For `scenario`, which reaches the guard and the JSON layer through its
+// parent module.
+use crate::{json, safety};
 
 /// The fake Databricks CLI, compiled once per test process.
 pub(crate) fn fake_databricks() -> &'static Path {

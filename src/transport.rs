@@ -40,14 +40,6 @@ const MIN_WAIT: Duration = Duration::from_secs(5);
 const SUBMIT_MARGIN: Duration = Duration::from_secs(5);
 const STATEMENTS: &str = "/api/2.0/sql/statements";
 const REDACTED: &str = "[REDACTED]";
-/// The CLI commands [`Runner::run`] may run, by their full command path.
-/// Anything else is refused without starting a process.
-const READ_ONLY_RUNS: &[&[&str]] = &[
-    &["version"],
-    &["bundle", "validate"],
-    &["bundle", "plan"],
-    &["bundle", "schema"],
-];
 /// How much of each statement response a [`Call`] keeps as evidence. The
 /// rows are in the [`ResultSet`], so the evidence needs only the start.
 const STATEMENT_EVIDENCE_BYTES: usize = 64 * 1024;
@@ -267,18 +259,19 @@ impl CliRunner {
         timeout: Duration,
         kept: usize,
     ) -> (Call, Result<Response, Error>) {
-        if let Err(problem) = check_path(path) {
-            let call = Call {
-                args: Vec::new(),
-                result: Err(problem.clone()),
-            };
-            return (call, Err(Error::Transport(problem)));
-        }
         let mut args = vec!["api", method, path];
         if let Some(body) = body {
             args.extend(["--json", body]);
         }
         args.push("--debug");
+        if let Err(problem) = check_path(path) {
+            // Recorded as the run it would have been, without starting it.
+            let call = Call {
+                args: self.arguments(&args),
+                result: Err(problem.clone()),
+            };
+            return (call, Err(Error::Transport(problem)));
+        }
         let (args, result) = self.capture(&args, timeout);
         let response = response(Request { method, path }, &result);
         (evidence(args, result, kept), response)
@@ -553,7 +546,9 @@ impl Runner for CliRunner {
             .copied()
             .take_while(|argument| !argument.starts_with('-'))
             .collect();
-        if !READ_ONLY_RUNS.contains(&path.as_slice()) {
+        // Anything but a known read-only command is refused without
+        // starting a process.
+        if !safety::READ_ONLY_COMMANDS.contains(&path.as_slice()) {
             return Call {
                 args: self.arguments(args),
                 result: Err(format!(
@@ -1473,6 +1468,12 @@ mod tests {
             let outcome = runner.api_get(path);
             assert!(
                 matches!(outcome.result, Err(Error::Transport(ref text)) if text.contains("refused API path")),
+                "{path:?}"
+            );
+            // The evidence names what was refused.
+            assert_eq!(
+                outcome.calls[0].args,
+                ["api", "get", path, "--debug", "-t", "dev"],
                 "{path:?}"
             );
         }
