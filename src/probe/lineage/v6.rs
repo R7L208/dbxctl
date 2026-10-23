@@ -18,8 +18,9 @@ const CHECK: CheckId = CheckId::V6;
 const SITE: &str = "docs/mv-lineage/phase0/01-requirements.md#r5-cli-baseline";
 const PROPERTY: &str = "table_update";
 /// The SDK module. Its service packages are named by what follows `service/`,
-/// with or without a major version such as `v2/` before it, so the SDK's jobs
-/// package is `jobs`. Any other package keeps its full import path.
+/// after the major version and a `/` when there is one, such as `v2/jobs`, so
+/// the SDK's jobs package is `jobs` or `vN/jobs`. Any other package keeps its
+/// full import path.
 const SDK_MODULE: &str = "github.com/databricks/databricks-sdk-go/";
 /// The package R5 expects to declare the trigger: the SDK's jobs package.
 const JOBS: &str = "jobs";
@@ -73,7 +74,8 @@ pub(crate) fn run(context: &Context<'_>) -> Result<Finding, String> {
 /// CLI's output and a verdict is one line.
 fn name(package: &str) -> Cow<'_, str> {
     let name = match sdk_service(package) {
-        Some(name) => Cow::Borrowed(name),
+        Some((None, name)) => Cow::Borrowed(name),
+        Some((Some(major), name)) => Cow::Owned(format!("{major}/{name}")),
         None if !package.contains('/') => Cow::Owned(format!("$defs/{package}")),
         None => Cow::Borrowed(package),
     };
@@ -91,16 +93,28 @@ fn name(package: &str) -> Cow<'_, str> {
     Cow::Owned(escaped)
 }
 
-/// The name of `package` if it is an SDK service package, such as `jobs` for
+/// The module's major version, if any, and the name of `package` if it is an
+/// SDK service package, such as `v2` and `jobs` for
 /// `github.com/databricks/databricks-sdk-go/v2/service/jobs`.
-fn sdk_service(package: &str) -> Option<&str> {
+fn sdk_service(package: &str) -> Option<(Option<&str>, &str)> {
     let rest = package.strip_prefix(SDK_MODULE)?;
-    let rest = match rest.split_once('/') {
-        Some((major, after)) if is_major_version(major) => after,
-        _ => rest,
+    let (major, rest) = match rest.split_once('/') {
+        Some((major, after)) if is_major_version(major) => (Some(major), after),
+        _ => (None, rest),
     };
-    rest.strip_prefix("service/")
-        .filter(|name| !name.is_empty() && !name.contains('/'))
+    let name = rest
+        .strip_prefix("service/")
+        .filter(|name| !name.is_empty() && !name.contains('/'))?;
+    Some((major, name))
+}
+
+/// Whether the verdict name `name` is the SDK's jobs package, in any major
+/// version of the module.
+fn is_jobs(name: &str) -> bool {
+    name == JOBS
+        || name
+            .split_once('/')
+            .is_some_and(|(major, name)| name == JOBS && is_major_version(major))
 }
 
 /// Whether `segment` is a Go major version suffix: `v` and a number above 1.
@@ -111,20 +125,21 @@ fn is_major_version(segment: &str) -> bool {
         .is_some_and(|number| number > 1 && !segment[1..].starts_with('0'))
 }
 
-/// `jobs` alone answers yes. With other packages too, `jobs` comes first and
-/// `; also: ` names where else the trigger lives, so only a clean yes is the
-/// bare `jobs`. Without `jobs` the answer is no, which contradicts R5, so the
-/// verdict says so before naming the packages.
+/// The SDK's jobs packages alone answer yes, so the SDK's `jobs` alone is the
+/// bare `jobs`, and each major version is named, such as `jobs, v2/jobs`. With
+/// other packages too, the jobs packages come first and `; also: ` names where
+/// else the trigger lives. Without a jobs package the answer is no, which
+/// contradicts R5, so the verdict says so before naming the packages.
 fn verdict(packages: &BTreeSet<Cow<'_, str>>) -> String {
     let (jobs, others): (Vec<&str>, Vec<&str>) = packages
         .iter()
         .map(AsRef::as_ref)
-        .partition(|name| *name == JOBS);
-    let others = others.join(", ");
+        .partition(|name| is_jobs(name));
+    let (jobs, others) = (jobs.join(", "), others.join(", "));
     match (jobs.is_empty(), others.is_empty()) {
         (true, _) => format!("{OUTSIDE_JOBS}{others}"),
-        (false, true) => JOBS.to_owned(),
-        (false, false) => format!("{JOBS}{ALSO}{others}"),
+        (false, true) => jobs,
+        (false, false) => format!("{jobs}{ALSO}{others}"),
     }
 }
 
@@ -259,7 +274,7 @@ mod tests {
         assert_eq!(finding.state(), State::Resolved, "{finding:?}");
         assert_eq!(
             finding.verdict().map(Verdict::as_str),
-            Some("jobs; also: github.com/databricks/databricks-sdk-go/v0/service/pipelines")
+            Some("v2/jobs; also: github.com/databricks/databricks-sdk-go/v0/service/pipelines")
         );
     }
 
@@ -274,6 +289,24 @@ mod tests {
         assert_eq!(
             finding.verdict().map(Verdict::as_str),
             Some(r"not jobs: $defs/pkg\nv7        resolved  yes")
+        );
+    }
+
+    #[test]
+    fn keeps_sdk_major_versions_apart() {
+        let schema = r#"{"$defs": {"github.com": {"databricks": {"databricks-sdk-go": {
+            "service": {
+                "jobs.TriggerSettings": {"type": "object", "properties": {"table_update": {}}}
+            },
+            "v2": {"service": {
+                "jobs.TriggerSettings": {"type": "object", "properties": {"table_update": {}}}
+            }}
+        }}}}}"#;
+        let (finding, _, _temp) = check("v6-both-sdks", &stdout_line(schema));
+        assert_eq!(finding.state(), State::Resolved, "{finding:?}");
+        assert_eq!(
+            finding.verdict().map(Verdict::as_str),
+            Some("jobs, v2/jobs")
         );
     }
 

@@ -54,10 +54,11 @@ definition declares `table_update` if its own `properties` contain it, or if a
 `$ref`, declares it. Each `$ref` is followed once and its answer reused, so a
 cycle ends. Each definition's package is its full import path. Verdicts name
 SDK service packages without the
-`github.com/databricks/databricks-sdk-go/service/` prefix, or the same prefix
-with a major version such as `v2/` before `service/`, so only the SDK's package
-is `jobs`. A package directly under `$defs` is named `$defs/` and its name,
-such as `$defs/jobs`; any other package keeps its full path.
+`github.com/databricks/databricks-sdk-go/service/` prefix, so only the SDK's
+package is `jobs`. A major version of the module keeps its version, so
+`.../databricks-sdk-go/v2/service/jobs` is `v2/jobs`, and both count as the
+SDK's jobs package. A package directly under `$defs` is named `$defs/` and its
+name, such as `$defs/jobs`; any other package keeps its full path.
 
 **Evidence:** `evidence/v6/schema.json` records the invocation, with the
 schema itself in `schema.stdout`.
