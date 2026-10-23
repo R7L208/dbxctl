@@ -15,7 +15,8 @@
 //!   anything else is refused before a CLI process starts.
 //!
 //! Every CLI run comes back as a [`Call`] for the evidence record, with
-//! credentials scrubbed from its output. Full redaction is #36.
+//! credentials scrubbed from its output; a statement response keeps only its
+//! first [`STATEMENT_EVIDENCE_BYTES`]. Full redaction is #36.
 
 use std::ffi::{OsStr, OsString};
 use std::fmt;
@@ -33,6 +34,9 @@ use crate::safety;
 const WAIT_TIMEOUT: &str = "30s";
 const STATEMENTS: &str = "/api/2.0/sql/statements";
 const REDACTED: &str = "[REDACTED]";
+/// How much of each statement response a [`Call`] keeps as evidence. The
+/// rows are in the [`ResultSet`], so the evidence needs only the start.
+const STATEMENT_EVIDENCE_BYTES: usize = 64 * 1024;
 
 /// The time limits for CLI calls and statements.
 #[derive(Clone, Copy, Debug)]
@@ -209,24 +213,35 @@ impl CliRunner {
     }
 
     /// Runs the CLI and returns the raw result, for parsing, with the
-    /// scrubbed [`Call`] for evidence.
-    fn capture(&self, args: &[&str], timeout: Duration) -> (Result<Captured, String>, Call) {
+    /// scrubbed [`Call`] for evidence, which keeps up to `kept` bytes of
+    /// stdout.
+    fn capture(
+        &self,
+        args: &[&str],
+        timeout: Duration,
+        kept: usize,
+    ) -> (Result<Captured, String>, Call) {
         let args = self.arguments(args);
         let result = run_captured_command(&mut self.command(&args), timeout);
         let call = Call {
             args,
-            result: result.as_ref().map(scrubbed).map_err(Clone::clone),
+            result: result
+                .as_ref()
+                .map(|captured| scrubbed(captured, kept))
+                .map_err(Clone::clone),
         };
         (result, call)
     }
 
-    /// One `databricks api <method>` call, stopped after `timeout`.
+    /// One `databricks api <method>` call, stopped after `timeout`, whose
+    /// [`Call`] keeps up to `kept` bytes of the response.
     fn api(
         &self,
         method: &str,
         path: &str,
         body: Option<&str>,
         timeout: Duration,
+        kept: usize,
     ) -> (Call, Result<Response, Error>) {
         if let Err(problem) = check_path(path) {
             let call = Call {
@@ -240,7 +255,7 @@ impl CliRunner {
             args.extend(["--json", body]);
         }
         args.push("--debug");
-        let (result, call) = self.capture(&args, timeout);
+        let (result, call) = self.capture(&args, timeout, kept);
         (call, response(method, &result))
     }
 
@@ -401,7 +416,7 @@ impl CliRunner {
     /// recorded but does not change the outcome.
     fn cancel(&self, status_path: &str, calls: &mut Vec<Call>) {
         let cancel = format!("{status_path}/cancel");
-        let (call, _) = self.api("post", &cancel, Some("{}"), self.limits.call);
+        let (call, _) = self.api("post", &cancel, Some("{}"), self.limits.call, usize::MAX);
         calls.push(call);
     }
 
@@ -414,7 +429,7 @@ impl CliRunner {
         timeout: Duration,
         calls: &mut Vec<Call>,
     ) -> Result<Document, Error> {
-        let (call, response) = self.api(method, path, body, timeout);
+        let (call, response) = self.api(method, path, body, timeout, STATEMENT_EVIDENCE_BYTES);
         calls.push(call);
         response?.body.ok_or_else(|| {
             Error::Transport(format!(
@@ -426,11 +441,11 @@ impl CliRunner {
 
 impl Runner for CliRunner {
     fn run(&self, args: &[&str], timeout: Duration) -> Call {
-        self.capture(args, timeout).1
+        self.capture(args, timeout, usize::MAX).1
     }
 
     fn api_get(&self, path: &str) -> Outcome<Response> {
-        let (call, result) = self.api("get", path, None, self.limits.call);
+        let (call, result) = self.api("get", path, None, self.limits.call, usize::MAX);
         Outcome {
             calls: vec![call],
             result,
@@ -595,12 +610,32 @@ fn append_rows(chunk: Node<'_>, rows: &mut Vec<Vec<Option<String>>>) -> Result<(
     Ok(())
 }
 
-fn scrubbed(captured: &Captured) -> Captured {
+/// `captured` with credentials scrubbed and stdout cut to `kept` bytes.
+/// A cut also drops a partial word at the end, so it cannot leave part of
+/// a token that the scrubber no longer recognises.
+fn scrubbed(captured: &Captured, kept: usize) -> Captured {
+    let stdout = match captured.stdout.get(..kept) {
+        Some(start) if start.len() < captured.stdout.len() => {
+            let end = start
+                .iter()
+                .rposition(|&byte| !is_token_byte(byte))
+                .map_or(0, |at| at + 1);
+            let mut excerpt = scrub(&start[..end]);
+            let omitted = captured.stdout.len() - end;
+            excerpt.extend_from_slice(format!("\n[{omitted} more bytes not kept]\n").as_bytes());
+            excerpt
+        }
+        _ => scrub(&captured.stdout),
+    };
     Captured {
-        stdout: scrub(&captured.stdout),
+        stdout,
         stderr: scrub(&captured.stderr),
         status: captured.status,
     }
+}
+
+fn is_token_byte(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'~' | b'+' | b'/' | b'=')
 }
 
 /// Replaces credentials in CLI output with `[REDACTED]`: the value of an
@@ -634,22 +669,25 @@ fn find_ignore_case(text: &str, needle: &str) -> Option<usize> {
 
 /// `Bearer <token>` becomes `Bearer [REDACTED]`.
 fn replace_bearer(line: &str) -> String {
+    // Lowercased once: ASCII case changes keep every byte offset.
+    let lower = line.to_ascii_lowercase();
     let mut result = String::with_capacity(line.len());
-    let mut rest = line;
-    while let Some(at) = find_ignore_case(rest, "bearer ") {
-        let (before, after) = rest.split_at(at + "bearer ".len());
-        result.push_str(before);
-        let token = after
+    let mut start = 0;
+    while let Some(found) = lower[start..].find("bearer ") {
+        let token_start = start + found + "bearer ".len();
+        result.push_str(&line[start..token_start]);
+        let after = &line[token_start..];
+        let length = after
             .find(|c: char| c.is_whitespace() || c == '"' || c == '\'')
             .unwrap_or(after.len());
-        if token > 0 && &after[..token] != REDACTED {
+        if length > 0 && &after[..length] != REDACTED {
             result.push_str(REDACTED);
         } else {
-            result.push_str(&after[..token]);
+            result.push_str(&after[..length]);
         }
-        rest = &after[token..];
+        start = token_start + length;
     }
-    result.push_str(rest);
+    result.push_str(&line[start..]);
     result
 }
 
@@ -692,9 +730,13 @@ mod tests {
     use std::path::PathBuf;
     use std::time::{Duration, Instant};
 
+    use std::process::ExitStatus;
+
     use super::{
-        CliRunner, Error, Limits, ResultSet, Runner, STATEMENTS, http_status, scrub, submit_body,
+        CliRunner, Error, Limits, ResultSet, Runner, STATEMENT_EVIDENCE_BYTES, STATEMENTS,
+        http_status, scrub, scrubbed, submit_body,
     };
+    use crate::databricks::Captured;
     use crate::json::Node;
     use crate::test_support::{ScenarioCli, TempDir, assert_no_mutations, fake_databricks};
 
@@ -1101,6 +1143,44 @@ mod tests {
             ]))
         );
         assert_eq!(fixture.invocations().len(), 3);
+    }
+
+    #[test]
+    fn keeps_every_row_but_only_the_start_of_a_large_response() {
+        let cell = "x".repeat(2 * STATEMENT_EVIDENCE_BYTES);
+        let scenario = submit(&succeeded(&format!(
+            r#"{{"data_array":[["{cell}",null]]}}"#
+        )));
+        let fixture = Fixture::new("transport-large", &scenario);
+        let outcome = fixture.runner(QUICK).statement(SQL, WAREHOUSE);
+        assert_eq!(outcome.result, Ok(rows(&[&[Some(&cell), None]])));
+        let stdout = &outcome.calls[0].result.as_ref().expect("captured").stdout;
+        assert!(
+            stdout.len() < STATEMENT_EVIDENCE_BYTES + 64,
+            "{}",
+            stdout.len()
+        );
+        assert!(stdout.ends_with(b" more bytes not kept]\n"));
+    }
+
+    #[test]
+    fn a_cut_response_drops_a_partial_token() {
+        let token = fake_token();
+        let stdout = format!("{{\"a\":\"{token}\"}}");
+        let captured = Captured {
+            stdout: stdout.into_bytes(),
+            stderr: Vec::new(),
+            status: ExitStatus::default(),
+        };
+        // Cut halfway through the token: none of it may remain.
+        let kept = scrubbed(&captured, 6 + token.len() / 2);
+        let text = String::from_utf8(kept.stdout).expect("UTF-8");
+        assert!(text.starts_with("{\"a\":\"\n["), "{text}");
+        assert!(!text.contains("dapi"), "{text}");
+        assert_eq!(
+            scrubbed(&captured, usize::MAX).stdout,
+            br#"{"a":"[REDACTED]"}"#
+        );
     }
 
     #[test]
