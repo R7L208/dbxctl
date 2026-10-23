@@ -6,8 +6,8 @@
 //!
 //! - API reads run `databricks api get <path> --debug`. The CLI prints the
 //!   response body on stdout and the HTTP exchange on stderr; the status comes
-//!   from the last `< HTTP/<version> <code>` line and, on an error, the
-//!   `error_code` and `message` from the JSON error body.
+//!   from the last logged response's `< HTTP/<version> <code>` line and, on an
+//!   error, the `error_code` and `message` from the JSON error body.
 //! - Statements use the Statement Execution API: submit, poll until done,
 //!   cancel at the deadline or when a poll fails, and read every result
 //!   chunk; a result the API truncated is an error rather than partial rows.
@@ -576,13 +576,39 @@ fn response(method: &str, result: &Result<Captured, String>) -> Result<Response,
     })
 }
 
-/// The status from the last `< HTTP/<version> <code>` line of a debug log.
+/// The status of the last response in a debug log.
+///
+/// The SDK logs each response as a `< HTTP/<version> <code>` line, after an
+/// optional timestamp, followed by its headers and body on lines that also
+/// start with `<`. Those lines belong to the response, so text in a body that
+/// looks like a status line cannot be taken for one.
 fn http_status(stderr: &str) -> Option<u16> {
-    stderr.lines().rev().find_map(|line| {
-        let (_, rest) = line.split_once("< HTTP/")?;
-        let code = rest.split_whitespace().nth(1)?;
-        code.parse().ok().filter(|code| (100..600).contains(code))
-    })
+    let mut status = None;
+    let mut in_response = false;
+    for line in stderr.lines() {
+        let content = without_timestamp(line);
+        if in_response && content.starts_with('<') {
+            continue;
+        }
+        in_response = false;
+        if let Some(code) = status_code(content) {
+            status = Some(code);
+            in_response = true;
+        }
+    }
+    status
+}
+
+/// `line` without a leading log timestamp such as `2024/10/23 10:30:45 `.
+fn without_timestamp(line: &str) -> &str {
+    line.trim_start_matches(|c: char| c.is_ascii_digit() || matches!(c, '/' | ':' | ' '))
+}
+
+/// The code on a `< HTTP/<version> <code> <reason>` status line.
+fn status_code(content: &str) -> Option<u16> {
+    let rest = content.strip_prefix("< HTTP/")?;
+    let code = rest.split_whitespace().nth(1)?;
+    code.parse().ok().filter(|code| (100..600).contains(code))
 }
 
 /// The JSON error body the CLI prints after a failed request: the first
@@ -1608,12 +1634,21 @@ mod tests {
 
     #[test]
     fn reads_the_last_http_status_line() {
-        assert_eq!(
-            http_status("< HTTP/1.1 307 Temporary Redirect\n< HTTP/2.0 200 OK\n"),
-            Some(200)
-        );
+        // As the CLI logs it: each exchange starts with a request line.
+        let redirected = "09:56:51 Debug: GET /api/x\n< HTTP/1.1 307 Temporary Redirect\n< Location: /api/y pid=1 sdk=true\n09:56:51 Debug: GET /api/y\n< HTTP/2.0 200 OK\n< {} pid=1 sdk=true\n";
+        assert_eq!(http_status(redirected), Some(200));
+        let timestamped = "2024/10/23 10:30:45 < HTTP/1.1 404 Not Found\n2024/10/23 10:30:45 < Content-Type: application/json\n";
+        assert_eq!(http_status(timestamped), Some(404));
         assert_eq!(http_status("GET /x HTTP/1.1\n"), None);
         assert_eq!(http_status("< HTTP/1.1 abc\n"), None);
+        assert_eq!(http_status("Debug: x < HTTP/1.1 500 x\n"), None);
+    }
+
+    #[test]
+    fn a_body_line_that_looks_like_a_status_line_is_part_of_the_body() {
+        // A text body as the SDK logs it: every body line starts with `< `.
+        let stderr = "09:56:51 Debug: GET /api/2.0/x\n< HTTP/1.0 200 OK\n< first line\n< HTTP/1.1 500 x\n< last line pid=1 sdk=true\n09:56:51 Info: completed execution pid=1 exit_code=0\n";
+        assert_eq!(http_status(stderr), Some(200));
     }
 
     #[test]
