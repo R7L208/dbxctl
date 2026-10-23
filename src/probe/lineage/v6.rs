@@ -25,6 +25,8 @@ const SDK_MODULE: &str = "github.com/databricks/databricks-sdk-go/";
 const JOBS: &str = "jobs";
 /// Starts a verdict in which no `jobs` definition declares the trigger.
 const OUTSIDE_JOBS: &str = "not jobs: ";
+/// Follows `jobs` in a verdict when other packages declare the trigger too.
+const ALSO: &str = "; also: ";
 const FALLBACK: &str = "Assume table-update triggers are job fields, as R5 expects, until v6 part B (#37) checks a live job.";
 
 pub(crate) fn run(context: &Context<'_>) -> Result<Finding, String> {
@@ -109,19 +111,20 @@ fn is_major_version(segment: &str) -> bool {
         .is_some_and(|number| number > 1 && !segment[1..].starts_with('0'))
 }
 
-/// `jobs` alone answers yes, and other packages name where else the trigger
-/// lives. Without `jobs` the answer is no, which contradicts R5, so the
+/// `jobs` alone answers yes. With other packages too, `jobs` comes first and
+/// `; also: ` names where else the trigger lives, so only a clean yes is the
+/// bare `jobs`. Without `jobs` the answer is no, which contradicts R5, so the
 /// verdict says so before naming the packages.
 fn verdict(packages: &BTreeSet<Cow<'_, str>>) -> String {
-    let names = packages
+    let (jobs, others): (Vec<&str>, Vec<&str>) = packages
         .iter()
         .map(AsRef::as_ref)
-        .collect::<Vec<&str>>()
-        .join(", ");
-    if packages.contains(JOBS) {
-        names
-    } else {
-        format!("{OUTSIDE_JOBS}{names}")
+        .partition(|name| *name == JOBS);
+    let others = others.join(", ");
+    match (jobs.is_empty(), others.is_empty()) {
+        (true, _) => format!("{OUTSIDE_JOBS}{others}"),
+        (false, true) => JOBS.to_owned(),
+        (false, false) => format!("{JOBS}{ALSO}{others}"),
     }
 }
 
@@ -176,15 +179,29 @@ mod tests {
 
     #[test]
     fn names_every_package_that_defines_the_trigger() {
+        // `jobs` comes first whether other names sort before or after it, so
+        // only a clean yes reads as the bare `jobs`.
+        for (name, other, verdict) in [
+            ("v6-also-before", "compute", "jobs; also: compute"),
+            ("v6-also-after", "pipelines", "jobs; also: pipelines"),
+        ] {
+            let schema = sdk_schema(&format!(
+                r#""{other}.Trigger": {{"type": "object", "properties": {{"table_update": {{}}}}}},
+                "jobs.TriggerSettings": {{"oneOf": [{{"properties": {{"table_update": {{}}}}}}]}}"#
+            ));
+            let (finding, _, _temp) = check(name, &stdout_line(&schema));
+            assert_eq!(finding.state(), State::Resolved, "{finding:?}");
+            assert_eq!(finding.verdict().map(Verdict::as_str), Some(verdict));
+        }
         let schema = sdk_schema(
-            r#""pipelines.PipelineTrigger": {"type": "object", "properties": {"table_update": {}}},
-            "jobs.TriggerSettings": {"oneOf": [{"properties": {"table_update": {}}}]}"#,
+            r#""compute.T": {"type": "object", "properties": {"table_update": {}}},
+            "pipelines.T": {"type": "object", "properties": {"table_update": {}}},
+            "jobs.T": {"type": "object", "properties": {"table_update": {}}}"#,
         );
-        let (finding, _, _temp) = check("v6-elsewhere", &stdout_line(&schema));
-        assert_eq!(finding.state(), State::Resolved, "{finding:?}");
+        let (finding, _, _temp) = check("v6-also-many", &stdout_line(&schema));
         assert_eq!(
             finding.verdict().map(Verdict::as_str),
-            Some("jobs, pipelines")
+            Some("jobs; also: compute, pipelines")
         );
     }
 
@@ -242,7 +259,7 @@ mod tests {
         assert_eq!(finding.state(), State::Resolved, "{finding:?}");
         assert_eq!(
             finding.verdict().map(Verdict::as_str),
-            Some("github.com/databricks/databricks-sdk-go/v0/service/pipelines, jobs")
+            Some("jobs; also: github.com/databricks/databricks-sdk-go/v0/service/pipelines")
         );
     }
 
