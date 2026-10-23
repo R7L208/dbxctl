@@ -1,0 +1,8 @@
+Warn: [hostmetadata] failed to fetch host metadata for https://example.cloud.databricks.test, will skip for 1m0s
+Error: unable to create directory at /Workspace/Users/user@example.test/projects/example-dev/files: stub: cannot create directory (403 PERMISSION_DENIED)
+
+Endpoint: POST https://example.cloud.databricks.test/api/2.0/workspace/mkdirs
+HTTP Status: 403 Forbidden
+API error_code: PERMISSION_DENIED
+API message: stub: cannot create directory
+
