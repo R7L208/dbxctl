@@ -329,6 +329,41 @@ fn ref_pointer(reference: &str) -> Option<Cow<'_, str>> {
     String::from_utf8(decoded).ok().map(Cow::Owned)
 }
 
+/// The most `$ref`s [`object_schema`] follows in a row, so a cycle ends.
+const MAX_REFS: usize = 32;
+
+/// The object schema `schema` describes, within the document at `root`: the
+/// schema itself once its `$ref`s are followed, or, for one of the CLI's
+/// `oneOf` or `anyOf` wrappers, which pair an object with a `${var...}`
+/// string, its only branch whose `type` is `object`. `None` for a ref that
+/// names nothing here, a cycle, or a schema that is not one object.
+pub(crate) fn object_schema<'a>(root: Node<'a>, schema: Node<'a>) -> Option<Node<'a>> {
+    let schema = follow_refs(root, schema)?;
+    if schema.get("type").and_then(Node::as_str) == Some("object") {
+        return Some(schema);
+    }
+    let mut objects = ["oneOf", "anyOf"]
+        .into_iter()
+        .filter_map(|keyword| schema.get(keyword)?.elements())
+        .flatten()
+        .filter_map(|branch| follow_refs(root, branch))
+        .filter(|branch| branch.get("type").and_then(Node::as_str) == Some("object"));
+    match (objects.next(), objects.next()) {
+        (Some(object), None) => Some(object),
+        _ => None,
+    }
+}
+
+fn follow_refs<'a>(root: Node<'a>, mut schema: Node<'a>) -> Option<Node<'a>> {
+    for _ in 0..MAX_REFS {
+        let Some(reference) = schema.get("$ref") else {
+            return Some(schema);
+        };
+        schema = root.pointer(&ref_pointer(reference.as_str()?)?)?;
+    }
+    None
+}
+
 /// The segments above the definition joined with the text before the first
 /// `.` of its name: `…/service/jobs` for `…/service/jobs.TriggerSettings`. A
 /// name without a package is its own.
@@ -347,7 +382,7 @@ fn package(path: &[&str]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{packages_with_property, search};
+    use super::{object_schema, packages_with_property, search};
     use crate::json;
 
     fn found(schema: &str) -> Option<Vec<String>> {
@@ -613,5 +648,40 @@ mod tests {
         assert_eq!(found("{}"), None);
         assert_eq!(found(r#"{"$defs": []}"#), None);
         assert_eq!(found(r#"{"$defs": {"x": 1, "y": [{}]}}"#), Some(Vec::new()));
+    }
+
+    #[test]
+    fn finds_the_object_schema_behind_refs_and_wrappers() {
+        let document = json::parse(
+            r##"{
+                "$defs": {
+                    "a": {"$ref": "#/$defs/b"},
+                    "b": {"oneOf": [{"type": "object", "title": "b"}, {"type": "string"}]},
+                    "two": {"anyOf": [{"type": "object"}, {"type": "object"}]},
+                    "loop": {"$ref": "#/$defs/loop"},
+                    "none": {"type": "string"},
+                    "far": {"$ref": "other.json#/x"}
+                },
+                "properties": {
+                    "direct": {"type": "object", "title": "direct"},
+                    "via": {"$ref": "#/$defs/a"}
+                }
+            }"##,
+        )
+        .expect("parse");
+        let root = document.root();
+        let title = |pointer: &str| {
+            object_schema(root, root.pointer(pointer).expect("node"))
+                .and_then(|schema| schema.get("title"))
+                .and_then(json::Node::as_str)
+        };
+        assert_eq!(title("/properties/direct"), Some("direct"));
+        assert_eq!(title("/properties/via"), Some("b"));
+        for pointer in ["/$defs/two", "/$defs/loop", "/$defs/none", "/$defs/far"] {
+            assert!(
+                object_schema(root, root.pointer(pointer).expect("node")).is_none(),
+                "{pointer}"
+            );
+        }
     }
 }
