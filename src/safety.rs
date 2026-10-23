@@ -24,8 +24,8 @@ const WRITE_WORDS: [&str; 22] = [
 /// as Databricks SQL reads them: `--` and nested `/* */` comments, `'` and `"`
 /// literals with backslash escapes, raw `r'…'` and `r"…"` literals without
 /// them, and backtick identifiers with doubled backticks. Anything that
-/// cannot be read, such as an unterminated literal, is refused. One trailing
-/// semicolon is allowed.
+/// cannot be read, such as an unterminated literal or a `/*+` query hint, is
+/// refused. One trailing semicolon is allowed.
 pub(crate) fn is_read_statement(sql: &str) -> bool {
     let Some(tokens) = tokenize(sql) else {
         return false;
@@ -71,6 +71,9 @@ fn tokenize(sql: &str) -> Option<Vec<Token<'_>>> {
             index += 1;
         } else if rest.starts_with(b"--") {
             index = line_comment_end(bytes, index)?;
+        } else if rest.starts_with(b"/*+") {
+            // Spark reads a query hint as tokens, not a comment.
+            return None;
         } else if rest.starts_with(b"/*") {
             index = block_comment_end(bytes, index)?;
         } else if byte == b'\'' || byte == b'"' {
@@ -132,12 +135,15 @@ fn line_comment_end(bytes: &[u8], start: usize) -> Option<usize> {
     Some(index)
 }
 
-/// The index after the comment starting at `start`. Comments nest.
+/// The index after the comment starting at `start`. Comments nest. Spark
+/// does not nest a `/*+` inside a comment, so the two would disagree on where
+/// it ends; that is refused.
 fn block_comment_end(bytes: &[u8], start: usize) -> Option<usize> {
     let mut depth = 0_usize;
     let mut index = start;
     while index + 1 < bytes.len() {
         match &bytes[index..index + 2] {
+            b"/*" if depth > 0 && bytes.get(index + 2) == Some(&b'+') => return None,
             b"/*" => {
                 depth += 1;
                 index += 2;
@@ -245,6 +251,9 @@ mod tests {
             "/* SELECT */ DROP TABLE t",
             "SELECT * FROM t /* unterminated",
             "SELECT /* /* nested */ unterminated",
+            "WITH x AS (SELECT /*+ `*/ 1) -- ` */ 1) INSERT INTO u SELECT 1",
+            "WITH t AS (SELECT 1 /* /*+ */) INSERT INTO u SELECT 1 -- */",
+            "SELECT /*+ BROADCAST(t) */ * FROM t",
             "SELECT 'unterminated",
             "SELECT 'escaped quote at end\\'",
             "SELECT r'\\'; DROP TABLE t; --'",
