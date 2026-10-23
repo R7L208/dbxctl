@@ -461,6 +461,24 @@ fn probe_run_with_a_missing_bundle_root_exits_1() {
 }
 
 #[test]
+fn probe_run_that_cannot_create_its_run_directory_exits_1() {
+    // A file where `.dbxctl/` belongs stops the run before any check, so
+    // the run fails with 1 rather than reporting unresolved checks with 10.
+    let fixture = ProbeFixture::new("probe-unwritable-root", CLI_VERSION_SCENARIO);
+    std::fs::write(fixture.bundle().join(".dbxctl"), b"").expect("block .dbxctl");
+    let output = fixture.run(&["--only", "cli"]);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.starts_with("error: could not create directory ")
+            && stderr.ends_with(": it is not a directory\n"),
+        "{stderr}"
+    );
+    assert!(fixture.cli.invocations().is_empty());
+}
+
+#[test]
 fn probe_report_requires_from() {
     let output = dbxctl()
         .args(["probe", "report"])
