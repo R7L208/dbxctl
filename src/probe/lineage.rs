@@ -1,9 +1,12 @@
 pub(crate) mod cli;
+pub(crate) mod v6;
 
 use std::collections::HashSet;
 use std::ffi::{OsStr, OsString};
+use std::time::Duration;
 
 use crate::args::Parser;
+use crate::databricks::run_captured;
 use crate::probe::model::{CheckId, Finding};
 use crate::probe::orchestrator::Context;
 
@@ -17,6 +20,7 @@ pub(crate) type Runner = fn(&Context<'_>) -> Result<Finding, String>;
 pub(crate) fn runner(check: CheckId) -> Option<Runner> {
     match check {
         CheckId::Cli => Some(cli::run),
+        CheckId::V6 => Some(v6::run),
         _ => None,
     }
 }
@@ -253,6 +257,58 @@ fn parse_with(
     })
 }
 
+/// What one CLI step of a check produced.
+pub(crate) enum Step {
+    /// The CLI exited 0 with this stdout.
+    Succeeded(Vec<u8>),
+    /// The CLI exited non-zero or on a signal: the reason for an unknown
+    /// finding.
+    Unsuccessful(String),
+    /// The CLI could not be run to completion.
+    Failed(Finding),
+}
+
+/// Runs `databricks <args>` as `step` of `check` and records the invocation.
+/// Returns the evidence with what the run produced, or an error if the
+/// evidence cannot be written.
+pub(crate) fn run_step(
+    context: &Context<'_>,
+    check: CheckId,
+    step: &str,
+    args: &[&str],
+    timeout: Duration,
+    site: &'static str,
+) -> Result<(Vec<String>, Step), String> {
+    let command = format!("`databricks {}`", args.join(" "));
+    let args: Vec<_> = args.iter().map(OsString::from).collect();
+    let result = run_captured(context.binary, &args, timeout);
+    let evidence = vec![context.run.record_invocation(
+        check.as_str(),
+        step,
+        context.binary,
+        &args,
+        &result,
+    )?];
+    // The error text stays in the evidence, with the binary path removed.
+    let step = match result {
+        Err(_) => Step::Failed(Finding::failed(
+            check,
+            format!("{command} could not be run to completion; see the evidence record"),
+            evidence.clone(),
+            site,
+        )),
+        Ok(captured) if captured.status.success() => Step::Succeeded(captured.stdout),
+        Ok(captured) => {
+            let status = captured
+                .status
+                .code()
+                .map_or_else(|| "a signal".to_owned(), |code| format!("exit code {code}"));
+            Step::Unsuccessful(format!("{command} failed with {status}"))
+        }
+    };
+    Ok((evidence, step))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -344,12 +400,12 @@ mod tests {
     }
 
     #[test]
-    fn only_the_cli_check_is_implemented() {
+    fn only_the_cli_and_v6_checks_are_implemented() {
         let implemented: Vec<_> = CheckId::ALL
             .into_iter()
             .filter(|&id| is_implemented(id))
             .collect();
-        assert_eq!(implemented, [CheckId::Cli]);
+        assert_eq!(implemented, [CheckId::Cli, CheckId::V6]);
     }
 
     /// Parses `extra` after the required options as if `implemented` named

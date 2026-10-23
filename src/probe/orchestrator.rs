@@ -430,7 +430,7 @@ mod tests {
             report.contains("| `v7` | skipped |  | not implemented yet; #37 adds this check |"),
             "{report}"
         );
-        // Only the `cli` check runs a command so far.
+        // The skipped `v7` runs no command; only `cli` does.
         assert_eq!(cli.invocations(), [["version"]]);
     }
 

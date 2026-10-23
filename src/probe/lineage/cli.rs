@@ -2,11 +2,8 @@
 //!
 //! #32 extends this check to verify the required command surfaces.
 
-use std::ffi::OsString;
-
-use crate::databricks::{
-    MINIMUM_DATABRICKS_VERSION, VERSION_COMMAND, VERSION_TIMEOUT, Version, run_captured,
-};
+use crate::databricks::{MINIMUM_DATABRICKS_VERSION, VERSION_COMMAND, VERSION_TIMEOUT, Version};
+use crate::probe::lineage::{Step, run_step};
 use crate::probe::model::{CheckId, Finding, Verdict};
 use crate::probe::orchestrator::Context;
 
@@ -16,15 +13,14 @@ const SITE: &str = "src/databricks.rs MINIMUM_DATABRICKS_VERSION";
 
 pub(crate) fn run(context: &Context<'_>) -> Result<Finding, String> {
     // The same command and timeout `dbxctl doctor` uses for its gate.
-    let args = [OsString::from(VERSION_COMMAND)];
-    let result = run_captured(context.binary, &args, VERSION_TIMEOUT);
-    let evidence = vec![context.run.record_invocation(
-        CHECK.as_str(),
+    let (evidence, step) = run_step(
+        context,
+        CHECK,
         "version",
-        context.binary,
-        &args,
-        &result,
-    )?];
+        &[VERSION_COMMAND],
+        VERSION_TIMEOUT,
+        SITE,
+    )?;
     let unknown = |reason: String| {
         Finding::unknown(
             CHECK,
@@ -36,29 +32,12 @@ pub(crate) fn run(context: &Context<'_>) -> Result<Finding, String> {
             SITE,
         )
     };
-
-    // The error text stays in the evidence, with the binary path removed.
-    let Ok(captured) = result else {
-        return Ok(Finding::failed(
-            CHECK,
-            "`databricks version` could not be run to completion; see the evidence record",
-            evidence,
-            SITE,
-        ));
+    let stdout = match step {
+        Step::Succeeded(stdout) => stdout,
+        Step::Unsuccessful(reason) => return Ok(unknown(reason)),
+        Step::Failed(finding) => return Ok(finding),
     };
-    if !captured.status.success() {
-        let status = captured
-            .status
-            .code()
-            .map_or_else(|| "a signal".to_owned(), |code| format!("exit code {code}"));
-        return Ok(unknown(format!(
-            "`databricks version` failed with {status}"
-        )));
-    }
-    let Some(version) = std::str::from_utf8(&captured.stdout)
-        .ok()
-        .and_then(Version::parse)
-    else {
+    let Some(version) = std::str::from_utf8(&stdout).ok().and_then(Version::parse) else {
         return Ok(unknown(
             "`databricks version` did not report a recognizable version".to_owned(),
         ));

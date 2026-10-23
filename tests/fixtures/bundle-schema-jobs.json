@@ -1,0 +1,58 @@
+{
+  "$defs": {
+    "bool": {
+      "oneOf": [
+        {
+          "type": "boolean"
+        }
+      ]
+    },
+    "github.com": {
+      "databricks": {
+        "databricks-sdk-go": {
+          "service": {
+            "jobs.TriggerSettings": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "periodic": {
+                      "$ref": "#/$defs/github.com/databricks/databricks-sdk-go/service/jobs.PeriodicTriggerConfiguration"
+                    },
+                    "table_update": {
+                      "$ref": "#/$defs/github.com/databricks/databricks-sdk-go/service/jobs.TableUpdateTriggerConfiguration"
+                    }
+                  }
+                },
+                {
+                  "type": "string",
+                  "pattern": "\\$\\{(var(\\._*\\p{L}+([-_]*[\\p{L}\\p{N}]+)*(\\[[0-9]+\\])*)+)\\}"
+                }
+              ]
+            },
+            "pipelines.PipelineTrigger": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "cron": {
+                      "$ref": "#/$defs/github.com/databricks/databricks-sdk-go/service/pipelines.CronTrigger"
+                    },
+                    "manual": {
+                      "$ref": "#/$defs/github.com/databricks/databricks-sdk-go/service/pipelines.ManualTrigger"
+                    }
+                  }
+                },
+                {
+                  "type": "string",
+                  "pattern": "\\$\\{(var(\\._*\\p{L}+([-_]*[\\p{L}\\p{N}]+)*(\\[[0-9]+\\])*)+)\\}"
+                }
+              ]
+            }
+          }
+        }
+      }
+    }
+  },
+  "type": "object"
+}

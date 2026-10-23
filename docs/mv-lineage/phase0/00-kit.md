@@ -4,10 +4,10 @@ What you need to run the Phase 0 lineage probes, and how to run them. The
 command shapes come from the contract in
 [01-requirements.md](01-requirements.md).
 
-> **Status:** `dbxctl probe run` works, but only the `cli` check resolves so
-> far; every other selected check is reported as skipped, so a full run exits
-> with code 10. `probe report` and `probe cleanup` are not implemented yet
-> (#36, #37). #38 checks every command against the real
+> **Status:** `dbxctl probe run` works, but only the `cli` and `v6` checks
+> resolve so far; every other selected check is reported as skipped, so a
+> full run exits with code 10. `probe report` and `probe cleanup` are not
+> implemented yet (#36, #37). #38 checks every command against the real
 > `dbxctl probe ... --help` output.
 
 ## Prerequisites
@@ -36,11 +36,12 @@ keeps working. See the check table in [R4](01-requirements.md#r4-checks).
 
 ## Read-Only Run
 
-The `cli` check, the only one implemented so far, exits 0 when it resolves:
+The `cli` and `v6` checks, the only ones implemented so far, exit 0 when they
+resolve. `v6` runs part A, which reads the CLI's bundle schema offline:
 
 ```console
 dbxctl probe run --suite lineage --bundle-root <path> --target <non-prod> \
-  --only cli
+  --only cli,v6
 ```
 
 Bundle-only checks, which need no warehouse or catalog. Until #32 implements
@@ -54,8 +55,8 @@ dbxctl probe run --suite lineage --bundle-root <path> --target <non-prod> \
 Every check with a read step, which leaves out the mutation-only `v7`. `v6`
 and `v10` run only their read steps, because no mutation step runs without
 `--allow-mutations`. Pass both options so the command keeps working as the
-SQL checks land. Until #32, #33, #34, and #37 implement the remaining checks,
-they are skipped and the run exits 10, and neither option is read yet:
+SQL checks land. Until #32, #33, and #37 implement the remaining checks, they
+are skipped and the run exits 10, and neither option is read yet:
 
 ```console
 dbxctl probe run --suite lineage --bundle-root <path> --target <non-prod> \
