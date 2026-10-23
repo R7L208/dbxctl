@@ -4,12 +4,14 @@
 //! `$defs` nests definitions by Go import path, one object per path segment,
 //! so the SDK's `jobs.TriggerSettings` lives at
 //! `$defs/github.com/databricks/databricks-sdk-go/service/jobs.TriggerSettings`.
-//! A path segment holds only objects, so an object is a definition if it is
-//! empty, has a member that is not an object, is the target of a `$ref`, or
-//! reads as a schema: every object member is a schema keyword, such as
-//! `properties` or `items`, holding what that keyword holds. Any other object
-//! is a path segment. A segment that happens to read as a schema, such as one
-//! named `properties` holding only definitions, is taken for a definition.
+//! A path segment holds only objects and boolean-schema definitions, so an
+//! object is a definition if it is empty, has a member that is neither an
+//! object nor a boolean under a name that is not a keyword, is the target of
+//! a `$ref`, or reads as a schema: every object member is a schema keyword,
+//! such as `properties` or `items`, holding what that keyword holds. Any other
+//! object is a path segment. A segment that happens to read as a schema, such
+//! as one named `properties` holding only definitions, is taken for a
+//! definition. A `$ref` inside data, such as a `default` value, names nothing.
 
 use std::borrow::Cow;
 use std::collections::{BTreeSet, HashMap, HashSet};
@@ -51,6 +53,16 @@ const MAP_KEYWORDS: [&str; 5] = [
 ];
 /// Keywords whose object value may be any JSON.
 const VALUE_KEYWORDS: [&str; 2] = ["const", "default"];
+/// Keywords whose value is data, never a schema, so a `$ref` in it is text.
+const DATA_KEYWORDS: [&str; 4] = ["const", "default", "enum", "examples"];
+/// Keywords that may hold a boolean, besides those holding a schema or data.
+const FLAG_KEYWORDS: [&str; 5] = [
+    "deprecated",
+    "doNotSuggest",
+    "readOnly",
+    "uniqueItems",
+    "writeOnly",
+];
 
 /// The import path of every Go package with a definition that has a property
 /// named `property`, such as `github.com/databricks/databricks-sdk-go/service/jobs`
@@ -108,10 +120,20 @@ impl Targets {
 }
 
 /// Adds the decoded `$defs` pointer of every `$ref` in `node` to `targets`,
-/// without the `/$defs/` prefix.
+/// without the `/$defs/` prefix. In an object with a member that is not an
+/// object, which a path segment never has, data keywords such as `default`
+/// hold values, not schemas, so their contents are skipped.
 fn ref_targets(node: Node<'_>, targets: &mut Targets) {
     if let Some(members) = node.members() {
+        let schema = node
+            .members()
+            .into_iter()
+            .flatten()
+            .any(|(_, child)| child.kind() != Kind::Object);
         for (key, child) in members {
+            if schema && DATA_KEYWORDS.contains(&key) {
+                continue;
+            }
             let pointer = child
                 .as_str()
                 .filter(|_| key == "$ref")
@@ -158,13 +180,30 @@ fn collect<'a>(
     }
 }
 
-/// `named` says whether a `$ref` names `node`.
+/// `named` says whether a `$ref` names `node`. A boolean under a name that is
+/// not a keyword is a boolean-schema definition, which a segment may hold
+/// beside others, so it does not make `node` a definition.
 fn is_definition(node: Node<'_>, named: bool) -> bool {
     let mut members = node.members().into_iter().flatten().peekable();
     named
         || members.peek().is_none()
-        || members.any(|(_, child)| child.kind() != Kind::Object)
+        || members.any(|(key, child)| match child.kind() {
+            Kind::Object => false,
+            Kind::Bool => is_keyword(key),
+            _ => true,
+        })
         || is_schema(node)
+}
+
+fn is_keyword(key: &str) -> bool {
+    [
+        &SCHEMA_KEYWORDS[..],
+        &MAP_KEYWORDS,
+        &DATA_KEYWORDS,
+        &FLAG_KEYWORDS,
+    ]
+    .iter()
+    .any(|keywords| keywords.contains(&key))
 }
 
 /// Whether `node` reads as a schema: a boolean, or an object whose object
@@ -408,6 +447,47 @@ mod tests {
             found(schema),
             Some(vec!["x/jobs".to_owned(), "x/pipelines".to_owned()])
         );
+    }
+
+    #[test]
+    fn a_boolean_definition_does_not_hide_its_neighbours() {
+        let schema = r#"{"$defs": {"x": {"service": {
+            "interface.Any": true,
+            "jobs.T": {"type": "object", "properties": {"table_update": {}}}
+        }}}}"#;
+        assert_eq!(found(schema), Some(vec!["x/service/jobs".to_owned()]));
+    }
+
+    #[test]
+    fn a_boolean_keyword_still_marks_a_definition() {
+        let schema = r#"{"$defs": {"x": {
+            "jobs.T": {"additionalProperties": false, "allOf": [{"properties": {"table_update": {}}}]}
+        }}}"#;
+        assert_eq!(found(schema), Some(vec!["x/jobs".to_owned()]));
+    }
+
+    #[test]
+    fn refs_inside_data_name_nothing() {
+        // Each data keyword holds a `$ref` to the `service` segment. Taking it
+        // for a ref target would make `service` a definition and hide `jobs.T`.
+        for (keyword, value) in [
+            ("default", r##"{"$ref": "#/$defs/x/service"}"##),
+            ("const", r##"{"$ref": "#/$defs/x/service"}"##),
+            ("enum", r##"[{"$ref": "#/$defs/x/service"}]"##),
+            ("examples", r##"[{"$ref": "#/$defs/x/service"}]"##),
+        ] {
+            let schema = format!(
+                r#"{{"properties": {{"a": {{"type": "object", "{keyword}": {value}}}}},
+                "$defs": {{"x": {{"service": {{
+                    "jobs.T": {{"properties": {{"table_update": {{}}}}}}
+                }}}}}}}}"#
+            );
+            assert_eq!(
+                found(&schema),
+                Some(vec!["x/service/jobs".to_owned()]),
+                "{keyword}"
+            );
+        }
     }
 
     #[test]
