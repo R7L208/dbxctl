@@ -6,7 +6,7 @@ use std::process::Stdio;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use common::{assert_same_process_result, dbxctl, run_direct, run_wrapped};
+use common::{TempDir, assert_same_process_result, dbxctl, run_direct, run_wrapped};
 
 #[test]
 #[ignore = "requires the pinned Databricks CLI binary"]
@@ -72,5 +72,28 @@ fn doctor_accepts_the_pinned_databricks_cli() {
     assert!(
         stdout.contains(&format!("Databricks CLI {version} (")),
         "doctor did not report version {version}: {stdout}"
+    );
+}
+
+#[test]
+#[ignore = "requires the pinned Databricks CLI binary"]
+fn bundle_schema_trigger_contract() {
+    let binary = env::var_os("DATABRICKS_CLI_PATH")
+        .expect("DATABRICKS_CLI_PATH must identify the pinned upstream binary");
+
+    // `bundle schema` needs no bundle or workspace, so an empty root is enough.
+    let temp = TempDir::new("contract-v6");
+    let output = dbxctl()
+        .env("DATABRICKS_CLI_PATH", &binary)
+        .args(["probe", "run", "--suite", "lineage", "--bundle-root"])
+        .arg(temp.path())
+        .args(["--target", "contract", "--only", "v6"])
+        .output()
+        .expect("run dbxctl probe run");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(output.status.code(), Some(0), "{stdout}");
+    assert!(
+        stdout.starts_with("v6        resolved  jobs\n"),
+        "the pinned CLI no longer defines table-update triggers only under jobs: {stdout}"
     );
 }

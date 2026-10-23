@@ -62,6 +62,22 @@ impl ScenarioCli {
     }
 }
 
+/// A scenario `stdout` line that makes the fake print `text` exactly,
+/// escaping what the format would otherwise read as an escape or line end.
+pub fn stdout_line(text: &str) -> String {
+    let mut line = String::from("stdout ");
+    for character in text.chars() {
+        match character {
+            '\\' => line.push_str("\\\\"),
+            '\n' => line.push_str("\\n"),
+            '\r' => line.push_str("\\r"),
+            '\t' => line.push_str("\\t"),
+            other => line.push(other),
+        }
+    }
+    line
+}
+
 /// Parses the fake's invocation log: one line per invocation, each argv
 /// element preceded by a tab and escaped.
 pub fn parse_invocation_log(log: &str) -> Vec<Vec<String>> {
