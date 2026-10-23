@@ -11,6 +11,7 @@
 //! is a path segment. A segment that happens to read as a schema, such as one
 //! named `properties` holding only definitions, is taken for a definition.
 
+use std::borrow::Cow;
 use std::collections::{BTreeSet, HashSet};
 use std::time::Duration;
 
@@ -21,8 +22,8 @@ pub(crate) const SCHEMA_COMMAND: [&str; 2] = ["bundle", "schema"];
 /// The schema is about 1 MB, so it gets more time than `version`.
 pub(crate) const SCHEMA_TIMEOUT: Duration = Duration::from_secs(60);
 
-/// Starts a `$ref` to a definition in `$defs`.
-const DEFS_REF: &str = "#/$defs/";
+/// Starts the decoded pointer of a `$ref` to a definition in `$defs`.
+const DEFS_POINTER: &str = "/$defs/";
 /// Subschemas whose `properties` count as the definition's own, at any depth.
 const BRANCHES: [&str; 3] = ["allOf", "anyOf", "oneOf"];
 /// Keywords whose object value is one schema.
@@ -73,16 +74,21 @@ pub(crate) fn packages_with_property(schema: Node<'_>, property: &str) -> Option
     Some(found)
 }
 
-/// Adds the `$defs` pointer of every `$ref` in `node` to `targets`, without
-/// the `#/$defs/` prefix.
-fn ref_targets<'a>(node: Node<'a>, targets: &mut HashSet<&'a str>) {
+/// Adds the decoded `$defs` pointer of every `$ref` in `node` to `targets`,
+/// without the `/$defs/` prefix.
+fn ref_targets(node: Node<'_>, targets: &mut HashSet<String>) {
     if let Some(members) = node.members() {
         for (key, child) in members {
-            match child.as_str().and_then(|text| text.strip_prefix(DEFS_REF)) {
-                Some(target) if key == "$ref" => {
+            let target = child
+                .as_str()
+                .filter(|_| key == "$ref")
+                .and_then(ref_pointer)
+                .and_then(|pointer| pointer.strip_prefix(DEFS_POINTER).map(str::to_owned));
+            match target {
+                Some(target) => {
                     targets.insert(target);
                 }
-                _ => ref_targets(child, targets),
+                None => ref_targets(child, targets),
             }
         }
     } else if let Some(elements) = node.elements() {
@@ -96,7 +102,7 @@ fn collect<'a>(
     root: Node<'a>,
     node: Node<'a>,
     path: &mut Vec<&'a str>,
-    targets: &HashSet<&str>,
+    targets: &HashSet<String>,
     property: &str,
     found: &mut BTreeSet<String>,
 ) {
@@ -119,7 +125,7 @@ fn collect<'a>(
     }
 }
 
-fn is_definition(node: Node<'_>, path: &[&str], targets: &HashSet<&str>) -> bool {
+fn is_definition(node: Node<'_>, path: &[&str], targets: &HashSet<String>) -> bool {
     let mut members = node.members().into_iter().flatten().peekable();
     members.peek().is_none()
         || members.any(|(_, child)| child.kind() != Kind::Object)
@@ -163,7 +169,7 @@ fn has_property<'a>(
     root: Node<'a>,
     schema: Node<'a>,
     property: &str,
-    followed: &mut HashSet<&'a str>,
+    followed: &mut HashSet<String>,
 ) -> bool {
     if schema
         .get("properties")
@@ -174,8 +180,9 @@ fn has_property<'a>(
     let target = schema
         .get("$ref")
         .and_then(Node::as_str)
-        .filter(|target| followed.insert(target))
-        .and_then(|target| root.pointer(target.strip_prefix('#')?));
+        .and_then(ref_pointer)
+        .filter(|pointer| followed.insert(pointer.to_string()))
+        .and_then(|pointer| root.pointer(&pointer));
     if target.is_some_and(|target| has_property(root, target, property, followed)) {
         return true;
     }
@@ -187,6 +194,32 @@ fn has_property<'a>(
                 schemas.any(|schema| has_property(root, schema, property, followed))
             })
     })
+}
+
+/// The JSON Pointer in a `$ref` to this document: its fragment after `#`,
+/// percent-decoded as RFC 6901 section 6 requires, or `None` for a ref to
+/// another document or a bad escape.
+fn ref_pointer(reference: &str) -> Option<Cow<'_, str>> {
+    let fragment = reference.strip_prefix('#')?;
+    if !fragment.contains('%') {
+        return Some(Cow::Borrowed(fragment));
+    }
+    let bytes = fragment.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%' {
+            let hex = bytes.get(index + 1..index + 3)?;
+            let digit = |byte: u8| char::from(byte).to_digit(16);
+            let (high, low) = (digit(hex[0])?, digit(hex[1])?);
+            decoded.push(u8::try_from(high * 16 + low).ok()?);
+            index += 3;
+        } else {
+            decoded.push(bytes[index]);
+            index += 1;
+        }
+    }
+    String::from_utf8(decoded).ok().map(Cow::Owned)
 }
 
 /// The segments above the definition joined with the text before the first
@@ -334,6 +367,24 @@ mod tests {
                 "x/nested".to_owned(),
                 "x/shared".to_owned(),
             ])
+        );
+    }
+
+    #[test]
+    fn decodes_percent_encoded_refs() {
+        // `%20%7B%7D` is ` {}` and `%24` is `$`; the bad escape is ignored.
+        // Only its decoded `$ref` makes `shared {}` a definition, and only
+        // following that ref finds the property for `jobs.T`.
+        let schema = r##"{"properties": {
+            "a": {"$ref": "#/%24defs/x/jobs.T"},
+            "b": {"$ref": "#/$defs/x/bad%2"}
+        }, "$defs": {"x": {
+            "jobs.T": {"properties": {"settings": {}}, "allOf": [{"$ref": "#/$defs/x/shared%20%7B%7D"}]},
+            "shared {}": {"x-meta": {}, "properties": {"table_update": {}}}
+        }}}"##;
+        assert_eq!(
+            found(schema),
+            Some(vec!["x/jobs".to_owned(), "x/shared {}".to_owned()])
         );
     }
 
