@@ -117,12 +117,15 @@ fn is_jobs(name: &str) -> bool {
             .is_some_and(|(major, name)| name == JOBS && is_major_version(major))
 }
 
-/// Whether `segment` is a Go major version suffix: `v` and a number above 1.
+/// Whether `segment` is a Go major version suffix: `v` and a number above 1,
+/// in ASCII digits without a sign or a leading zero.
 fn is_major_version(segment: &str) -> bool {
     segment
         .strip_prefix('v')
+        .filter(|number| number.bytes().all(|byte| byte.is_ascii_digit()))
+        .filter(|number| !number.starts_with('0'))
         .and_then(|number| number.parse::<u32>().ok())
-        .is_some_and(|number| number > 1 && !segment[1..].starts_with('0'))
+        .is_some_and(|number| number > 1)
 }
 
 /// The SDK's jobs packages alone answer yes, so the SDK's `jobs` alone is the
@@ -290,6 +293,18 @@ mod tests {
             finding.verdict().map(Verdict::as_str),
             Some(r"not jobs: $defs/pkg\nv7        resolved  yes")
         );
+    }
+
+    #[test]
+    fn recognizes_only_real_major_versions() {
+        for segment in ["v2", "v10", "v123"] {
+            assert!(super::is_major_version(segment), "{segment}");
+        }
+        for segment in [
+            "v", "v0", "v1", "v02", "v+2", "v-2", "v 2", "v2a", "V2", "2",
+        ] {
+            assert!(!super::is_major_version(segment), "{segment}");
+        }
     }
 
     #[test]
