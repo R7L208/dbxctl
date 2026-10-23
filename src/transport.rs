@@ -406,10 +406,14 @@ impl CliRunner {
         let mut rows = Vec::new();
         let mut chunk = body.root().get("result");
         let mut owned: Document;
-        // The inline chunk counts too, so it cannot point back at itself.
-        let mut last_index = chunk
-            .and_then(|result| result.get("chunk_index"))
-            .and_then(Node::as_u64);
+        // The inline chunk counts too, so it cannot point back at itself. It
+        // is the first chunk when the response does not number it.
+        let mut last_index = chunk.map(|result| {
+            result
+                .get("chunk_index")
+                .and_then(Node::as_u64)
+                .unwrap_or(0)
+        });
         loop {
             let next = match chunk {
                 Some(result) => {
@@ -1511,7 +1515,7 @@ mod tests {
 
     #[test]
     fn rejects_malformed_statement_responses() {
-        let chunk0 = format!("{}/result/chunks/0", status_path());
+        let chunk1 = format!("{}/result/chunks/1", status_path());
         for (name, scenario, problem) in [
             (
                 "transport-no-id",
@@ -1548,10 +1552,17 @@ mod tests {
             (
                 "transport-loop",
                 [
-                    submit(&succeeded(r#"{"data_array":[],"next_chunk_index":0}"#)),
-                    get(&chunk0, r#"{"data_array":[],"next_chunk_index":0}"#),
+                    submit(&succeeded(r#"{"data_array":[],"next_chunk_index":1}"#)),
+                    get(&chunk1, r#"{"data_array":[],"next_chunk_index":1}"#),
                 ]
                 .concat(),
+                "does not follow",
+            ),
+            (
+                "transport-unnumbered-self-loop",
+                submit(&succeeded(
+                    r#"{"data_array":[["1",null]],"next_chunk_index":0}"#,
+                )),
                 "does not follow",
             ),
             (
