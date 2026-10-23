@@ -48,13 +48,16 @@ dbxctl probe run --suite lineage --bundle-root <path> --target <non-prod> \
   --only cli,validate,plan,state,v8,v1
 ```
 
-Full read-only suite. Pass both options so the command keeps working as the
-SQL checks land. Until #32 and #33 implement the remaining checks, they are
-skipped and the run exits 10, and neither option is read yet:
+Every check with a read step, which leaves out the mutation-only `v7`. `v6`
+and `v10` run only their read steps, because no mutation step runs without
+`--allow-mutations`. Pass both options so the command keeps working as the
+SQL checks land. Until #32, #33, #34, and #37 implement the remaining checks,
+they are skipped and the run exits 10, and neither option is read yet:
 
 ```console
 dbxctl probe run --suite lineage --bundle-root <path> --target <non-prod> \
-  --warehouse-id <id> --scope-catalog <catalog>
+  --warehouse-id <id> --scope-catalog <catalog> \
+  --only cli,validate,plan,state,v8,v1,api,v2,v3,v11,v9,v4,v6,v10
 ```
 
 Never pass `--allow-mutations` for a read-only run.
