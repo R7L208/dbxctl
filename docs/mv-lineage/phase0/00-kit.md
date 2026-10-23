@@ -25,8 +25,11 @@ command shapes come from the contract in
 `v2`, `v9`, and `v4` need `--warehouse-id`; `v3` and `v11` need both
 `--warehouse-id` and `--scope-catalog`; every other check needs neither. Only
 implemented checks require them, so until #33 implements those checks a run
-needs neither option. See the check table in
-[R4](01-requirements.md#r4-checks).
+needs neither option. Each requirement starts when its check is implemented:
+a run that selects `v2` without `--warehouse-id` exits 10 today, with `v2`
+skipped, and exits 1 with a usage error once #33 lands. Pass both options
+whenever you select these checks so the command keeps working. See the check
+table in [R4](01-requirements.md#r4-checks).
 
 ## Read-Only Run
 
