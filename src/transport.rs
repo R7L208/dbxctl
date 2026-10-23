@@ -9,7 +9,8 @@
 //!   from the last `< HTTP/<version> <code>` line and, on an error, the
 //!   `error_code` and `message` from the JSON error body.
 //! - Statements use the Statement Execution API: submit, poll until done,
-//!   cancel at the deadline, and read every result chunk. Only statements that
+//!   cancel at the deadline, and read every result chunk; a result the API
+//!   truncated is an error rather than partial rows. Only statements that
 //!   pass [`safety::is_read_statement`] are submitted; anything else is
 //!   refused before a CLI process starts.
 //!
@@ -110,6 +111,9 @@ pub(crate) enum Error {
     },
     /// The statement had not finished at the deadline; a cancel was sent.
     Timeout { statement_id: String },
+    /// The statement succeeded, but the API kept only part of its result,
+    /// as it does past the 25 MiB inline limit.
+    Truncated { statement_id: String },
 }
 
 impl fmt::Display for Error {
@@ -133,6 +137,12 @@ impl fmt::Display for Error {
                 write!(
                     formatter,
                     "statement {statement_id} timed out and was cancelled"
+                )
+            }
+            Self::Truncated { statement_id } => {
+                write!(
+                    formatter,
+                    "statement {statement_id} returned a truncated result"
                 )
             }
         }
@@ -306,6 +316,27 @@ impl CliRunner {
             }
         }
 
+        self.result_set(&body, statement_id, &status_path, calls)
+    }
+
+    /// The rows of a finished statement: those in `body`, then every further
+    /// result chunk.
+    fn result_set(
+        &self,
+        body: &Document,
+        statement_id: String,
+        status_path: &str,
+        calls: &mut Vec<Call>,
+    ) -> Result<ResultSet, Error> {
+        // Partial rows would read as a complete answer, so refuse them.
+        if body
+            .root()
+            .pointer("/manifest/truncated")
+            .and_then(Node::as_bool)
+            == Some(true)
+        {
+            return Err(Error::Truncated { statement_id });
+        }
         let columns = columns(body.root())?;
         let mut rows = Vec::new();
         let mut chunk = body.root().get("result");
@@ -1205,6 +1236,25 @@ mod tests {
     }
 
     #[test]
+    fn refuses_a_truncated_result() {
+        let body = format!(
+            r#"{{"statement_id":"{ID}","status":{{"state":"SUCCEEDED"}},"manifest":{{"truncated":true,"schema":{{"columns":[{{"name":"one"}}]}}}},"result":{{"data_array":[["1"]]}}}}"#
+        );
+        let fixture = Fixture::new("transport-truncated", &submit(&body));
+        let result = fixture.runner(QUICK).statement(SQL, WAREHOUSE).result;
+        assert_eq!(
+            result,
+            Err(Error::Truncated {
+                statement_id: ID.to_owned()
+            })
+        );
+        let complete = body.replace(r#""truncated":true"#, r#""truncated":false"#);
+        let fixture = Fixture::new("transport-not-truncated", &submit(&complete));
+        let result = fixture.runner(QUICK).statement(SQL, WAREHOUSE).result;
+        assert!(result.is_ok(), "{result:?}");
+    }
+
+    #[test]
     fn a_statement_without_a_result_set_has_no_rows() {
         let body = format!(r#"{{"statement_id":"{ID}","status":{{"state":"SUCCEEDED"}}}}"#);
         let fixture = Fixture::new("transport-no-result", &submit(&body));
@@ -1283,6 +1333,13 @@ mod tests {
             }
             .to_string(),
             format!("statement {ID} timed out and was cancelled")
+        );
+        assert_eq!(
+            Error::Truncated {
+                statement_id: ID.to_owned()
+            }
+            .to_string(),
+            format!("statement {ID} returned a truncated result")
         );
         assert_eq!(
             Error::Refused.to_string(),
