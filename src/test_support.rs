@@ -10,6 +10,8 @@ use std::sync::OnceLock;
 mod scenario;
 
 pub(crate) use scenario::{ScenarioCli, assert_no_mutations};
+// For `scenario`, which reaches the guard through its parent module.
+use crate::safety;
 
 /// The fake Databricks CLI, compiled once per test process.
 pub(crate) fn fake_databricks() -> &'static Path {
@@ -115,6 +117,54 @@ mod tests {
             assert!(
                 catch_unwind(|| assert_no_mutations(&invocations)).is_err(),
                 "{rejected:?} must not count as a help request"
+            );
+        }
+    }
+
+    #[test]
+    fn checks_command_paths_exactly_and_statements_with_the_guard() {
+        let submit = |sql: &str| {
+            let body = format!(
+                r#"{{"disposition":"INLINE","statement":"{}","warehouse_id":"w"}}"#,
+                sql.replace('\\', "\\\\").replace('"', "\\\"")
+            );
+            argv(&[
+                "api",
+                "post",
+                "/api/2.0/sql/statements",
+                "--json",
+                &body,
+                "--debug",
+            ])
+        };
+        for allowed in [
+            argv(&["bundle", "validate", "-t", "dev"]),
+            argv(&["api", "get", "/api/2.0/pipelines/x", "--debug"]),
+            argv(&[
+                "api",
+                "post",
+                "/api/2.0/sql/statements/01ef/cancel",
+                "--json",
+                "{}",
+            ]),
+            submit("SELECT 1"),
+            submit("SELECT 'C:\\temp', \"x\" AS q"),
+        ] {
+            assert_no_mutations(&[allowed]);
+        }
+        for rejected in [
+            argv(&["bundle", "validate", "extra"]),
+            argv(&["api", "get", "/a", "/b"]),
+            argv(&["api", "get", "relative"]),
+            submit("DROP TABLE t"),
+            submit("SELECT 1; DROP TABLE t"),
+            argv(&["api", "post", "/api/2.0/sql/statements", "--debug"]),
+        ] {
+            let invocations = [rejected];
+            assert!(
+                catch_unwind(|| assert_no_mutations(&invocations)).is_err(),
+                "{:?} must count as a mutation",
+                invocations[0]
             );
         }
     }

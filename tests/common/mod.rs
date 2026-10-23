@@ -2,6 +2,9 @@
 
 pub mod scenario;
 
+#[path = "../../src/safety.rs"]
+mod safety;
+
 use std::env;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
