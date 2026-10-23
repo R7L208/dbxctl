@@ -40,6 +40,14 @@ const MIN_WAIT: Duration = Duration::from_secs(5);
 const SUBMIT_MARGIN: Duration = Duration::from_secs(5);
 const STATEMENTS: &str = "/api/2.0/sql/statements";
 const REDACTED: &str = "[REDACTED]";
+/// The CLI commands [`Runner::run`] may run, by their full command path.
+/// Anything else is refused without starting a process.
+const READ_ONLY_RUNS: &[&[&str]] = &[
+    &["version"],
+    &["bundle", "validate"],
+    &["bundle", "plan"],
+    &["bundle", "schema"],
+];
 /// How much of each statement response a [`Call`] keeps as evidence. The
 /// rows are in the [`ResultSet`], so the evidence needs only the start.
 const STATEMENT_EVIDENCE_BYTES: usize = 64 * 1024;
@@ -180,7 +188,7 @@ impl fmt::Display for Error {
 /// How probes reach the workspace. Tests can supply their own.
 pub(crate) trait Runner {
     /// Runs a read-only CLI command, such as `bundle validate`, and captures
-    /// its output.
+    /// its output. A command not known to be read-only is refused.
     fn run(&self, args: &[&str], timeout: Duration) -> Call;
 
     /// Reads an API path, such as `/api/2.0/pipelines/<id>`.
@@ -385,7 +393,9 @@ impl CliRunner {
     }
 
     /// The rows of a finished statement: those in `body`, then every further
-    /// result chunk.
+    /// result chunk. Each fetched chunk must be the one asked for, and the
+    /// rows and chunks read must match the manifest's totals when it has
+    /// them.
     fn result_set(
         &self,
         body: &Document,
@@ -405,6 +415,7 @@ impl CliRunner {
         let columns = columns(body.root())?;
         let mut rows = Vec::new();
         let mut chunk = body.root().get("result");
+        let mut chunks = u64::from(chunk.is_some());
         let mut owned: Document;
         // The inline chunk counts too, so it cannot point back at itself. It
         // is the first chunk when the response does not number it.
@@ -435,7 +446,29 @@ impl CliRunner {
             last_index = Some(index);
             let path = format!("{status_path}/result/chunks/{index}");
             owned = self.statement_call("get", &path, None, self.limits.call, calls)?;
+            let returned = owned.root().get("chunk_index").and_then(Node::as_u64);
+            if returned.is_some_and(|returned| returned != index) {
+                return Err(Error::Transport(format!(
+                    "result chunk {} was returned for chunk {index}",
+                    returned.unwrap_or_default()
+                )));
+            }
+            chunks += 1;
             chunk = Some(owned.root());
+        }
+        let total = |key: &str| {
+            body.root()
+                .get("manifest")
+                .and_then(|manifest| manifest.get(key))
+                .and_then(Node::as_u64)
+        };
+        let read = rows.len() as u64;
+        for (key, read) in [("total_chunk_count", chunks), ("total_row_count", read)] {
+            if let Some(total) = total(key).filter(|&total| total != read) {
+                return Err(Error::Transport(format!(
+                    "read {read} where `manifest.{key}` is {total}"
+                )));
+            }
         }
         Ok(ResultSet {
             statement_id,
@@ -473,6 +506,20 @@ impl CliRunner {
 
 impl Runner for CliRunner {
     fn run(&self, args: &[&str], timeout: Duration) -> Call {
+        let path: Vec<&str> = args
+            .iter()
+            .copied()
+            .take_while(|argument| !argument.starts_with('-'))
+            .collect();
+        if !READ_ONLY_RUNS.contains(&path.as_slice()) {
+            return Call {
+                args: self.arguments(args),
+                result: Err(format!(
+                    "refused `databricks {}`, which is not a known read-only command",
+                    path.join(" ")
+                )),
+            };
+        }
         self.capture(args, timeout, usize::MAX).1
     }
 
@@ -1589,6 +1636,82 @@ mod tests {
                 "{name}: {error:?}"
             );
         }
+    }
+
+    #[test]
+    fn checks_chunks_against_the_request_and_the_manifest() {
+        let chunk1 = format!("{}/result/chunks/1", status_path());
+        let with_totals = |chunks: u64, rows: u64, result: &str| {
+            succeeded(result).replace(
+                r#""manifest":{"#,
+                &format!(r#""manifest":{{"total_chunk_count":{chunks},"total_row_count":{rows},"#),
+            )
+        };
+        let two_chunks = r#"{"chunk_index":0,"data_array":[["1",null]],"next_chunk_index":1}"#;
+        let ok = [
+            submit(&with_totals(2, 2, two_chunks)),
+            get(&chunk1, r#"{"chunk_index":1,"data_array":[["2",null]]}"#),
+        ]
+        .concat();
+        let fixture = Fixture::new("transport-totals", &ok);
+        let outcome = fixture.runner(QUICK).statement(SQL, WAREHOUSE);
+        assert_eq!(
+            outcome.result,
+            Ok(rows(&[&[Some("1"), None], &[Some("2"), None]]))
+        );
+        for (name, scenario, problem) in [
+            (
+                "transport-wrong-chunk",
+                [
+                    submit(&succeeded(two_chunks)),
+                    get(&chunk1, r#"{"chunk_index":2,"data_array":[]}"#),
+                ]
+                .concat(),
+                "chunk 2 was returned for chunk 1",
+            ),
+            (
+                "transport-row-total",
+                submit(&with_totals(1, 5, r#"{"data_array":[["1",null]]}"#)),
+                "`manifest.total_row_count` is 5",
+            ),
+            (
+                "transport-chunk-total",
+                submit(&with_totals(3, 1, r#"{"data_array":[["1",null]]}"#)),
+                "`manifest.total_chunk_count` is 3",
+            ),
+        ] {
+            let fixture = Fixture::new(name, &scenario);
+            let error = fixture
+                .runner(QUICK)
+                .statement(SQL, WAREHOUSE)
+                .result
+                .expect_err(name);
+            assert!(
+                matches!(&error, Error::Transport(text) if text.contains(problem)),
+                "{name}: {error:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn run_refuses_commands_that_are_not_known_reads() {
+        let fixture = Fixture::new("transport-run-refused", "");
+        let runner = fixture.runner(QUICK);
+        for args in [
+            &["bundle", "deploy"][..],
+            &["bundle", "validate", "extra"],
+            &["--profile", "x", "bundle", "validate"],
+            &["api", "get", "/api/x"],
+        ] {
+            let call = runner.run(args, QUICK);
+            assert!(
+                call.result
+                    .as_ref()
+                    .is_err_and(|problem| problem.contains("not a known read-only command")),
+                "{args:?}"
+            );
+        }
+        assert!(fixture.invocations().is_empty());
     }
 
     #[test]
