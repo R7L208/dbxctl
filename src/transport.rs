@@ -244,25 +244,16 @@ impl CliRunner {
         command
     }
 
-    /// Runs the CLI and returns the raw result, for parsing, with the
-    /// scrubbed [`Call`] for evidence, which keeps up to `kept` bytes of
-    /// stdout.
+    /// Runs the CLI and returns its full arguments and raw result. Parse the
+    /// result first, then hand it to [`evidence`], which takes it.
     fn capture(
         &self,
         args: &[&str],
         timeout: Duration,
-        kept: usize,
-    ) -> (Result<Captured, String>, Call) {
+    ) -> (Vec<OsString>, Result<Captured, String>) {
         let args = self.arguments(args);
         let result = run_captured_command(&mut self.command(&args), timeout);
-        let call = Call {
-            args,
-            result: result
-                .as_ref()
-                .map(|captured| scrubbed(captured, kept))
-                .map_err(Clone::clone),
-        };
-        (result, call)
+        (args, result)
     }
 
     /// One `databricks api <method>` call, stopped after `timeout`, whose
@@ -287,8 +278,9 @@ impl CliRunner {
             args.extend(["--json", body]);
         }
         args.push("--debug");
-        let (result, call) = self.capture(&args, timeout, kept);
-        (call, response(method, &result))
+        let (args, result) = self.capture(&args, timeout);
+        let response = response(method, &result);
+        (evidence(args, result, kept), response)
     }
 
     fn statement_rows(
@@ -520,7 +512,8 @@ impl Runner for CliRunner {
                 )),
             };
         }
-        self.capture(args, timeout, usize::MAX).1
+        let (args, result) = self.capture(args, timeout);
+        evidence(args, result, usize::MAX)
     }
 
     fn api_get(&self, path: &str) -> Outcome<Response> {
@@ -770,27 +763,41 @@ fn append_rows(chunk: Node<'_>, rows: &mut Vec<Vec<Option<String>>>) -> Result<(
     Ok(())
 }
 
+/// The [`Call`] for a CLI run, keeping up to `kept` bytes of its stdout. It
+/// takes the output, so scrubbing makes no copy when there is nothing to
+/// scrub.
+fn evidence(args: Vec<OsString>, result: Result<Captured, String>, kept: usize) -> Call {
+    Call {
+        args,
+        result: result.map(|captured| scrubbed(captured, kept)),
+    }
+}
+
 /// `captured` with credentials scrubbed and stdout cut to `kept` bytes.
 /// A cut also drops a partial word at the end, so it cannot leave part of
 /// a token that the scrubber no longer recognises.
-fn scrubbed(captured: &Captured, kept: usize) -> Captured {
-    let stdout = match captured.stdout.get(..kept) {
-        Some(start) if start.len() < captured.stdout.len() => {
-            let end = start
-                .iter()
-                .rposition(|&byte| !is_token_byte(byte))
-                .map_or(0, |at| at + 1);
-            let mut excerpt = scrub(&start[..end]);
-            let omitted = captured.stdout.len() - end;
-            excerpt.extend_from_slice(format!("\n[{omitted} more bytes not kept]\n").as_bytes());
-            excerpt
-        }
-        _ => scrub(&captured.stdout),
+fn scrubbed(captured: Captured, kept: usize) -> Captured {
+    let Captured {
+        stdout,
+        stderr,
+        status,
+    } = captured;
+    let stdout = if stdout.len() > kept {
+        let end = stdout[..kept]
+            .iter()
+            .rposition(|&byte| !is_token_byte(byte))
+            .map_or(0, |at| at + 1);
+        let omitted = stdout.len() - end;
+        let mut excerpt = scrub(stdout[..end].to_vec());
+        excerpt.extend_from_slice(format!("\n[{omitted} more bytes not kept]\n").as_bytes());
+        excerpt
+    } else {
+        scrub(stdout)
     };
     Captured {
         stdout,
-        stderr: scrub(&captured.stderr),
-        status: captured.status,
+        stderr: scrub(stderr),
+        status,
     }
 }
 
@@ -800,38 +807,33 @@ fn is_token_byte(byte: u8) -> bool {
 
 /// Replaces credentials in CLI output with `[REDACTED]`: the value of an
 /// `Authorization` header, a bearer token, and a personal access token
-/// (`dapi` and 32 hex digits). Output without any is returned unchanged.
-fn scrub(output: &[u8]) -> Vec<u8> {
-    let text = String::from_utf8_lossy(output);
-    let mut scrubbed = String::with_capacity(text.len());
-    for line in text.split_inclusive('\n') {
-        let (content, ending) = match line.strip_suffix('\n') {
-            Some(content) => (content, "\n"),
-            None => (line, ""),
-        };
-        let content = match find_ignore_case(content, "authorization:") {
-            Some(at) => format!("{} {REDACTED}", &content[..at + "authorization:".len()]),
-            None => replace_bearer(content),
-        };
-        scrubbed.push_str(&replace_tokens(&content));
-        scrubbed.push_str(ending);
-    }
-    if scrubbed == text {
-        output.to_vec()
-    } else {
-        scrubbed.into_bytes()
-    }
-}
-
-fn find_ignore_case(text: &str, needle: &str) -> Option<usize> {
-    text.to_ascii_lowercase().find(needle)
+/// (`dapi` and 32 hex digits). Output without any is returned as is.
+fn scrub(output: Vec<u8>) -> Vec<u8> {
+    let changed = {
+        let text = String::from_utf8_lossy(&output);
+        let mut scrubbed = String::with_capacity(text.len());
+        for line in text.split_inclusive('\n') {
+            let (content, ending) = match line.strip_suffix('\n') {
+                Some(content) => (content, "\n"),
+                None => (line, ""),
+            };
+            // Lowercased once: ASCII case changes keep every byte offset.
+            let lower = content.to_ascii_lowercase();
+            let content = match lower.find("authorization:") {
+                Some(at) => format!("{} {REDACTED}", &content[..at + "authorization:".len()]),
+                None => replace_bearer(content, &lower),
+            };
+            scrubbed.push_str(&replace_tokens(&content));
+            scrubbed.push_str(ending);
+        }
+        (scrubbed != text).then_some(scrubbed)
+    };
+    changed.map_or(output, String::into_bytes)
 }
 
 /// `Bearer <token>`, with any run of whitespace after `Bearer`, becomes
-/// `Bearer [REDACTED]`.
-fn replace_bearer(line: &str) -> String {
-    // Lowercased once: ASCII case changes keep every byte offset.
-    let lower = line.to_ascii_lowercase();
+/// `Bearer [REDACTED]`. `lower` is `line` in ASCII lowercase.
+fn replace_bearer(line: &str, lower: &str) -> String {
     let mut result = String::with_capacity(line.len());
     let mut start = 0;
     while let Some(found) = lower[start..].find("bearer") {
@@ -1387,19 +1389,18 @@ mod tests {
     #[test]
     fn a_cut_response_drops_a_partial_token() {
         let token = fake_token();
-        let stdout = format!("{{\"a\":\"{token}\"}}");
-        let captured = Captured {
-            stdout: stdout.into_bytes(),
+        let captured = || Captured {
+            stdout: format!("{{\"a\":\"{token}\"}}").into_bytes(),
             stderr: Vec::new(),
             status: ExitStatus::default(),
         };
         // Cut halfway through the token: none of it may remain.
-        let kept = scrubbed(&captured, 6 + token.len() / 2);
+        let kept = scrubbed(captured(), 6 + token.len() / 2);
         let text = String::from_utf8(kept.stdout).expect("UTF-8");
         assert!(text.starts_with("{\"a\":\"\n["), "{text}");
         assert!(!text.contains("dapi"), "{text}");
         assert_eq!(
-            scrubbed(&captured, usize::MAX).stdout,
+            scrubbed(captured(), usize::MAX).stdout,
             br#"{"a":"[REDACTED]"}"#
         );
     }
@@ -1782,12 +1783,16 @@ mod tests {
             ),
         ] {
             assert_eq!(
-                String::from_utf8(scrub(input.as_bytes())).expect("UTF-8"),
+                String::from_utf8(scrub(input.into_bytes())).expect("UTF-8"),
                 expected
             );
         }
         let binary = b"plain \xff output\n";
-        assert_eq!(scrub(binary), binary);
+        assert_eq!(scrub(binary.to_vec()), binary);
+        // Output with nothing to scrub is handed back, not copied.
+        let plain = b"nothing to see\n".to_vec();
+        let address = plain.as_ptr();
+        assert_eq!(scrub(plain).as_ptr(), address);
     }
 
     #[test]
