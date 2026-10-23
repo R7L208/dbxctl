@@ -1038,6 +1038,16 @@ mod tests {
     }
 
     #[test]
+    fn submits_inline_json_array_results_that_outlast_the_wait() {
+        // Spelled out rather than built with `submit_body`, so a change to
+        // any field fails here.
+        assert_eq!(
+            submit_body("SELECT 'a\"b'", WAREHOUSE),
+            r#"{"disposition":"INLINE","format":"JSON_ARRAY","on_wait_timeout":"CONTINUE","statement":"SELECT 'a\"b'","wait_timeout":"30s","warehouse_id":"abc123"}"#
+        );
+    }
+
+    #[test]
     fn returns_rows_from_an_immediate_result() {
         let scenario = submit(&succeeded(r#"{"data_array":[["1",null]]}"#));
         let fixture = Fixture::new("transport-inline", &scenario);
