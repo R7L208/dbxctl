@@ -878,88 +878,178 @@ fn is_token_byte(byte: u8) -> bool {
 }
 
 /// Replaces credentials in CLI output with `[REDACTED]`: the value of an
-/// `Authorization` header, a bearer token, and a personal access token
-/// (`dapi` and 32 hex digits). Output without any is returned as is.
+/// `Authorization` header, a bearer token, the value of an OAuth
+/// `access_token`, `refresh_token`, `id_token`, or `client_secret` field, a
+/// JSON Web Token, and a personal access token (`dapi` and 32 hex digits).
+/// Only the credential itself is replaced, so the rest of a line is kept.
+/// Output without any is returned as is.
 fn scrub(output: Vec<u8>) -> Vec<u8> {
     let changed = {
         let text = String::from_utf8_lossy(&output);
         let mut scrubbed = String::with_capacity(text.len());
         for line in text.split_inclusive('\n') {
-            let (content, ending) = match line.strip_suffix('\n') {
-                Some(content) => (content, "\n"),
-                None => (line, ""),
-            };
-            // Lowercased once: ASCII case changes keep every byte offset.
-            let lower = content.to_ascii_lowercase();
-            let content = match lower.find("authorization:") {
-                Some(at) => format!("{} {REDACTED}", &content[..at + "authorization:".len()]),
-                None => replace_bearer(content, &lower),
-            };
-            scrubbed.push_str(&replace_tokens(&content));
-            scrubbed.push_str(ending);
+            let mut kept = 0;
+            for (start, end) in secret_spans(line) {
+                scrubbed.push_str(&line[kept..start]);
+                scrubbed.push_str(REDACTED);
+                kept = end;
+            }
+            scrubbed.push_str(&line[kept..]);
         }
         (scrubbed != text).then_some(scrubbed)
     };
     changed.map_or(output, String::into_bytes)
 }
 
-/// `Bearer <token>`, with any run of whitespace after `Bearer`, becomes
-/// `Bearer [REDACTED]`. `lower` is `line` in ASCII lowercase.
-fn replace_bearer(line: &str, lower: &str) -> String {
-    let mut result = String::with_capacity(line.len());
-    let mut start = 0;
-    while let Some(found) = lower[start..].find("bearer") {
-        let word_end = start + found + "bearer".len();
-        let spaces = line[word_end..]
-            .find(|c: char| !c.is_whitespace())
-            .unwrap_or(line.len() - word_end);
-        let token_start = word_end + spaces;
-        result.push_str(&line[start..token_start]);
-        let after = &line[token_start..];
-        let length = after
-            .find(|c: char| c.is_whitespace() || c == '"' || c == '\'')
-            .unwrap_or(after.len());
-        if spaces > 0 && length > 0 && &after[..length] != REDACTED {
-            result.push_str(REDACTED);
-        } else {
-            result.push_str(&after[..length]);
+/// The byte ranges of the credentials in `line`, sorted and merged. A range
+/// that already reads `[REDACTED]` is left out.
+fn secret_spans(line: &str) -> Vec<(usize, usize)> {
+    // Lowercased once: ASCII case changes keep every byte offset.
+    let lower = line.to_ascii_lowercase();
+    let mut spans = Vec::new();
+    header_values(line, &lower, &mut spans);
+    bearer_tokens(line, &lower, &mut spans);
+    secret_fields(line, &lower, &mut spans);
+    access_tokens(line, &mut spans);
+    web_tokens(line, &mut spans);
+    spans.sort_unstable();
+    let mut merged: Vec<(usize, usize)> = Vec::with_capacity(spans.len());
+    for (start, end) in spans {
+        match merged.last_mut() {
+            Some(last) if start <= last.1 => last.1 = last.1.max(end),
+            _ => merged.push((start, end)),
         }
-        start = token_start + length;
     }
-    result.push_str(&line[start..]);
-    result
+    merged.retain(|&(start, end)| &line[start..end] != REDACTED);
+    merged
+}
+
+/// Every place `needle`, which must be ASCII lowercase, occurs in `lower`.
+fn occurrences<'a>(lower: &'a str, needle: &'a str) -> impl Iterator<Item = usize> + 'a {
+    lower.match_indices(needle).map(|(at, _)| at)
+}
+
+/// The value of each `Authorization:` header: from after the colon to the
+/// end of the header, which a quote, comma, backslash, or line end closes.
+fn header_values(line: &str, lower: &str, spans: &mut Vec<(usize, usize)>) {
+    for at in occurrences(lower, "authorization:") {
+        let after = at + "authorization:".len();
+        let start =
+            after + line[after..].len() - line[after..].trim_start_matches([' ', '\t']).len();
+        let end = line[start..]
+            .find(['"', '\'', ',', '\\', '\r', '\n'])
+            .map_or(line.len(), |offset| start + offset);
+        let end = start + line[start..end].trim_end().len();
+        if end > start {
+            spans.push((start, end));
+        }
+    }
+}
+
+/// The token after each `Bearer` followed by spaces or tabs, up to the next
+/// whitespace or quote.
+fn bearer_tokens(line: &str, lower: &str, spans: &mut Vec<(usize, usize)>) {
+    for at in occurrences(lower, "bearer") {
+        let after = at + "bearer".len();
+        let rest = &line[after..];
+        let start = after + rest.len() - rest.trim_start_matches([' ', '\t']).len();
+        if start == after {
+            continue;
+        }
+        let end = line[start..]
+            .find(|c: char| c.is_whitespace() || c == '"' || c == '\'')
+            .map_or(line.len(), |offset| start + offset);
+        if end > start {
+            spans.push((start, end));
+        }
+    }
+}
+
+/// The string value of each OAuth secret field, as in
+/// `"access_token": "<value>"`.
+fn secret_fields(line: &str, lower: &str, spans: &mut Vec<(usize, usize)>) {
+    for name in [
+        "\"access_token\"",
+        "\"refresh_token\"",
+        "\"id_token\"",
+        "\"client_secret\"",
+    ] {
+        for at in occurrences(lower, name) {
+            let rest = line[at + name.len()..].trim_start();
+            let Some(rest) = rest.strip_prefix(':').map(str::trim_start) else {
+                continue;
+            };
+            let Some(value) = rest.strip_prefix('"') else {
+                continue;
+            };
+            let start = line.len() - value.len();
+            let mut end = None;
+            let mut escaped = false;
+            for (offset, byte) in value.bytes().enumerate() {
+                match byte {
+                    _ if escaped => escaped = false,
+                    b'\\' => escaped = true,
+                    b'"' => {
+                        end = Some(start + offset);
+                        break;
+                    }
+                    _ => {}
+                }
+            }
+            let end = end.unwrap_or(line.len());
+            if end > start {
+                spans.push((start, end));
+            }
+        }
+    }
 }
 
 /// Personal access tokens: `dapi` followed by 32 hex digits, with an
 /// optional `-<digits>` suffix.
-fn replace_tokens(line: &str) -> String {
-    let mut result = String::with_capacity(line.len());
-    let mut rest = line;
-    while let Some(at) = rest.find("dapi") {
-        let (before, candidate) = rest.split_at(at);
-        result.push_str(before);
-        let hex = candidate[4..]
-            .bytes()
-            .take_while(u8::is_ascii_hexdigit)
+fn access_tokens(line: &str, spans: &mut Vec<(usize, usize)>) {
+    for (at, _) in line.match_indices("dapi") {
+        let candidate = &line.as_bytes()[at + 4..];
+        let hex = candidate
+            .iter()
+            .take_while(|byte| byte.is_ascii_hexdigit())
             .count();
-        if hex >= 32 {
-            let mut end = 4 + hex;
-            let suffix = &candidate[end..];
-            if let Some(digits) = suffix.strip_prefix('-') {
-                let count = digits.bytes().take_while(u8::is_ascii_digit).count();
-                if count > 0 {
-                    end += 1 + count;
-                }
+        if hex < 32 {
+            continue;
+        }
+        let mut end = at + 4 + hex;
+        if line.as_bytes().get(end) == Some(&b'-') {
+            let digits = line.as_bytes()[end + 1..]
+                .iter()
+                .take_while(|byte| byte.is_ascii_digit())
+                .count();
+            if digits > 0 {
+                end += 1 + digits;
             }
-            result.push_str(REDACTED);
-            rest = &candidate[end..];
-        } else {
-            result.push_str("dapi");
-            rest = &candidate[4..];
+        }
+        spans.push((at, end));
+    }
+}
+
+/// JSON Web Tokens, such as OAuth access tokens: three or more base64url
+/// segments joined by dots, the first starting `eyJ` (an encoded `{"`).
+fn web_tokens(line: &str, spans: &mut Vec<(usize, usize)>) {
+    let is_jwt_byte =
+        |byte: &u8| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.');
+    for (at, _) in line.match_indices("eyJ") {
+        // Only where a token can start, not inside another word.
+        if at > 0 && is_jwt_byte(&line.as_bytes()[at - 1]) {
+            continue;
+        }
+        let length = line.as_bytes()[at..]
+            .iter()
+            .take_while(|byte| is_jwt_byte(byte))
+            .count();
+        let token = &line[at..at + length];
+        let segments = token.split('.').collect::<Vec<_>>();
+        if segments.len() >= 3 && segments[..3].iter().all(|segment| segment.len() >= 4) {
+            spans.push((at, at + length));
         }
     }
-    result.push_str(rest);
-    result
 }
 
 #[cfg(test)]
@@ -1930,10 +2020,15 @@ mod tests {
     #[test]
     fn scrubs_credentials_and_leaves_other_output_alone() {
         let token = fake_token();
+        // A made-up JSON Web Token, shaped like an OAuth access token.
+        let jwt = format!(
+            "eyJhbGciOiJSUzI1NiJ9.{}.{}",
+            "eyJzdWIiOiJ4In0", "c2lnbmF0dXJl"
+        );
         for (input, expected) in [
             (
                 format!("> \"authorization: Bearer {token}\"\n"),
-                "> \"authorization: [REDACTED]\n".to_owned(),
+                "> \"authorization: [REDACTED]\"\n".to_owned(),
             ),
             (
                 format!("token=Bearer {token} rest"),
@@ -1958,6 +2053,21 @@ mod tests {
             (
                 "dapi is short: dapi1234".to_owned(),
                 "dapi is short: dapi1234".to_owned(),
+            ),
+            (
+                r#"[["authorization: pending","next cell"],["x"]]"#.to_owned(),
+                r#"[["authorization: [REDACTED]","next cell"],["x"]]"#.to_owned(),
+            ),
+            (
+                format!(
+                    r#"{{"access_token": "{jwt}", "refresh_token":"r\"t", "token_type":"Bearer"}}"#
+                ),
+                r#"{"access_token": "[REDACTED]", "refresh_token":"[REDACTED]", "token_type":"Bearer"}"#
+                    .to_owned(),
+            ),
+            (
+                format!("token {jwt} end; heyJune.is.here eyJ.a.b"),
+                "token [REDACTED] end; heyJune.is.here eyJ.a.b".to_owned(),
             ),
         ] {
             assert_eq!(
