@@ -20,7 +20,7 @@ pub(crate) const SCHEMA_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Starts a `$ref` to a definition in `$defs`.
 const DEFS_REF: &str = "#/$defs/";
-/// Subschemas whose `properties` count as the definition's own.
+/// Subschemas whose `properties` count as the definition's own, at any depth.
 const BRANCHES: [&str; 3] = ["allOf", "anyOf", "oneOf"];
 
 /// A definition in `$defs`.
@@ -46,7 +46,14 @@ pub(crate) fn definitions_with_property(
     let mut targets = HashSet::new();
     ref_targets(schema, &mut targets);
     let mut found = Vec::new();
-    collect(defs, &mut Vec::new(), &targets, property, &mut found);
+    collect(
+        schema,
+        defs,
+        &mut Vec::new(),
+        &targets,
+        property,
+        &mut found,
+    );
     found.sort();
     Some(found)
 }
@@ -71,6 +78,7 @@ fn ref_targets<'a>(node: Node<'a>, targets: &mut HashSet<&'a str>) {
 }
 
 fn collect<'a>(
+    root: Node<'a>,
     node: Node<'a>,
     path: &mut Vec<&'a str>,
     targets: &HashSet<&str>,
@@ -86,14 +94,14 @@ fn collect<'a>(
         }
         path.push(key);
         if is_definition(child, path, targets) {
-            if has_property(child, property) {
+            if has_property(root, child, property, &mut HashSet::new()) {
                 found.push(Definition {
                     path: path.join("/"),
                     package: package(path),
                 });
             }
         } else {
-            collect(child, path, targets, property, found);
+            collect(root, child, path, targets, property, found);
         }
         path.pop();
     }
@@ -114,19 +122,37 @@ fn pointer(path: &[&str]) -> String {
         .join("/")
 }
 
-fn has_property(definition: Node<'_>, property: &str) -> bool {
-    let own = |schema: Node<'_>| {
+/// Whether `schema` declares `property` in its own `properties`, in a branch
+/// at any depth, or in a schema it refers to with a `$ref` into `root`.
+/// `followed` holds the refs already followed, so a cycle ends.
+fn has_property<'a>(
+    root: Node<'a>,
+    schema: Node<'a>,
+    property: &str,
+    followed: &mut HashSet<&'a str>,
+) -> bool {
+    if schema
+        .get("properties")
+        .is_some_and(|properties| properties.get(property).is_some())
+    {
+        return true;
+    }
+    let target = schema
+        .get("$ref")
+        .and_then(Node::as_str)
+        .filter(|target| followed.insert(target))
+        .and_then(|target| root.pointer(target.strip_prefix('#')?));
+    if target.is_some_and(|target| has_property(root, target, property, followed)) {
+        return true;
+    }
+    BRANCHES.iter().any(|branch| {
         schema
-            .get("properties")
-            .is_some_and(|properties| properties.get(property).is_some())
-    };
-    own(definition)
-        || BRANCHES.iter().any(|branch| {
-            definition
-                .get(branch)
-                .and_then(Node::elements)
-                .is_some_and(|mut schemas| schemas.any(own))
-        })
+            .get(branch)
+            .and_then(Node::elements)
+            .is_some_and(|mut schemas| {
+                schemas.any(|schema| has_property(root, schema, property, followed))
+            })
+    })
 }
 
 /// The segments above the definition joined with the text before the first
@@ -259,6 +285,26 @@ mod tests {
         assert_eq!(
             found(schema),
             Some(vec![("x/jobs.T".to_owned(), "x/jobs".to_owned())])
+        );
+    }
+
+    #[test]
+    fn follows_refs_and_nested_branches() {
+        let schema = r##"{"$defs": {"x": {
+            "jobs.Nested": {"allOf": [{"oneOf": [{"properties": {"table_update": {}}}]}]},
+            "jobs.Alias": {"$ref": "#/$defs/x/jobs.Shared"},
+            "jobs.Shared": {"type": "object", "properties": {"table_update": {}}},
+            "jobs.Cycle": {"oneOf": [{"$ref": "#/$defs/x/jobs.Loop"}]},
+            "jobs.Loop": {"oneOf": [{"$ref": "#/$defs/x/jobs.Cycle"}]},
+            "jobs.Dangling": {"$ref": "#/$defs/x/missing"}
+        }}}"##;
+        assert_eq!(
+            found(schema),
+            Some(vec![
+                ("x/jobs.Alias".to_owned(), "x/jobs".to_owned()),
+                ("x/jobs.Nested".to_owned(), "x/jobs".to_owned()),
+                ("x/jobs.Shared".to_owned(), "x/jobs".to_owned()),
+            ])
         );
     }
 

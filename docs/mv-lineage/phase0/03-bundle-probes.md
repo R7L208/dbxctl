@@ -47,9 +47,10 @@ segment, so the trigger definition is at
 `$defs/github.com/databricks/databricks-sdk-go/service/jobs.TriggerSettings`.
 A path segment holds only objects, so an object is a definition if it is
 empty, has a member that is not an object, or is the target of a `$ref`; any
-other object is a path segment. A definition declares `table_update` if its own `properties`,
-or the `properties` of one of its `oneOf`, `anyOf`, or `allOf` branches,
-contain it. Each definition's package is its full import path. Verdicts name
+other object is a path segment. A definition declares `table_update` if its
+own `properties` contain it, or if a `oneOf`, `anyOf`, or `allOf` branch at
+any depth, or a schema it names with `$ref`, declares it. Each `$ref` is
+followed once, so a cycle ends. Each definition's package is its full import path. Verdicts name
 SDK service packages without the `github.com/databricks/databricks-sdk-go/service/`
 prefix, so only the SDK's package is `jobs`; any other package keeps its full
 path.
