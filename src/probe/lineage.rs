@@ -1,5 +1,11 @@
+pub(crate) mod api;
 pub(crate) mod cli;
+pub(crate) mod v11;
+pub(crate) mod v2;
+pub(crate) mod v3;
+pub(crate) mod v4;
 pub(crate) mod v6;
+pub(crate) mod v9;
 
 use std::collections::HashSet;
 use std::ffi::{OsStr, OsString};
@@ -20,6 +26,12 @@ pub(crate) type Runner = fn(&Context<'_>) -> Result<Finding, String>;
 pub(crate) fn runner(check: CheckId) -> Option<Runner> {
     match check {
         CheckId::Cli => Some(cli::run),
+        CheckId::Api => Some(api::run),
+        CheckId::V2 => Some(v2::run),
+        CheckId::V3 => Some(v3::run),
+        CheckId::V11 => Some(v11::run),
+        CheckId::V9 => Some(v9::run),
+        CheckId::V4 => Some(v4::run),
         CheckId::V6 => Some(v6::run),
         _ => None,
     }
@@ -156,9 +168,7 @@ pub(crate) struct LineageOptions {
     pub(crate) bundle_root: Option<OsString>,
     pub(crate) target: Option<OsString>,
     pub(crate) profile: Option<OsString>,
-    #[allow(dead_code)] // Used by the SQL probes (#33)
     pub(crate) warehouse_id: Option<OsString>,
-    #[allow(dead_code)] // Used by the catalog-scoped probes (#33)
     pub(crate) scope_catalog: Option<OsString>,
     pub(crate) only: Option<Vec<String>>,
     #[allow(dead_code)] // Used by #37
@@ -372,21 +382,25 @@ mod tests {
     }
 
     #[test]
-    fn unimplemented_checks_need_no_warehouse_or_catalog() {
-        // v2 and v3 read the warehouse and catalog once #33 implements them;
-        // until then they are skipped, so neither option is required.
-        let input = args(&[
-            "--bundle-root",
-            "/tmp",
-            "--target",
-            "dev",
-            "--only",
-            "v2,v3",
-        ]);
-        let mut parser = Parser::new(args_refs(&input));
-        let opts = parse_lineage_options(&mut parser).unwrap();
-        assert!(opts.warehouse_id.is_none());
-        assert!(opts.scope_catalog.is_none());
+    fn implemented_sql_checks_require_their_inputs() {
+        let parse = |extra: &[&str]| {
+            let mut values = vec!["--bundle-root", "/tmp", "--target", "dev"];
+            values.extend_from_slice(extra);
+            let input = args(&values);
+            let mut parser = Parser::new(args_refs(&input));
+            parse_lineage_options(&mut parser)
+        };
+        assert_eq!(
+            parse(&["--only", "v2,v3"]).unwrap_err(),
+            "--warehouse-id is required by selected checks: v2, v3"
+        );
+        assert_eq!(
+            parse(&["--only", "v2,v3", "--warehouse-id", "w"]).unwrap_err(),
+            "--scope-catalog is required by selected checks: v3"
+        );
+        // `api` reads neither.
+        let opts = parse(&["--only", "api"]).unwrap();
+        assert!(opts.warehouse_id.is_none() && opts.scope_catalog.is_none());
     }
 
     #[test]
@@ -400,12 +414,24 @@ mod tests {
     }
 
     #[test]
-    fn only_the_cli_and_v6_checks_are_implemented() {
+    fn the_cli_api_sql_and_v6_checks_are_implemented() {
         let implemented: Vec<_> = CheckId::ALL
             .into_iter()
             .filter(|&id| is_implemented(id))
             .collect();
-        assert_eq!(implemented, [CheckId::Cli, CheckId::V6]);
+        assert_eq!(
+            implemented,
+            [
+                CheckId::Cli,
+                CheckId::Api,
+                CheckId::V2,
+                CheckId::V3,
+                CheckId::V11,
+                CheckId::V9,
+                CheckId::V4,
+                CheckId::V6,
+            ]
+        );
     }
 
     /// Parses `extra` after the required options as if `implemented` named
@@ -422,13 +448,13 @@ mod tests {
     }
 
     /// Parses `extra` as if every check were implemented, so the
-    /// requirement errors run before #33 lands.
+    /// requirements hold whatever is implemented.
     fn parse_all_implemented(extra: &[&str]) -> Result<LineageOptions, String> {
         parse_implementing(|_| true, extra)
     }
 
-    /// Parses `extra` as if only `v2` were implemented, as partway
-    /// through #33.
+    /// Parses `extra` as if only `v2` were implemented, as when a step
+    /// issue lands its checks one at a time.
     fn parse_only_v2_implemented(extra: &[&str]) -> Result<LineageOptions, String> {
         parse_implementing(|id| id == CheckId::V2, extra)
     }
