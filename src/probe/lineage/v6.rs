@@ -237,11 +237,17 @@ mod tests {
         })
         .expect("run check");
         assert_eq!(finding.state(), State::Failed);
+        let reason = finding.reason().unwrap_or_default();
+        assert!(
+            !reason.contains("no-such-databricks"),
+            "reasons must not copy raw error text: {reason}"
+        );
         let record =
             fs::read_to_string(run_dir.path().join("evidence/v6/schema.json")).expect("read");
         assert!(
             record.contains("\"error\": \"could not execute databricks: "),
             "{record}"
         );
+        assert!(!record.contains("no-such-databricks"), "{record}");
     }
 }
