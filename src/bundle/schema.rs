@@ -5,8 +5,11 @@
 //! so the SDK's `jobs.TriggerSettings` lives at
 //! `$defs/github.com/databricks/databricks-sdk-go/service/jobs.TriggerSettings`.
 //! A path segment holds only objects, so an object is a definition if it is
-//! empty, has a member that is not an object, or is the target of a `$ref`.
-//! Any other object is a path segment.
+//! empty, has a member that is not an object, is the target of a `$ref`, or
+//! reads as a schema: every object member is a schema keyword, such as
+//! `properties` or `items`, holding what that keyword holds. Any other object
+//! is a path segment. A segment that happens to read as a schema, such as one
+//! named `properties` holding only definitions, is taken for a definition.
 
 use std::collections::{BTreeSet, HashSet};
 use std::time::Duration;
@@ -22,6 +25,31 @@ pub(crate) const SCHEMA_TIMEOUT: Duration = Duration::from_secs(60);
 const DEFS_REF: &str = "#/$defs/";
 /// Subschemas whose `properties` count as the definition's own, at any depth.
 const BRANCHES: [&str; 3] = ["allOf", "anyOf", "oneOf"];
+/// Keywords whose object value is one schema.
+const SCHEMA_KEYWORDS: [&str; 12] = [
+    "additionalItems",
+    "additionalProperties",
+    "contains",
+    "contentSchema",
+    "else",
+    "if",
+    "items",
+    "not",
+    "propertyNames",
+    "then",
+    "unevaluatedItems",
+    "unevaluatedProperties",
+];
+/// Keywords whose object value maps names to schemas.
+const MAP_KEYWORDS: [&str; 5] = [
+    "$defs",
+    "definitions",
+    "dependentSchemas",
+    "patternProperties",
+    "properties",
+];
+/// Keywords whose object value may be any JSON.
+const VALUE_KEYWORDS: [&str; 2] = ["const", "default"];
 
 /// The import path of every Go package with a definition that has a property
 /// named `property`, such as `github.com/databricks/databricks-sdk-go/service/jobs`
@@ -96,6 +124,28 @@ fn is_definition(node: Node<'_>, path: &[&str], targets: &HashSet<&str>) -> bool
     members.peek().is_none()
         || members.any(|(_, child)| child.kind() != Kind::Object)
         || targets.contains(pointer(path).as_str())
+        || is_schema(node)
+}
+
+/// Whether `node` reads as a schema: a boolean, or an object whose object
+/// members are all keywords holding what that keyword holds. Members that are
+/// not objects are annotations or constraints, which a segment never has.
+fn is_schema(node: Node<'_>) -> bool {
+    if node.kind() == Kind::Bool {
+        return true;
+    }
+    let Some(mut members) = node.members() else {
+        return false;
+    };
+    members.all(|(key, child)| {
+        child.kind() != Kind::Object
+            || VALUE_KEYWORDS.contains(&key)
+            || (SCHEMA_KEYWORDS.contains(&key) && is_schema(child))
+            || (MAP_KEYWORDS.contains(&key)
+                && child
+                    .members()
+                    .is_some_and(|mut schemas| schemas.all(|(_, schema)| is_schema(schema))))
+    })
 }
 
 /// The JSON Pointer to `path` below `$defs`, with `~` and `/` escaped.
@@ -237,6 +287,26 @@ mod tests {
             "pipelines.U": {"title": "U", "properties": {"table_update": {}}}
         }}}"#;
         assert_eq!(found(schema), Some(vec!["x/pipelines".to_owned()]));
+    }
+
+    #[test]
+    fn a_definition_of_keywords_alone_is_not_a_segment() {
+        // Only object members and no `$ref` to it, but each member is a
+        // keyword holding schemas, so this is a definition, not a segment.
+        let schema = r#"{"$defs": {"x": {
+            "jobs.T": {"properties": {"table_update": {}}},
+            "pipelines.U": {"properties": {
+                "table_update": {"items": {}},
+                "settings": {"type": "object", "properties": {"table_update": {}}}
+            }},
+            "compute.V": {"properties": {
+                "settings": {"type": "object", "properties": {"table_update": {}}}
+            }}
+        }}}"#;
+        assert_eq!(
+            found(schema),
+            Some(vec!["x/jobs".to_owned(), "x/pipelines".to_owned()])
+        );
     }
 
     #[test]
