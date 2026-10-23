@@ -363,7 +363,10 @@ impl CliRunner {
         let mut rows = Vec::new();
         let mut chunk = body.root().get("result");
         let mut owned: Document;
-        let mut last_index = None;
+        // The inline chunk counts too, so it cannot point back at itself.
+        let mut last_index = chunk
+            .and_then(|result| result.get("chunk_index"))
+            .and_then(Node::as_u64);
         loop {
             let next = match chunk {
                 Some(result) => {
@@ -1276,6 +1279,13 @@ mod tests {
                     get(&chunk0, r#"{"data_array":[],"next_chunk_index":0}"#),
                 ]
                 .concat(),
+                "does not follow",
+            ),
+            (
+                "transport-self-loop",
+                submit(&succeeded(
+                    r#"{"chunk_index":0,"data_array":[["1",null]],"next_chunk_index":0}"#,
+                )),
                 "does not follow",
             ),
             (
