@@ -1792,7 +1792,8 @@ mod tests {
         // Output with nothing to scrub is handed back, not copied.
         let plain = b"nothing to see\n".to_vec();
         let address = plain.as_ptr();
-        assert_eq!(scrub(plain).as_ptr(), address);
+        let returned = scrub(plain);
+        assert_eq!(returned.as_ptr(), address);
     }
 
     #[test]
