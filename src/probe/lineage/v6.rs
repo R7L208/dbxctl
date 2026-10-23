@@ -155,7 +155,7 @@ mod tests {
     use crate::probe::model::{Finding, State, Verdict};
     use crate::probe::orchestrator::Context;
     use crate::test_support::{
-        ScenarioCli, TempDir, assert_no_mutations, fake_databricks, stdout_line,
+        FakeTransport, ScenarioCli, TempDir, assert_no_mutations, fake_databricks, stdout_line,
     };
 
     /// The real nesting of `jobs.TriggerSettings`, trimmed from CLI 1.21.0.
@@ -174,6 +174,9 @@ mod tests {
         let finding = run(&Context {
             binary: cli.binary().as_os_str(),
             run: &run_dir,
+            transport: &FakeTransport::default(),
+            warehouse_id: None,
+            scope_catalog: None,
         })
         .expect("run check");
         (finding, cli.invocations(), temp)
@@ -364,6 +367,9 @@ mod tests {
         let finding = run(&Context {
             binary: missing.as_os_str(),
             run: &run_dir,
+            transport: &FakeTransport::default(),
+            warehouse_id: None,
+            scope_catalog: None,
         })
         .expect("run check");
         assert_eq!(finding.state(), State::Failed);

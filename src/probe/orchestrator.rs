@@ -14,6 +14,7 @@ use crate::exit::Exit;
 use crate::json::{Document, Value};
 use crate::probe::lineage::{self, LineageOptions};
 use crate::probe::model::{CheckId, Finding, State};
+use crate::transport::{CliRunner, Runner};
 
 const SUITE: &str = "lineage";
 /// Version of the `run.json` and `findings.json` layouts.
@@ -24,6 +25,13 @@ pub(crate) struct Context<'a> {
     /// The resolved Databricks CLI executable.
     pub(crate) binary: &'a OsStr,
     pub(crate) run: &'a RunDir,
+    /// The workspace, for the API and SQL checks: the CLI run from the
+    /// bundle root with the target and profile.
+    pub(crate) transport: &'a dyn Runner,
+    /// `--warehouse-id`, which the checks that run statements read.
+    pub(crate) warehouse_id: Option<&'a str>,
+    /// `--scope-catalog`, which the catalog-scoped checks read.
+    pub(crate) scope_catalog: Option<&'a str>,
 }
 
 /// A validated `probe run --suite lineage` request.
@@ -32,6 +40,8 @@ pub(crate) struct Plan {
     bundle_root: PathBuf,
     target: String,
     profile: Option<String>,
+    warehouse_id: Option<String>,
+    scope_catalog: Option<String>,
     /// Selected checks in canonical order.
     checks: Vec<CheckId>,
 }
@@ -48,16 +58,21 @@ impl Plan {
         let target =
             utf8("--target", options.target.as_deref())?.ok_or("option --target is required")?;
         let profile = utf8("--profile", options.profile.as_deref())?;
+        let warehouse_id = utf8("--warehouse-id", options.warehouse_id.as_deref())?;
+        let scope_catalog = utf8("--scope-catalog", options.scope_catalog.as_deref())?;
         Ok(Self {
             bundle_root: PathBuf::from(bundle_root),
             target,
             profile,
+            warehouse_id,
+            scope_catalog,
             checks: options.selected_checks(),
         })
     }
 }
 
-/// `run.json` records these as strings, so they must be valid UTF-8.
+/// `run.json` records these as strings, and the transport passes them to the
+/// CLI as text, so they must be valid UTF-8.
 fn utf8(option: &str, value: Option<&OsStr>) -> Result<Option<String>, String> {
     value
         .map(|value| {
@@ -103,9 +118,18 @@ fn complete(
         &run_document(plan, run_dir, started, None).into(),
     )?;
 
+    let transport = CliRunner::for_bundle(
+        binary,
+        &plan.bundle_root,
+        &plan.target,
+        plan.profile.as_deref(),
+    );
     let context = Context {
         binary,
         run: run_dir,
+        transport: &transport,
+        warehouse_id: plan.warehouse_id.as_deref(),
+        scope_catalog: plan.scope_catalog.as_deref(),
     };
     let findings = plan
         .checks
@@ -265,7 +289,7 @@ mod tests {
     use crate::probe::lineage::parse_lineage_options;
     use crate::probe::model::{CheckId, Finding, State};
     use crate::test_support::{
-        ScenarioCli, TempDir, assert_no_mutations, fake_databricks, read_tree,
+        FakeTransport, ScenarioCli, TempDir, assert_no_mutations, fake_databricks, read_tree,
     };
 
     const VERSION_SCENARIO: &str = include_str!("../../tests/fixtures/scenarios/cli-version.txt");
@@ -466,6 +490,9 @@ mod tests {
             &Context {
                 binary: cli.binary().as_os_str(),
                 run: &run_dir,
+                transport: &FakeTransport::default(),
+                warehouse_id: None,
+                scope_catalog: None,
             },
         )
         .expect_err("blocked evidence");
