@@ -12,10 +12,10 @@
 //! named `properties` holding only definitions, is taken for a definition.
 
 use std::borrow::Cow;
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeSet, HashMap};
 use std::time::Duration;
 
-use crate::json::{Kind, Node};
+use crate::json::{Kind, Node, unescape_token};
 
 /// The CLI arguments that print the schema. It needs no bundle or workspace.
 pub(crate) const SCHEMA_COMMAND: [&str; 2] = ["bundle", "schema"];
@@ -60,34 +60,61 @@ pub(crate) fn packages_with_property(schema: Node<'_>, property: &str) -> Option
     let defs = schema
         .get("$defs")
         .filter(|defs| defs.kind() == Kind::Object)?;
-    let mut targets = HashSet::new();
+    let mut targets = Targets::default();
     ref_targets(schema, &mut targets);
+    let mut search = Search {
+        root: schema,
+        property,
+        known: HashMap::new(),
+        open: HashMap::new(),
+    };
     let mut found = BTreeSet::new();
     collect(
-        schema,
         defs,
+        Some(&targets),
         &mut Vec::new(),
-        &targets,
-        property,
+        &mut search,
         &mut found,
     );
     Some(found)
 }
 
+/// The decoded `$defs` pointers that `$ref`s name, as a tree of path
+/// segments, so the walk can tell a ref target without building its pointer.
+#[derive(Default)]
+struct Targets {
+    /// Whether a `$ref` names the path that ends here.
+    named: bool,
+    below: HashMap<String, Targets>,
+}
+
+impl Targets {
+    fn insert(&mut self, pointer: &str) {
+        let mut node = self;
+        for token in pointer.split('/') {
+            let Some(segment) = unescape_token(token) else {
+                return;
+            };
+            node = node.below.entry(segment).or_default();
+        }
+        node.named = true;
+    }
+}
+
 /// Adds the decoded `$defs` pointer of every `$ref` in `node` to `targets`,
 /// without the `/$defs/` prefix.
-fn ref_targets(node: Node<'_>, targets: &mut HashSet<String>) {
+fn ref_targets(node: Node<'_>, targets: &mut Targets) {
     if let Some(members) = node.members() {
         for (key, child) in members {
-            let target = child
+            let pointer = child
                 .as_str()
                 .filter(|_| key == "$ref")
-                .and_then(ref_pointer)
-                .and_then(|pointer| pointer.strip_prefix(DEFS_POINTER).map(str::to_owned));
-            match target {
-                Some(target) => {
-                    targets.insert(target);
-                }
+                .and_then(ref_pointer);
+            match pointer
+                .as_deref()
+                .and_then(|pointer| pointer.strip_prefix(DEFS_POINTER))
+            {
+                Some(target) => targets.insert(target),
                 None => ref_targets(child, targets),
             }
         }
@@ -99,11 +126,10 @@ fn ref_targets(node: Node<'_>, targets: &mut HashSet<String>) {
 }
 
 fn collect<'a>(
-    root: Node<'a>,
     node: Node<'a>,
+    targets: Option<&Targets>,
     path: &mut Vec<&'a str>,
-    targets: &HashSet<String>,
-    property: &str,
+    search: &mut Search<'a, '_>,
     found: &mut BTreeSet<String>,
 ) {
     let Some(members) = node.members() else {
@@ -113,23 +139,25 @@ fn collect<'a>(
         if child.kind() != Kind::Object {
             continue;
         }
+        let below = targets.and_then(|targets| targets.below.get(key));
         path.push(key);
-        if is_definition(child, path, targets) {
-            if has_property(root, child, property, &mut HashSet::new()) {
+        if is_definition(child, below.is_some_and(|below| below.named)) {
+            if search.has_property(child).0 {
                 found.insert(package(path));
             }
         } else {
-            collect(root, child, path, targets, property, found);
+            collect(child, below, path, search, found);
         }
         path.pop();
     }
 }
 
-fn is_definition(node: Node<'_>, path: &[&str], targets: &HashSet<String>) -> bool {
+/// `named` says whether a `$ref` names `node`.
+fn is_definition(node: Node<'_>, named: bool) -> bool {
     let mut members = node.members().into_iter().flatten().peekable();
-    members.peek().is_none()
+    named
+        || members.peek().is_none()
         || members.any(|(_, child)| child.kind() != Kind::Object)
-        || targets.contains(pointer(path).as_str())
         || is_schema(node)
 }
 
@@ -154,46 +182,83 @@ fn is_schema(node: Node<'_>) -> bool {
     })
 }
 
-/// The JSON Pointer to `path` below `$defs`, with `~` and `/` escaped.
-fn pointer(path: &[&str]) -> String {
-    path.iter()
-        .map(|segment| segment.replace('~', "~0").replace('/', "~1"))
-        .collect::<Vec<_>>()
-        .join("/")
+/// The search for a property, which remembers what each `$ref` leads to so
+/// a ref that many definitions share is followed once.
+struct Search<'a, 'p> {
+    root: Node<'a>,
+    property: &'p str,
+    /// Whether the schema at each pointer declares the property, once known.
+    known: HashMap<String, bool>,
+    /// The pointers being followed, each with its depth in the chain of refs.
+    open: HashMap<String, usize>,
 }
 
-/// Whether `schema` declares `property` in its own `properties`, in a branch
-/// at any depth, or in a schema it refers to with a `$ref` into `root`.
-/// `followed` holds the refs already followed, so a cycle ends.
-fn has_property<'a>(
-    root: Node<'a>,
-    schema: Node<'a>,
-    property: &str,
-    followed: &mut HashSet<String>,
-) -> bool {
-    if schema
-        .get("properties")
-        .is_some_and(|properties| properties.get(property).is_some())
-    {
-        return true;
+/// A depth no open ref has: the result relies on no ref still being followed.
+const SETTLED: usize = usize::MAX;
+
+impl<'a> Search<'a, '_> {
+    /// Whether `schema` declares the property in its own `properties`, in a
+    /// branch at any depth, or in a schema it names with a `$ref`, and the
+    /// shallowest open ref a "no" relied on, or [`SETTLED`].
+    fn has_property(&mut self, schema: Node<'a>) -> (bool, usize) {
+        if schema
+            .get("properties")
+            .is_some_and(|properties| properties.get(self.property).is_some())
+        {
+            return (true, SETTLED);
+        }
+        let mut relied = SETTLED;
+        let pointer = schema
+            .get("$ref")
+            .and_then(Node::as_str)
+            .and_then(ref_pointer);
+        if let Some(pointer) = pointer {
+            match self.follow(&pointer) {
+                (true, _) => return (true, SETTLED),
+                (false, depth) => relied = relied.min(depth),
+            }
+        }
+        for branch in BRANCHES {
+            for schema in schema
+                .get(branch)
+                .and_then(Node::elements)
+                .into_iter()
+                .flatten()
+            {
+                match self.has_property(schema) {
+                    (true, _) => return (true, SETTLED),
+                    (false, depth) => relied = relied.min(depth),
+                }
+            }
+        }
+        (false, relied)
     }
-    let target = schema
-        .get("$ref")
-        .and_then(Node::as_str)
-        .and_then(ref_pointer)
-        .filter(|pointer| followed.insert(pointer.to_string()))
-        .and_then(|pointer| root.pointer(&pointer));
-    if target.is_some_and(|target| has_property(root, target, property, followed)) {
-        return true;
+
+    /// [`Self::has_property`] for the schema at `pointer`. A ref back to one
+    /// still being followed is a cycle and adds nothing. A "no" is remembered
+    /// only once no ref it relied on is still open, since an open ref may
+    /// still turn out to declare the property.
+    fn follow(&mut self, pointer: &str) -> (bool, usize) {
+        if let Some(&found) = self.known.get(pointer) {
+            return (found, SETTLED);
+        }
+        if let Some(&depth) = self.open.get(pointer) {
+            return (false, depth);
+        }
+        let Some(schema) = self.root.pointer(pointer) else {
+            self.known.insert(pointer.to_owned(), false);
+            return (false, SETTLED);
+        };
+        let depth = self.open.len();
+        self.open.insert(pointer.to_owned(), depth);
+        let (found, relied) = self.has_property(schema);
+        self.open.remove(pointer);
+        if found || relied >= depth {
+            self.known.insert(pointer.to_owned(), found);
+            return (found, SETTLED);
+        }
+        (false, relied)
     }
-    BRANCHES.iter().any(|branch| {
-        schema
-            .get(branch)
-            .and_then(Node::elements)
-            .is_some_and(|mut schemas| {
-                schemas.any(|schema| has_property(root, schema, property, followed))
-            })
-    })
 }
 
 /// The JSON Pointer in a `$ref` to this document: its fragment after `#`,
@@ -366,6 +431,28 @@ mod tests {
                 "x/alias".to_owned(),
                 "x/nested".to_owned(),
                 "x/shared".to_owned(),
+            ])
+        );
+    }
+
+    #[test]
+    fn a_ref_seen_inside_a_cycle_is_not_remembered_as_no() {
+        // Following `d.T` reaches `q.T` while `p.T` is still open, so `q.T`
+        // looks like a "no" there. `p.T` then finds the property, and `e.T`,
+        // which reaches it only through `q.T`, must find it too.
+        let schema = r##"{"$defs": {"x": {
+            "d.T": {"$ref": "#/$defs/x/p.T"},
+            "e.T": {"$ref": "#/$defs/x/q.T"},
+            "p.T": {"oneOf": [{"$ref": "#/$defs/x/q.T"}, {"properties": {"table_update": {}}}]},
+            "q.T": {"$ref": "#/$defs/x/p.T"}
+        }}}"##;
+        assert_eq!(
+            found(schema),
+            Some(vec![
+                "x/d".to_owned(),
+                "x/e".to_owned(),
+                "x/p".to_owned(),
+                "x/q".to_owned(),
             ])
         );
     }
