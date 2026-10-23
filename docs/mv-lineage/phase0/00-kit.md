@@ -48,7 +48,9 @@ dbxctl probe run --suite lineage --bundle-root <path> --target <non-prod> \
   --only cli,validate,plan,state,v8,v1
 ```
 
-Full read-only suite:
+Full read-only suite. Pass both options so the command keeps working as the
+SQL checks land. Until #32 and #33 implement the remaining checks, they are
+skipped and the run exits 10, and neither option is read yet:
 
 ```console
 dbxctl probe run --suite lineage --bundle-root <path> --target <non-prod> \
