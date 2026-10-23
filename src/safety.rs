@@ -9,11 +9,12 @@ const READ_STARTS: [&str; 5] = ["DESC", "DESCRIBE", "SELECT", "SHOW", "WITH"];
 /// Words that start a statement that writes or changes state. One anywhere
 /// outside a literal, quoted identifier, or comment refuses the statement,
 /// which also catches a write after a common table expression such as
-/// `WITH t AS (…) INSERT INTO …`. Quote an identifier with one of these names.
-const WRITE_WORDS: [&str; 21] = [
+/// `WITH t AS (…) INSERT INTO …`. `INTO` is refused too, so no form of
+/// `SELECT … INTO` can write. Quote an identifier with one of these names.
+const WRITE_WORDS: [&str; 22] = [
     "ALTER", "ANALYZE", "CACHE", "CALL", "COPY", "CREATE", "DELETE", "DROP", "GRANT", "INSERT",
-    "LOAD", "MERGE", "MSCK", "OPTIMIZE", "REFRESH", "RESTORE", "REVOKE", "TRUNCATE", "UNCACHE",
-    "UPDATE", "VACUUM",
+    "INTO", "LOAD", "MERGE", "MSCK", "OPTIMIZE", "REFRESH", "RESTORE", "REVOKE", "TRUNCATE",
+    "UNCACHE", "UPDATE", "VACUUM",
 ];
 
 /// Whether `sql` is a single statement that only reads: `SELECT`,
@@ -212,6 +213,7 @@ mod tests {
             "SELECT 'DROP TABLE t; -- not a comment' AS text",
             "SELECT \"it\\\"s\" AS text, 'it\\'s' AS other",
             "SELECT * FROM `update` JOIN `a``b` USING (id)",
+            "SELECT `into` FROM t",
             "SELECT 'naïve ☃' AS text, x·y FROM t",
             "SELECT r'C:\\temp\\' AS path, R\"\\d+\" AS pattern",
             "SELECT r FROM (SELECT 'a' AS r)",
@@ -255,6 +257,8 @@ mod tests {
             "USE CATALOG main",
             "EXPLAIN SELECT 1",
             "SELECT * FROM update",
+            "SELECT * INTO u FROM t",
+            "WITH t AS (SELECT 1 AS x) SELECT x INTO v FROM t",
             "OPTIMIZE t",
         ] {
             assert!(!is_read_statement(sql), "{sql}");
