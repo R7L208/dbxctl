@@ -435,6 +435,26 @@ mod tests {
     }
 
     #[test]
+    fn only_implemented_checks_run() {
+        // `CheckId::is_implemented` decides which inputs are required, so it
+        // must match the checks `run_check` actually runs.
+        let (temp, cli) = setup("orchestrator-implemented", VERSION_SCENARIO);
+        let bundle = temp.path().join("bundle");
+        let plan = plan(&bundle, &[]).expect("plan");
+        let outcome =
+            run(&plan, cli.binary().as_os_str(), &FixedClock(FIXED_TIME)).expect("run probe");
+        assert_eq!(outcome.findings.len(), CheckId::ALL.len());
+        for finding in &outcome.findings {
+            assert_eq!(
+                finding.state() == State::Skipped,
+                !finding.check().is_implemented(),
+                "{}",
+                finding.check()
+            );
+        }
+    }
+
+    #[test]
     fn unresolved_cli_check_sets_the_unresolved_exit() {
         let (temp, cli) = setup("orchestrator-unknown", "case\narg version\nexit 2\n");
         let bundle = temp.path().join("bundle");

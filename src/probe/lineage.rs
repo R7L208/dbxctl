@@ -111,39 +111,24 @@ fn determine_selected_checks(only: Option<&Vec<String>>) -> Vec<CheckId> {
     }
 }
 
-/// Check resource requirements and collect checks that need each resource.
+/// The selected checks that need a warehouse and a scope catalog, in
+/// canonical order. Only checks for which `implemented` holds count: the
+/// others are reported as skipped and never read either option.
 fn check_resource_requirements(
     selected_checks: &[CheckId],
-) -> (bool, bool, Vec<&'static str>, Vec<&'static str>) {
-    let mut needs_warehouse = false;
-    let mut needs_catalog = false;
-
-    for &check_id in selected_checks {
-        let reqs = check_requirements(check_id);
-        if reqs.needs_warehouse {
-            needs_warehouse = true;
-        }
-        if reqs.needs_catalog {
-            needs_catalog = true;
-        }
-    }
-
-    let warehouse_checks: Vec<&'static str> = selected_checks
-        .iter()
-        .filter(|&&id| check_requirements(id).needs_warehouse)
-        .map(|id| id.as_str())
-        .collect();
-    let catalog_checks: Vec<&'static str> = selected_checks
-        .iter()
-        .filter(|&&id| check_requirements(id).needs_catalog)
-        .map(|id| id.as_str())
-        .collect();
-
+    implemented: fn(CheckId) -> bool,
+) -> (Vec<&'static str>, Vec<&'static str>) {
+    let needing = |needs: fn(&CheckRequirements) -> bool| {
+        selected_checks
+            .iter()
+            .copied()
+            .filter(|&id| implemented(id) && needs(&check_requirements(id)))
+            .map(CheckId::as_str)
+            .collect()
+    };
     (
-        needs_warehouse,
-        needs_catalog,
-        warehouse_checks,
-        catalog_checks,
+        needing(|reqs| reqs.needs_warehouse),
+        needing(|reqs| reqs.needs_catalog),
     )
 }
 
@@ -213,17 +198,17 @@ pub(crate) fn parse_lineage_options(parser: &mut Parser) -> Result<LineageOption
     let selected_checks = determine_selected_checks(only.as_ref());
 
     // Check resource requirements
-    let (needs_warehouse, needs_catalog, warehouse_checks, catalog_checks) =
-        check_resource_requirements(&selected_checks);
+    let (warehouse_checks, catalog_checks) =
+        check_resource_requirements(&selected_checks, CheckId::is_implemented);
 
-    if needs_warehouse && warehouse_id.is_none() {
+    if !warehouse_checks.is_empty() && warehouse_id.is_none() {
         return Err(format!(
             "--warehouse-id is required by selected checks: {}",
             warehouse_checks.join(", ")
         ));
     }
 
-    if needs_catalog && scope_catalog.is_none() {
+    if !catalog_checks.is_empty() && scope_catalog.is_none() {
         return Err(format!(
             "--scope-catalog is required by selected checks: {}",
             catalog_checks.join(", ")
@@ -308,30 +293,37 @@ mod tests {
     }
 
     #[test]
-    fn warehouse_required_when_v2_selected() {
-        let input = args(&["--bundle-root", "/tmp", "--target", "dev", "--only", "v2"]);
-        let mut parser = Parser::new(args_refs(&input));
-        let error = parse_lineage_options(&mut parser).unwrap_err();
-        assert!(error.contains("--warehouse-id is required"));
-        assert!(error.contains("v2"));
-    }
-
-    #[test]
-    fn catalog_required_when_v3_selected() {
+    fn unimplemented_checks_need_no_warehouse_or_catalog() {
+        // v2 and v3 read the warehouse and catalog once #33 implements them;
+        // until then they are skipped, so neither option is required.
         let input = args(&[
             "--bundle-root",
             "/tmp",
             "--target",
             "dev",
             "--only",
-            "v3",
-            "--warehouse-id",
-            "w1",
+            "v2,v3",
         ]);
         let mut parser = Parser::new(args_refs(&input));
-        let error = parse_lineage_options(&mut parser).unwrap_err();
-        assert!(error.contains("--scope-catalog is required"));
-        assert!(error.contains("v3"));
+        let opts = parse_lineage_options(&mut parser).unwrap();
+        assert!(opts.warehouse_id.is_none());
+        assert!(opts.scope_catalog.is_none());
+    }
+
+    #[test]
+    fn requirements_count_only_implemented_checks() {
+        let (warehouse, catalog) = check_resource_requirements(&CheckId::ALL, |_| true);
+        assert_eq!(warehouse, ["v2", "v3", "v11", "v9", "v4"]);
+        assert_eq!(catalog, ["v3", "v11"]);
+
+        let (warehouse, catalog) =
+            check_resource_requirements(&CheckId::ALL, |id| id == CheckId::V3);
+        assert_eq!(warehouse, ["v3"]);
+        assert_eq!(catalog, ["v3"]);
+
+        let (warehouse, catalog) =
+            check_resource_requirements(&CheckId::ALL, CheckId::is_implemented);
+        assert!(warehouse.is_empty() && catalog.is_empty());
     }
 
     #[test]

@@ -570,52 +570,13 @@ fn probe_run_rejects_empty_check_id() {
     assert!(stderr.contains("empty check ID"));
 }
 
-fn probe_run(extra: &[&str]) -> std::process::Output {
-    dbxctl()
-        .args([
-            "probe",
-            "run",
-            "--suite",
-            "lineage",
-            "--bundle-root",
-            "/tmp",
-            "--target",
-            "dev",
-        ])
-        .args(extra)
-        .output()
-        .expect("run dbxctl probe run")
-}
-
 #[test]
-fn probe_run_without_only_requires_warehouse_for_all_checks() {
-    // With no --only, every check is selected, so the warehouse requirement
-    // lists every warehouse-backed check in the contract's canonical order.
-    let output = probe_run(&[]);
-    assert_eq!(output.status.code(), Some(1));
-    assert_eq!(
-        String::from_utf8_lossy(&output.stderr),
-        "error: --warehouse-id is required by selected checks: v2, v3, v11, v9, v4\n"
-    );
-}
-
-#[test]
-fn probe_run_without_only_requires_scope_catalog_for_catalog_checks() {
-    let output = probe_run(&["--warehouse-id", "w"]);
-    assert_eq!(output.status.code(), Some(1));
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        stderr.starts_with("error: --scope-catalog is required by selected checks: v3"),
-        "{stderr}"
-    );
-}
-
-#[test]
-fn probe_run_with_all_required_options_passes_validation() {
-    // Every check runs; all but `cli` are not implemented yet, so the run
-    // completes with unresolved findings.
+fn probe_run_without_only_runs_every_check() {
+    // Every check is selected. Only `cli` is implemented, so no
+    // --warehouse-id or --scope-catalog is needed, and the skipped checks
+    // leave the run unresolved.
     let fixture = ProbeFixture::new("probe-all-checks", CLI_VERSION_SCENARIO);
-    let output = fixture.run(&["--warehouse-id", "w", "--scope-catalog", "c"]);
+    let output = fixture.run(&[]);
     assert_eq!(output.status.code(), Some(10));
     assert!(output.stderr.is_empty());
     let stdout = String::from_utf8_lossy(&output.stdout);
