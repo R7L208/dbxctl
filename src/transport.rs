@@ -555,17 +555,31 @@ fn http_status(stderr: &str) -> Option<u16> {
 }
 
 /// The JSON error body the CLI prints after a failed request: the first
-/// line that starts with `{` from which the rest of the log parses.
+/// object that starts a line, ending on that line when it closes there or
+/// else on the next line that starts with `}`. Output after it is ignored,
+/// and each line is read once.
 fn error_body(stderr: &str) -> Option<Document> {
+    let mut lines = stderr.split_inclusive('\n');
     let mut offset = 0;
-    for line in stderr.split_inclusive('\n') {
-        if line.starts_with('{')
-            && let Ok(document) = json::parse(&stderr[offset..])
+    while let Some(line) = lines.next() {
+        let start = offset;
+        offset += line.len();
+        if !line.starts_with('{') {
+            continue;
+        }
+        if !line.trim_end().ends_with('}') {
+            for next in lines.by_ref() {
+                offset += next.len();
+                if next.starts_with('}') {
+                    break;
+                }
+            }
+        }
+        if let Ok(document) = json::parse(&stderr[start..offset])
             && document.root().kind() == Kind::Object
         {
             return Some(document);
         }
-        offset += line.len();
     }
     None
 }
@@ -734,7 +748,7 @@ mod tests {
 
     use super::{
         CliRunner, Error, Limits, ResultSet, Runner, STATEMENT_EVIDENCE_BYTES, STATEMENTS,
-        http_status, scrub, scrubbed, submit_body,
+        error_body, http_status, scrub, scrubbed, submit_body,
     };
     use crate::databricks::Captured;
     use crate::json::Node;
@@ -1463,6 +1477,20 @@ mod tests {
         }
         let binary = b"plain \xff output\n";
         assert_eq!(scrub(binary), binary);
+    }
+
+    #[test]
+    fn reads_the_error_body_before_any_later_output() {
+        let code = |stderr: &str| {
+            error_body(stderr)
+                .and_then(|body| body.root().get("error_code")?.as_str().map(str::to_owned))
+        };
+        let pretty = "< HTTP/1.1 404 Not Found\n{\n  \"error_code\": \"NOT_FOUND\",\n  \"detail\": {\n    \"x\": 1\n  }\n}\nError: NOT_FOUND\n";
+        assert_eq!(code(pretty).as_deref(), Some("NOT_FOUND"));
+        let compact = "{not json}\n{\"error_code\":\"BAD\"}\nError: BAD\n";
+        assert_eq!(code(compact).as_deref(), Some("BAD"));
+        assert_eq!(code("{\n  \"unterminated\": 1\n"), None);
+        assert_eq!(code("[1]\n"), None);
     }
 
     #[test]
