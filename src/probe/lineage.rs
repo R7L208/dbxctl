@@ -10,6 +10,25 @@ use crate::databricks::run_captured;
 use crate::probe::model::{CheckId, Finding};
 use crate::probe::orchestrator::Context;
 
+/// Runs one check and returns its finding.
+pub(crate) type Runner = fn(&Context<'_>) -> Result<Finding, String>;
+
+/// The runner for `check`, or `None` until its step issue implements it. This
+/// is the only list of implemented checks: the orchestrator runs these and
+/// reports the rest as skipped, and only these require their inputs. Add a
+/// check here when its step issue lands.
+pub(crate) fn runner(check: CheckId) -> Option<Runner> {
+    match check {
+        CheckId::Cli => Some(cli::run),
+        CheckId::V6 => Some(v6::run),
+        _ => None,
+    }
+}
+
+fn is_implemented(check: CheckId) -> bool {
+    runner(check).is_some()
+}
+
 /// Check requirements: whether each check needs warehouse-id and/or scope-catalog.
 /// Derived from #23 checks table: checks using Statement Execution need warehouse-id;
 /// checks using catalog-scoped probes need scope-catalog.
@@ -115,39 +134,20 @@ fn determine_selected_checks(only: Option<&Vec<String>>) -> Vec<CheckId> {
     }
 }
 
-/// Check resource requirements and collect checks that need each resource.
-fn check_resource_requirements(
-    selected_checks: &[CheckId],
-) -> (bool, bool, Vec<&'static str>, Vec<&'static str>) {
-    let mut needs_warehouse = false;
-    let mut needs_catalog = false;
-
-    for &check_id in selected_checks {
-        let reqs = check_requirements(check_id);
-        if reqs.needs_warehouse {
-            needs_warehouse = true;
-        }
-        if reqs.needs_catalog {
-            needs_catalog = true;
-        }
-    }
-
-    let warehouse_checks: Vec<&'static str> = selected_checks
-        .iter()
-        .filter(|&&id| check_requirements(id).needs_warehouse)
-        .map(|id| id.as_str())
-        .collect();
-    let catalog_checks: Vec<&'static str> = selected_checks
-        .iter()
-        .filter(|&&id| check_requirements(id).needs_catalog)
-        .map(|id| id.as_str())
-        .collect();
-
+/// The checks in `checks` that need a warehouse and a scope catalog, in
+/// canonical order.
+fn check_resource_requirements(checks: &[CheckId]) -> (Vec<&'static str>, Vec<&'static str>) {
+    let needing = |needs: fn(&CheckRequirements) -> bool| {
+        checks
+            .iter()
+            .copied()
+            .filter(|&id| needs(&check_requirements(id)))
+            .map(CheckId::as_str)
+            .collect()
+    };
     (
-        needs_warehouse,
-        needs_catalog,
-        warehouse_checks,
-        catalog_checks,
+        needing(|reqs| reqs.needs_warehouse),
+        needing(|reqs| reqs.needs_catalog),
     )
 }
 
@@ -181,6 +181,16 @@ impl LineageOptions {
 }
 
 pub(crate) fn parse_lineage_options(parser: &mut Parser) -> Result<LineageOptions, String> {
+    parse_with(parser, is_implemented)
+}
+
+/// Parses the options, requiring a warehouse and catalog only for the
+/// selected checks for which `implemented` holds. Tests pass `|_| true` to
+/// exercise requirements that no implemented check has yet.
+fn parse_with(
+    parser: &mut Parser,
+    implemented: fn(CheckId) -> bool,
+) -> Result<LineageOptions, String> {
     let bundle_root = parser
         .option("bundle-root")?
         .ok_or("option --bundle-root is required")?
@@ -213,21 +223,19 @@ pub(crate) fn parse_lineage_options(parser: &mut Parser) -> Result<LineageOption
 
     let promote_to = parser.option("promote-to")?.map(OsStr::to_os_string);
 
-    // Determine selected checks in canonical order
-    let selected_checks = determine_selected_checks(only.as_ref());
+    // Only implemented checks read their inputs; the rest are skipped.
+    let mut running_checks = determine_selected_checks(only.as_ref());
+    running_checks.retain(|&id| implemented(id));
+    let (warehouse_checks, catalog_checks) = check_resource_requirements(&running_checks);
 
-    // Check resource requirements
-    let (needs_warehouse, needs_catalog, warehouse_checks, catalog_checks) =
-        check_resource_requirements(&selected_checks);
-
-    if needs_warehouse && warehouse_id.is_none() {
+    if !warehouse_checks.is_empty() && warehouse_id.is_none() {
         return Err(format!(
             "--warehouse-id is required by selected checks: {}",
             warehouse_checks.join(", ")
         ));
     }
 
-    if needs_catalog && scope_catalog.is_none() {
+    if !catalog_checks.is_empty() && scope_catalog.is_none() {
         return Err(format!(
             "--scope-catalog is required by selected checks: {}",
             catalog_checks.join(", ")
@@ -364,30 +372,123 @@ mod tests {
     }
 
     #[test]
-    fn warehouse_required_when_v2_selected() {
-        let input = args(&["--bundle-root", "/tmp", "--target", "dev", "--only", "v2"]);
-        let mut parser = Parser::new(args_refs(&input));
-        let error = parse_lineage_options(&mut parser).unwrap_err();
-        assert!(error.contains("--warehouse-id is required"));
-        assert!(error.contains("v2"));
-    }
-
-    #[test]
-    fn catalog_required_when_v3_selected() {
+    fn unimplemented_checks_need_no_warehouse_or_catalog() {
+        // v2 and v3 read the warehouse and catalog once #33 implements them;
+        // until then they are skipped, so neither option is required.
         let input = args(&[
             "--bundle-root",
             "/tmp",
             "--target",
             "dev",
             "--only",
-            "v3",
-            "--warehouse-id",
-            "w1",
+            "v2,v3",
         ]);
         let mut parser = Parser::new(args_refs(&input));
-        let error = parse_lineage_options(&mut parser).unwrap_err();
-        assert!(error.contains("--scope-catalog is required"));
-        assert!(error.contains("v3"));
+        let opts = parse_lineage_options(&mut parser).unwrap();
+        assert!(opts.warehouse_id.is_none());
+        assert!(opts.scope_catalog.is_none());
+    }
+
+    #[test]
+    fn requirements_follow_the_check_table() {
+        let (warehouse, catalog) = check_resource_requirements(&CheckId::ALL);
+        assert_eq!(warehouse, ["v2", "v3", "v11", "v9", "v4"]);
+        assert_eq!(catalog, ["v3", "v11"]);
+
+        let (warehouse, catalog) = check_resource_requirements(&[CheckId::Cli, CheckId::V6]);
+        assert!(warehouse.is_empty() && catalog.is_empty());
+    }
+
+    #[test]
+    fn only_the_cli_and_v6_checks_are_implemented() {
+        let implemented: Vec<_> = CheckId::ALL
+            .into_iter()
+            .filter(|&id| is_implemented(id))
+            .collect();
+        assert_eq!(implemented, [CheckId::Cli, CheckId::V6]);
+    }
+
+    /// Parses `extra` after the required options as if `implemented` named
+    /// the implemented checks.
+    fn parse_implementing(
+        implemented: fn(CheckId) -> bool,
+        extra: &[&str],
+    ) -> Result<LineageOptions, String> {
+        let mut values = vec!["--bundle-root", "/tmp", "--target", "dev"];
+        values.extend_from_slice(extra);
+        let input = args(&values);
+        let mut parser = Parser::new(args_refs(&input));
+        parse_with(&mut parser, implemented)
+    }
+
+    /// Parses `extra` as if every check were implemented, so the
+    /// requirement errors run before #33 lands.
+    fn parse_all_implemented(extra: &[&str]) -> Result<LineageOptions, String> {
+        parse_implementing(|_| true, extra)
+    }
+
+    /// Parses `extra` as if only `v2` were implemented, as partway
+    /// through #33.
+    fn parse_only_v2_implemented(extra: &[&str]) -> Result<LineageOptions, String> {
+        parse_implementing(|id| id == CheckId::V2, extra)
+    }
+
+    #[test]
+    fn partial_implementation_names_only_implemented_checks() {
+        // v3, v11, v9, and v4 also read the warehouse once implemented, but
+        // only v2 is reported until then.
+        assert_eq!(
+            parse_only_v2_implemented(&[]).unwrap_err(),
+            "--warehouse-id is required by selected checks: v2"
+        );
+    }
+
+    #[test]
+    fn partial_implementation_defers_the_catalog_requirement() {
+        // v3 and v11 need --scope-catalog, but neither is implemented yet.
+        let opts = parse_only_v2_implemented(&["--warehouse-id", "w"]).unwrap();
+        assert_eq!(opts.warehouse_id.unwrap().to_string_lossy(), "w");
+        assert!(opts.scope_catalog.is_none());
+    }
+
+    #[test]
+    fn full_selection_requires_warehouse_for_every_sql_check() {
+        assert_eq!(
+            parse_all_implemented(&[]).unwrap_err(),
+            "--warehouse-id is required by selected checks: v2, v3, v11, v9, v4"
+        );
+    }
+
+    #[test]
+    fn warehouse_is_required_before_catalog() {
+        // v3 needs both; the missing warehouse is reported first.
+        assert_eq!(
+            parse_all_implemented(&["--only", "v3"]).unwrap_err(),
+            "--warehouse-id is required by selected checks: v3"
+        );
+    }
+
+    #[test]
+    fn catalog_required_once_warehouse_is_given() {
+        assert_eq!(
+            parse_all_implemented(&["--warehouse-id", "w"]).unwrap_err(),
+            "--scope-catalog is required by selected checks: v3, v11"
+        );
+    }
+
+    #[test]
+    fn requirements_list_selected_checks_in_canonical_order() {
+        assert_eq!(
+            parse_all_implemented(&["--only", "v4,v2"]).unwrap_err(),
+            "--warehouse-id is required by selected checks: v2, v4"
+        );
+    }
+
+    #[test]
+    fn both_options_satisfy_every_requirement() {
+        let opts = parse_all_implemented(&["--warehouse-id", "w", "--scope-catalog", "c"]).unwrap();
+        assert_eq!(opts.warehouse_id.unwrap().to_string_lossy(), "w");
+        assert_eq!(opts.scope_catalog.unwrap().to_string_lossy(), "c");
     }
 
     #[test]

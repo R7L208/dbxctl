@@ -138,10 +138,9 @@ fn complete(
 }
 
 fn run_check(check: CheckId, context: &Context<'_>) -> Result<Finding, String> {
-    match check {
-        CheckId::Cli => lineage::cli::run(context),
-        CheckId::V6 => lineage::v6::run(context),
-        _ => Ok(Finding::skipped(
+    match lineage::runner(check) {
+        Some(run) => run(context),
+        None => Ok(Finding::skipped(
             check,
             format!("not implemented yet; {} adds this check", check.issue()),
         )),
@@ -431,7 +430,7 @@ mod tests {
             report.contains("| `v7` | skipped |  | not implemented yet; #37 adds this check |"),
             "{report}"
         );
-        // Only the `cli` check runs a command so far.
+        // The skipped `v7` runs no command; only `cli` does.
         assert_eq!(cli.invocations(), [["version"]]);
     }
 
