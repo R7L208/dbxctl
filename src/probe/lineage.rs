@@ -162,6 +162,16 @@ impl LineageOptions {
 }
 
 pub(crate) fn parse_lineage_options(parser: &mut Parser) -> Result<LineageOptions, String> {
+    parse_with(parser, CheckId::is_implemented)
+}
+
+/// Parses the options, requiring a warehouse and catalog only for the
+/// selected checks for which `implemented` holds. Tests pass `|_| true` to
+/// exercise requirements that no implemented check has yet.
+fn parse_with(
+    parser: &mut Parser,
+    implemented: fn(CheckId) -> bool,
+) -> Result<LineageOptions, String> {
     let bundle_root = parser
         .option("bundle-root")?
         .ok_or("option --bundle-root is required")?
@@ -199,7 +209,7 @@ pub(crate) fn parse_lineage_options(parser: &mut Parser) -> Result<LineageOption
 
     // Check resource requirements
     let (warehouse_checks, catalog_checks) =
-        check_resource_requirements(&selected_checks, CheckId::is_implemented);
+        check_resource_requirements(&selected_checks, implemented);
 
     if !warehouse_checks.is_empty() && warehouse_id.is_none() {
         return Err(format!(
@@ -324,6 +334,56 @@ mod tests {
         let (warehouse, catalog) =
             check_resource_requirements(&CheckId::ALL, CheckId::is_implemented);
         assert!(warehouse.is_empty() && catalog.is_empty());
+    }
+
+    /// Parses `extra` after the required options as if every check were
+    /// implemented, so the requirement errors run before #33 lands.
+    fn parse_all_implemented(extra: &[&str]) -> Result<LineageOptions, String> {
+        let mut values = vec!["--bundle-root", "/tmp", "--target", "dev"];
+        values.extend_from_slice(extra);
+        let input = args(&values);
+        let mut parser = Parser::new(args_refs(&input));
+        parse_with(&mut parser, |_| true)
+    }
+
+    #[test]
+    fn full_selection_requires_warehouse_for_every_sql_check() {
+        assert_eq!(
+            parse_all_implemented(&[]).unwrap_err(),
+            "--warehouse-id is required by selected checks: v2, v3, v11, v9, v4"
+        );
+    }
+
+    #[test]
+    fn warehouse_is_required_before_catalog() {
+        // v3 needs both; the missing warehouse is reported first.
+        assert_eq!(
+            parse_all_implemented(&["--only", "v3"]).unwrap_err(),
+            "--warehouse-id is required by selected checks: v3"
+        );
+    }
+
+    #[test]
+    fn catalog_required_once_warehouse_is_given() {
+        assert_eq!(
+            parse_all_implemented(&["--warehouse-id", "w"]).unwrap_err(),
+            "--scope-catalog is required by selected checks: v3, v11"
+        );
+    }
+
+    #[test]
+    fn requirements_list_selected_checks_in_canonical_order() {
+        assert_eq!(
+            parse_all_implemented(&["--only", "v4,v2"]).unwrap_err(),
+            "--warehouse-id is required by selected checks: v2, v4"
+        );
+    }
+
+    #[test]
+    fn both_options_satisfy_every_requirement() {
+        let opts = parse_all_implemented(&["--warehouse-id", "w", "--scope-catalog", "c"]).unwrap();
+        assert_eq!(opts.warehouse_id.unwrap().to_string_lossy(), "w");
+        assert_eq!(opts.scope_catalog.unwrap().to_string_lossy(), "c");
     }
 
     #[test]
