@@ -8,7 +8,7 @@
 //! empty, has a member that is not an object, or is the target of a `$ref`.
 //! Any other object is a path segment.
 
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 use std::time::Duration;
 
 use crate::json::{Kind, Node};
@@ -23,29 +23,17 @@ const DEFS_REF: &str = "#/$defs/";
 /// Subschemas whose `properties` count as the definition's own, at any depth.
 const BRANCHES: [&str; 3] = ["allOf", "anyOf", "oneOf"];
 
-/// A definition in `$defs`.
-#[derive(Debug, Eq, Ord, PartialEq, PartialOrd)]
-pub(crate) struct Definition {
-    /// The slash-separated path below `$defs`.
-    pub(crate) path: String,
-    /// The import path of the Go package that declares it:
-    /// `github.com/databricks/databricks-sdk-go/service/jobs` for
-    /// `jobs.TriggerSettings` at that path.
-    pub(crate) package: String,
-}
-
-/// Every definition with a property named `property`, sorted by path, or
-/// `None` when `schema` has no `$defs` object.
-pub(crate) fn definitions_with_property(
-    schema: Node<'_>,
-    property: &str,
-) -> Option<Vec<Definition>> {
+/// The import path of every Go package with a definition that has a property
+/// named `property`, such as `github.com/databricks/databricks-sdk-go/service/jobs`
+/// for `jobs.TriggerSettings` at that path, or `None` when `schema` has no
+/// `$defs` object.
+pub(crate) fn packages_with_property(schema: Node<'_>, property: &str) -> Option<BTreeSet<String>> {
     let defs = schema
         .get("$defs")
         .filter(|defs| defs.kind() == Kind::Object)?;
     let mut targets = HashSet::new();
     ref_targets(schema, &mut targets);
-    let mut found = Vec::new();
+    let mut found = BTreeSet::new();
     collect(
         schema,
         defs,
@@ -54,7 +42,6 @@ pub(crate) fn definitions_with_property(
         property,
         &mut found,
     );
-    found.sort();
     Some(found)
 }
 
@@ -83,7 +70,7 @@ fn collect<'a>(
     path: &mut Vec<&'a str>,
     targets: &HashSet<&str>,
     property: &str,
-    found: &mut Vec<Definition>,
+    found: &mut BTreeSet<String>,
 ) {
     let Some(members) = node.members() else {
         return;
@@ -95,10 +82,7 @@ fn collect<'a>(
         path.push(key);
         if is_definition(child, path, targets) {
             if has_property(root, child, property, &mut HashSet::new()) {
-                found.push(Definition {
-                    path: path.join("/"),
-                    package: package(path),
-                });
+                found.insert(package(path));
             }
         } else {
             collect(root, child, path, targets, property, found);
@@ -173,17 +157,13 @@ fn package(path: &[&str]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{Definition, definitions_with_property};
+    use super::packages_with_property;
     use crate::json;
 
-    fn found(schema: &str) -> Option<Vec<(String, String)>> {
+    fn found(schema: &str) -> Option<Vec<String>> {
         let document = json::parse(schema).expect("valid schema");
-        definitions_with_property(document.root(), "table_update").map(|definitions| {
-            definitions
-                .into_iter()
-                .map(|Definition { path, package }| (path, package))
-                .collect()
-        })
+        packages_with_property(document.root(), "table_update")
+            .map(|packages| packages.into_iter().collect())
     }
 
     const SDK: &str = "github.com/databricks/databricks-sdk-go/service";
@@ -197,7 +177,7 @@ mod tests {
                     {"type": "object", "properties": {"table_update": {"$ref": "#/x"}}},
                     {"type": "string"}
                 ]},
-                "jobs.Direct": {"type": "object", "properties": {"table_update": {}}},
+                "compute.Direct": {"type": "object", "properties": {"table_update": {}}},
                 "jobs.Other": {"type": "object", "properties": {"periodic": {}}},
                 "pipelines.PipelineTrigger": {"allOf": [{"properties": {"table_update": {}}}]}
             }}}}
@@ -205,12 +185,9 @@ mod tests {
         assert_eq!(
             found(schema),
             Some(vec![
-                (format!("{SDK}/jobs.Direct"), format!("{SDK}/jobs")),
-                (format!("{SDK}/jobs.TriggerSettings"), format!("{SDK}/jobs")),
-                (
-                    format!("{SDK}/pipelines.PipelineTrigger"),
-                    format!("{SDK}/pipelines")
-                ),
+                format!("{SDK}/compute"),
+                format!("{SDK}/jobs"),
+                format!("{SDK}/pipelines"),
             ])
         );
     }
@@ -231,10 +208,7 @@ mod tests {
         }}}}}}"#;
         assert_eq!(
             found(schema),
-            Some(vec![(
-                "github.com/databricks/cli/libs/jobs.Settings".to_owned(),
-                "github.com/databricks/cli/libs/jobs".to_owned()
-            )])
+            Some(vec!["github.com/databricks/cli/libs/jobs".to_owned()])
         );
     }
 
@@ -242,10 +216,7 @@ mod tests {
     fn a_definition_without_a_package_is_its_own() {
         let schema =
             r#"{"$defs": {"Trigger": {"type": "object", "properties": {"table_update": {}}}}}"#;
-        assert_eq!(
-            found(schema),
-            Some(vec![("Trigger".to_owned(), "Trigger".to_owned())])
-        );
+        assert_eq!(found(schema), Some(vec!["Trigger".to_owned()]));
     }
 
     #[test]
@@ -254,13 +225,7 @@ mod tests {
         let schema = r#"{"$defs": {"libs": {"items": {"type": {
             "jobs.T": {"type": "object", "properties": {"table_update": {}}}
         }}}}}"#;
-        assert_eq!(
-            found(schema),
-            Some(vec![(
-                "libs/items/type/jobs.T".to_owned(),
-                "libs/items/type/jobs".to_owned()
-            )])
-        );
+        assert_eq!(found(schema), Some(vec!["libs/items/type/jobs".to_owned()]));
     }
 
     #[test]
@@ -269,12 +234,9 @@ mod tests {
         // subschema is not walked as a path segment.
         let schema = r#"{"$defs": {"x": {
             "jobs.T": {"required": ["a"], "not": {"properties": {"table_update": {}}}},
-            "jobs.U": {"title": "U", "properties": {"table_update": {}}}
+            "pipelines.U": {"title": "U", "properties": {"table_update": {}}}
         }}}"#;
-        assert_eq!(
-            found(schema),
-            Some(vec![("x/jobs.U".to_owned(), "x/jobs".to_owned())])
-        );
+        assert_eq!(found(schema), Some(vec!["x/pipelines".to_owned()]));
     }
 
     #[test]
@@ -282,28 +244,25 @@ mod tests {
         // Only objects inside, but a `$ref` names it, so it is not a segment.
         let schema = r##"{"properties": {"t": {"$ref": "#/$defs/x/jobs.T"}},
             "$defs": {"x": {"jobs.T": {"properties": {"table_update": {}}}}}}"##;
-        assert_eq!(
-            found(schema),
-            Some(vec![("x/jobs.T".to_owned(), "x/jobs".to_owned())])
-        );
+        assert_eq!(found(schema), Some(vec!["x/jobs".to_owned()]));
     }
 
     #[test]
     fn follows_refs_and_nested_branches() {
         let schema = r##"{"$defs": {"x": {
-            "jobs.Nested": {"allOf": [{"oneOf": [{"properties": {"table_update": {}}}]}]},
-            "jobs.Alias": {"$ref": "#/$defs/x/jobs.Shared"},
-            "jobs.Shared": {"type": "object", "properties": {"table_update": {}}},
-            "jobs.Cycle": {"oneOf": [{"$ref": "#/$defs/x/jobs.Loop"}]},
-            "jobs.Loop": {"oneOf": [{"$ref": "#/$defs/x/jobs.Cycle"}]},
-            "jobs.Dangling": {"$ref": "#/$defs/x/missing"}
+            "nested.T": {"allOf": [{"oneOf": [{"properties": {"table_update": {}}}]}]},
+            "alias.T": {"$ref": "#/$defs/x/shared.T"},
+            "shared.T": {"type": "object", "properties": {"table_update": {}}},
+            "cycle.T": {"oneOf": [{"$ref": "#/$defs/x/loop.T"}]},
+            "loop.T": {"oneOf": [{"$ref": "#/$defs/x/cycle.T"}]},
+            "dangling.T": {"$ref": "#/$defs/x/missing"}
         }}}"##;
         assert_eq!(
             found(schema),
             Some(vec![
-                ("x/jobs.Alias".to_owned(), "x/jobs".to_owned()),
-                ("x/jobs.Nested".to_owned(), "x/jobs".to_owned()),
-                ("x/jobs.Shared".to_owned(), "x/jobs".to_owned()),
+                "x/alias".to_owned(),
+                "x/nested".to_owned(),
+                "x/shared".to_owned(),
             ])
         );
     }

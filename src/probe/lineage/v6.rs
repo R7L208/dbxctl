@@ -6,7 +6,7 @@
 
 use std::collections::BTreeSet;
 
-use crate::bundle::schema::{SCHEMA_COMMAND, SCHEMA_TIMEOUT, definitions_with_property};
+use crate::bundle::schema::{SCHEMA_COMMAND, SCHEMA_TIMEOUT, packages_with_property};
 use crate::json;
 use crate::probe::lineage::{Step, run_step};
 use crate::probe::model::{CheckId, Finding, Verdict};
@@ -45,20 +45,17 @@ pub(crate) fn run(context: &Context<'_>) -> Result<Finding, String> {
             "`databricks bundle schema` did not print valid JSON",
         ));
     };
-    let Some(definitions) = definitions_with_property(schema.root(), PROPERTY) else {
+    let Some(packages) = packages_with_property(schema.root(), PROPERTY) else {
         return Ok(unknown("the bundle schema has no `$defs` object"));
     };
-    if definitions.is_empty() {
+    if packages.is_empty() {
         return Ok(unknown(
             "no definition in the bundle schema has a `table_update` property",
         ));
     }
-    let packages: BTreeSet<_> = definitions
+    let packages: BTreeSet<_> = packages
         .iter()
-        .map(|definition| {
-            let package = definition.package.as_str();
-            package.strip_prefix(SDK_SERVICE).unwrap_or(package)
-        })
+        .map(|package| package.strip_prefix(SDK_SERVICE).unwrap_or(package))
         .collect();
     Ok(Finding::resolved(
         CHECK,
