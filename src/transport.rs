@@ -145,7 +145,8 @@ pub(crate) enum Error {
         error_code: Option<String>,
         message: Option<String>,
     },
-    /// The statement had not finished at the deadline; a cancel was sent.
+    /// The statement had not finished, or its result had not been read, by
+    /// the deadline. A statement still running was sent a cancel.
     Timeout { statement_id: String },
     /// The statement succeeded, but the API kept only part of its result,
     /// as it does past the 25 MiB inline limit.
@@ -304,7 +305,7 @@ impl CliRunner {
             .to_owned();
         let status_path = format!("{STATEMENTS}/{statement_id}");
         match self.wait(body, started, &statement_id, &status_path, calls) {
-            Ok(body) => self.result_set(&body, statement_id, &status_path, calls),
+            Ok(body) => self.result_set(&body, started, statement_id, &status_path, calls),
             Err(error) => {
                 // Unless it ended on its own, the statement may still be
                 // running, so cancel it rather than leave it on the warehouse.
@@ -344,17 +345,8 @@ impl CliRunner {
                 "SUCCEEDED" => return Ok(body),
                 "PENDING" | "RUNNING" => {
                     // Neither the sleep nor the poll may outlast the deadline.
-                    let remaining = || self.limits.deadline.saturating_sub(started.elapsed());
-                    thread::sleep(self.limits.poll.min(remaining()));
-                    if remaining().is_zero() {
-                        return Err(timeout());
-                    }
-                    let limit = self.limits.call.min(remaining());
-                    match self.statement_call("get", status_path, None, limit, calls) {
-                        Ok(next) => body = next,
-                        Err(_) if remaining().is_zero() => return Err(timeout()),
-                        Err(error) => return Err(error),
-                    }
+                    thread::sleep(self.limits.poll.min(self.remaining(started)));
+                    body = self.bounded_get(status_path, started, statement_id, calls)?;
                 }
                 "FAILED" | "CANCELED" | "CLOSED" => {
                     let error = body.root().pointer("/status/error");
@@ -391,6 +383,7 @@ impl CliRunner {
     fn result_set(
         &self,
         body: &Document,
+        started: Instant,
         statement_id: String,
         status_path: &str,
         calls: &mut Vec<Call>,
@@ -446,7 +439,7 @@ impl CliRunner {
             }
             last_index = Some(index);
             let path = format!("{status_path}/result/chunks/{index}");
-            owned = self.statement_call("get", &path, None, self.limits.call, calls)?;
+            owned = self.bounded_get(&path, started, &statement_id, calls)?;
             // A fetched chunk must say which it is; only the inline one may not.
             match owned.root().get("chunk_index").and_then(Node::as_u64) {
                 Some(returned) if returned == index => {}
@@ -483,6 +476,35 @@ impl CliRunner {
             columns,
             rows,
         })
+    }
+
+    /// The time left before the deadline of a statement submitted at
+    /// `started`.
+    fn remaining(&self, started: Instant) -> Duration {
+        self.limits.deadline.saturating_sub(started.elapsed())
+    }
+
+    /// A GET during a statement, stopped at the deadline: a poll or a
+    /// result chunk. Past the deadline it is a timeout, whether no time was
+    /// left to start it or it was stopped before it finished.
+    fn bounded_get(
+        &self,
+        path: &str,
+        started: Instant,
+        statement_id: &str,
+        calls: &mut Vec<Call>,
+    ) -> Result<Document, Error> {
+        let timeout = || Error::Timeout {
+            statement_id: statement_id.to_owned(),
+        };
+        if self.remaining(started).is_zero() {
+            return Err(timeout());
+        }
+        let limit = self.limits.call.min(self.remaining(started));
+        match self.statement_call("get", path, None, limit, calls) {
+            Err(_) if self.remaining(started).is_zero() => Err(timeout()),
+            result => result,
+        }
     }
 
     /// Sends a best-effort cancel for a statement. A failed cancel is
@@ -1534,6 +1556,37 @@ mod tests {
             assert_eq!(invocations.len(), 2 + polls, "{name}");
             assert_eq!(invocations.last().map(|args| &args[2]), Some(&cancel));
         }
+    }
+
+    #[test]
+    fn a_slow_result_chunk_does_not_outlast_the_deadline() {
+        let chunk1 = format!("{}/result/chunks/1", status_path());
+        let scenario = [
+            submit_waiting(
+                Duration::ZERO,
+                &succeeded(r#"{"chunk_index":0,"data_array":[["1",null]],"next_chunk_index":1}"#),
+            ),
+            get(&chunk1, r#"{"chunk_index":1,"data_array":[["2",null]]}"#)
+                .replace("exit 0", "sleep 20000\nexit 0"),
+        ]
+        .concat();
+        let fixture = Fixture::new("transport-slow-chunk", &scenario);
+        let runner = fixture.runner(QUICK).with_limits(Limits {
+            call: Duration::from_secs(20),
+            deadline: Duration::from_millis(500),
+            poll: Duration::ZERO,
+        });
+        let started = Instant::now();
+        let outcome = runner.statement(SQL, WAREHOUSE);
+        assert!(started.elapsed() < Duration::from_secs(10));
+        assert_eq!(
+            outcome.result,
+            Err(Error::Timeout {
+                statement_id: ID.to_owned()
+            })
+        );
+        // The statement had finished, so nothing is cancelled.
+        assert_eq!(fixture.invocations().len(), 2);
     }
 
     #[test]
