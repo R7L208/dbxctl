@@ -238,6 +238,13 @@ fn probe_run_help_succeeds() {
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("--suite") && stdout.contains("--bundle-root"));
+    // Requirements apply only to implemented checks, so the help says when.
+    assert!(stdout.contains(
+        "Warehouse ID for Statement Execution checks (required once a selected one is implemented)"
+    ));
+    assert!(stdout.contains(
+        "Catalog for catalog-scoped checks (required once a selected one is implemented)"
+    ));
 }
 
 #[test]
