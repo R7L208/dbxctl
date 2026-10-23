@@ -28,7 +28,15 @@ the check table in [R4](01-requirements.md#r4-checks).
 
 ## Read-Only Run
 
-Bundle-only checks, which need no warehouse or catalog:
+The `cli` check, the only one implemented so far, exits 0 when it resolves:
+
+```console
+dbxctl probe run --suite lineage --bundle-root <path> --target <non-prod> \
+  --only cli
+```
+
+Bundle-only checks, which need no warehouse or catalog. Until #32 implements
+them, every check but `cli` is skipped and the run exits 10:
 
 ```console
 dbxctl probe run --suite lineage --bundle-root <path> --target <non-prod> \
@@ -38,7 +46,7 @@ dbxctl probe run --suite lineage --bundle-root <path> --target <non-prod> \
 Full read-only suite:
 
 ```console
-dbxctl probe run --suite lineage --bundle-root <path> --target <target> \
+dbxctl probe run --suite lineage --bundle-root <path> --target <non-prod> \
   --warehouse-id <id> --scope-catalog <catalog>
 ```
 
