@@ -5,8 +5,18 @@ mod evidence;
 mod exit;
 mod json;
 mod probe;
+// The transport and its helpers are first used by the bundle and SQL probes
+// (#32, #33).
+#[allow(dead_code)]
+mod safety;
 #[cfg(test)]
 mod test_support;
+#[allow(dead_code)]
+mod text;
+#[allow(dead_code)]
+mod transport;
+#[allow(dead_code)]
+mod uc;
 
 use std::env;
 use std::ffi::{OsStr, OsString};

@@ -9,18 +9,13 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+// The transport's own guard and read-only command list (`src/safety.rs`),
+// so an invocation is checked the same way, and its JSON layer
+// (`src/json.rs`). The including module provides both.
+use super::{json, safety};
+
 const SCENARIO_FILE: &str = "fake-scenario.txt";
 const INVOCATION_LOG: &str = "fake-invocations.log";
-
-/// Command paths known to be read-only. Each later check that adds a CLI
-/// surface extends this list; anything not listed counts as a mutation.
-const READ_ONLY_COMMANDS: &[&[&str]] = &[
-    &["version"],
-    &["bundle", "validate"],
-    &["bundle", "plan"],
-    &["bundle", "schema"],
-    &["api", "get"],
-];
 
 /// A fake Databricks CLI that replays one scenario.
 pub struct ScenarioCli {
@@ -86,6 +81,31 @@ pub fn parse_invocation_log(log: &str) -> Vec<Vec<String>> {
         .collect()
 }
 
+/// Statement Execution is a POST even for a read: submitting a statement, and
+/// cancelling one. A submit counts only when its `--json` statement passes
+/// `src/safety.rs`, so a statement that slipped past the transport's guard
+/// still fails here.
+fn is_statement_post(argv: &[String], path: &[&str]) -> bool {
+    match path {
+        ["api", "post", "/api/2.0/sql/statements"] => argv
+            .iter()
+            .position(|argument| argument == "--json")
+            .and_then(|at| argv.get(at + 1))
+            .and_then(|body| json::parse(body).ok())
+            .is_some_and(|body| {
+                body.root()
+                    .get("statement")
+                    .and_then(json::Node::as_str)
+                    .is_some_and(safety::is_read_statement)
+            }),
+        ["api", "post", url] => url
+            .strip_prefix("/api/2.0/sql/statements/")
+            .and_then(|rest| rest.strip_suffix("/cancel"))
+            .is_some_and(|id| !id.is_empty() && !id.contains('/')),
+        _ => false,
+    }
+}
+
 fn is_help_request(argv: &[String]) -> bool {
     match argv.split_last() {
         Some((last, path)) => {
@@ -133,8 +153,13 @@ pub fn assert_no_mutations(invocations: &[Vec<String>]) {
             .map(String::as_str)
             .take_while(|argument| !argument.starts_with('-'))
             .collect();
+        // The command path must match exactly: an extra positional could
+        // name a different command.
+        let api_get = matches!(path.as_slice(), ["api", "get", url] if url.starts_with('/'));
         assert!(
-            READ_ONLY_COMMANDS.contains(&path.as_slice()),
+            safety::READ_ONLY_COMMANDS.contains(&path.as_slice())
+                || api_get
+                || is_statement_post(argv, &path),
             "invocation {argv:?} is not a known read-only command"
         );
     }

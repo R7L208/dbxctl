@@ -2,6 +2,11 @@
 
 pub mod scenario;
 
+#[path = "../../src/json.rs"]
+mod json;
+#[path = "../../src/safety.rs"]
+mod safety;
+
 use std::env;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};

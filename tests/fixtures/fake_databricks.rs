@@ -100,6 +100,7 @@ struct Case {
     stderr: Vec<u8>,
     exit: u8,
     abort: bool,
+    sleep: Duration,
 }
 
 /// Answers `args` from a scenario file.
@@ -108,9 +109,12 @@ struct Case {
 /// ignored. `case` starts a case; within it, each `arg <value>` adds one argv
 /// element, `stdout <text>` and `stderr <text>` append to the response, and
 /// `exit <code>` sets its exit code (default 0), and `abort` ends the process
-/// with `SIGABRT` (on Unix) after writing the response. Values support the escapes
-/// `\\`, `\n`, `\r`, `\t`, and `\xHH`. The first case whose argv matches
-/// exactly wins; an unmatched argv exits with `NO_MATCHING_CASE`.
+/// with `SIGABRT` (on Unix) after writing the response, and `sleep <ms>`
+/// delays the response, as a slow request would. Values support the escapes
+/// `\\`, `\n`, `\r`, `\t`, and `\xHH`. Cases whose argv matches exactly
+/// answer successive invocations of that argv in order, and the last one
+/// repeats, so a scenario can script a sequence such as polling. An unmatched
+/// argv exits with `NO_MATCHING_CASE`.
 fn replay(scenario: &Path, log: &Path, args: &[OsString]) -> ExitCode {
     let args: Vec<String> = args
         .iter()
@@ -128,13 +132,27 @@ fn replay(scenario: &Path, log: &Path, args: &[OsString]) -> ExitCode {
         .open(log)
         .and_then(|mut file| file.write_all(line.as_bytes()))
         .expect("append to the invocation log");
+    // This invocation's position among those with the same argv, from 0.
+    let entry = line.strip_suffix('\n').unwrap_or(&line);
+    let position = fs::read_to_string(log)
+        .expect("read the invocation log")
+        .lines()
+        .filter(|logged| *logged == entry)
+        .count()
+        .saturating_sub(1);
 
     let text = fs::read_to_string(scenario).expect("read scenario");
     let cases = parse_scenario(&text);
-    let Some(case) = cases.iter().find(|case| case.args == args) else {
+    let matching: Vec<&Case> = cases.iter().filter(|case| case.args == args).collect();
+    let Some(case) = matching
+        .get(position)
+        .or(matching.last())
+        .copied()
+    else {
         eprintln!("fake databricks: no scenario case for argv {args:?}");
         return ExitCode::from(NO_MATCHING_CASE);
     };
+    thread::sleep(case.sleep);
     io::stdout().write_all(&case.stdout).expect("write stdout");
     io::stderr().write_all(&case.stderr).expect("write stderr");
     if case.abort {
@@ -164,6 +182,9 @@ fn parse_scenario(text: &str) -> Vec<Case> {
             "stderr" => case.stderr.extend(unescape(value)),
             "exit" => case.exit = value.parse().expect("exit code from 0 to 255"),
             "abort" => case.abort = true,
+            "sleep" => {
+                case.sleep = Duration::from_millis(value.parse().expect("milliseconds"));
+            }
             _ => panic!("scenario line {}: unknown keyword {keyword:?}", number + 1),
         }
     }
