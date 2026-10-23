@@ -447,12 +447,19 @@ impl CliRunner {
             last_index = Some(index);
             let path = format!("{status_path}/result/chunks/{index}");
             owned = self.statement_call("get", &path, None, self.limits.call, calls)?;
-            let returned = owned.root().get("chunk_index").and_then(Node::as_u64);
-            if returned.is_some_and(|returned| returned != index) {
-                return Err(Error::Transport(format!(
-                    "result chunk {} was returned for chunk {index}",
-                    returned.unwrap_or_default()
-                )));
+            // A fetched chunk must say which it is; only the inline one may not.
+            match owned.root().get("chunk_index").and_then(Node::as_u64) {
+                Some(returned) if returned == index => {}
+                Some(returned) => {
+                    return Err(Error::Transport(format!(
+                        "result chunk {returned} was returned for chunk {index}"
+                    )));
+                }
+                None => {
+                    return Err(Error::Transport(format!(
+                        "result chunk {index} came back without a `chunk_index`"
+                    )));
+                }
             }
             chunks += 1;
             chunk = Some(owned.root());
@@ -1610,7 +1617,10 @@ mod tests {
                 "transport-loop",
                 [
                     submit(&succeeded(r#"{"data_array":[],"next_chunk_index":1}"#)),
-                    get(&chunk1, r#"{"data_array":[],"next_chunk_index":1}"#),
+                    get(
+                        &chunk1,
+                        r#"{"chunk_index":1,"data_array":[],"next_chunk_index":1}"#,
+                    ),
                 ]
                 .concat(),
                 "does not follow",
@@ -1678,6 +1688,24 @@ mod tests {
                 ]
                 .concat(),
                 "chunk 2 was returned for chunk 1",
+            ),
+            (
+                "transport-unnumbered-chunk",
+                [
+                    submit(&succeeded(two_chunks)),
+                    get(&chunk1, r#"{"data_array":[["2",null]]}"#),
+                ]
+                .concat(),
+                "chunk 1 came back without a `chunk_index`",
+            ),
+            (
+                "transport-text-chunk-index",
+                [
+                    submit(&succeeded(two_chunks)),
+                    get(&chunk1, r#"{"chunk_index":"1","data_array":[["2",null]]}"#),
+                ]
+                .concat(),
+                "chunk 1 came back without a `chunk_index`",
             ),
             (
                 "transport-row-total",
