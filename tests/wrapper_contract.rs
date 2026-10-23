@@ -5,7 +5,7 @@ use std::process::Stdio;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use common::scenario::{ScenarioCli, assert_no_mutations};
+use common::scenario::{ScenarioCli, assert_no_mutations, stdout_line};
 use common::{TempDir, dbxctl, fake_databricks};
 
 #[test]
@@ -443,8 +443,8 @@ fn probe_run_with_unresolved_checks_exits_10() {
 fn probe_run_answers_v6_offline() {
     let schema = include_str!("fixtures/bundle-schema-jobs.json");
     let scenario = format!(
-        "{CLI_VERSION_SCENARIO}\ncase\narg bundle\narg schema\nstdout {}\n",
-        schema.replace('\\', "\\\\").replace('\n', "\\n")
+        "{CLI_VERSION_SCENARIO}\ncase\narg bundle\narg schema\n{}\n",
+        stdout_line(schema)
     );
     let fixture = ProbeFixture::new("probe-v6", &scenario);
     let output = fixture.run(&["--only", "cli,v6"]);

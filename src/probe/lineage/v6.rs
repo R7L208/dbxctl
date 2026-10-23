@@ -88,7 +88,9 @@ mod tests {
     use crate::evidence::RunDir;
     use crate::probe::model::{Finding, State, Verdict};
     use crate::probe::orchestrator::Context;
-    use crate::test_support::{ScenarioCli, TempDir, assert_no_mutations, fake_databricks};
+    use crate::test_support::{
+        ScenarioCli, TempDir, assert_no_mutations, fake_databricks, stdout_line,
+    };
 
     /// The real nesting of `jobs.TriggerSettings`, trimmed from CLI 1.21.0.
     const JOBS_SCHEMA: &str = include_str!("../../../tests/fixtures/bundle-schema-jobs.json");
@@ -118,16 +120,9 @@ mod tests {
         )
     }
 
-    fn schema_response(schema: &str) -> String {
-        format!(
-            "stdout {}",
-            schema.replace('\\', "\\\\").replace('\n', "\\n")
-        )
-    }
-
     #[test]
     fn resolves_jobs_from_the_real_schema_shape() {
-        let (finding, invocations, _temp) = check("v6-jobs", &schema_response(JOBS_SCHEMA));
+        let (finding, invocations, _temp) = check("v6-jobs", &stdout_line(JOBS_SCHEMA));
         assert_eq!(finding.state(), State::Resolved, "{finding:?}");
         assert_eq!(finding.verdict().map(Verdict::as_str), Some("jobs"));
         assert_eq!(invocations, [["bundle", "schema"]]);
@@ -140,7 +135,7 @@ mod tests {
             r#""pipelines.PipelineTrigger": {"type": "object", "properties": {"table_update": {}}},
             "jobs.TriggerSettings": {"oneOf": [{"properties": {"table_update": {}}}]}"#,
         );
-        let (finding, _, _temp) = check("v6-elsewhere", &schema_response(&schema));
+        let (finding, _, _temp) = check("v6-elsewhere", &stdout_line(&schema));
         assert_eq!(finding.state(), State::Resolved, "{finding:?}");
         assert_eq!(
             finding.verdict().map(Verdict::as_str),
@@ -154,7 +149,7 @@ mod tests {
             r#""pipelines.PipelineTrigger": {"type": "object", "properties": {"table_update": {}}},
             "jobs.TriggerSettings": {"type": "object", "properties": {"periodic": {}}}"#,
         );
-        let (finding, _, _temp) = check("v6-not-jobs", &schema_response(&schema));
+        let (finding, _, _temp) = check("v6-not-jobs", &stdout_line(&schema));
         assert_eq!(finding.state(), State::Resolved, "{finding:?}");
         assert_eq!(
             finding.verdict().map(Verdict::as_str),
@@ -167,7 +162,7 @@ mod tests {
         let schema = r#"{"$defs": {"github.com": {"databricks": {"cli": {"libs": {
             "jobs.Settings": {"type": "object", "properties": {"table_update": {}}}
         }}}}}}"#;
-        let (finding, _, _temp) = check("v6-other-jobs", &schema_response(schema));
+        let (finding, _, _temp) = check("v6-other-jobs", &stdout_line(schema));
         assert_eq!(finding.state(), State::Resolved, "{finding:?}");
         assert_eq!(
             finding.verdict().map(Verdict::as_str),
@@ -180,15 +175,11 @@ mod tests {
         for (name, response, reason) in [
             (
                 "v6-absent",
-                schema_response(r#"{"$defs": {"service": {"jobs.T": {"properties": {}}}}}"#),
+                stdout_line(r#"{"$defs": {"service": {"jobs.T": {"properties": {}}}}}"#),
                 "no definition",
             ),
-            ("v6-no-defs", schema_response("{}"), "no `$defs` object"),
-            (
-                "v6-malformed",
-                schema_response("{\"$defs\": "),
-                "valid JSON",
-            ),
+            ("v6-no-defs", stdout_line("{}"), "no `$defs` object"),
+            ("v6-malformed", stdout_line("{\"$defs\": "), "valid JSON"),
             ("v6-non-utf8", "stdout \\xff".to_owned(), "valid JSON"),
             ("v6-exit", "exit 3".to_owned(), "failed with exit code 3"),
         ] {

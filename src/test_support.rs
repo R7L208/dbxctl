@@ -9,7 +9,7 @@ use std::sync::OnceLock;
 #[path = "../tests/common/scenario.rs"]
 mod scenario;
 
-pub(crate) use scenario::{ScenarioCli, assert_no_mutations};
+pub(crate) use scenario::{ScenarioCli, assert_no_mutations, stdout_line};
 
 /// The fake Databricks CLI, compiled once per test process.
 pub(crate) fn fake_databricks() -> &'static Path {
