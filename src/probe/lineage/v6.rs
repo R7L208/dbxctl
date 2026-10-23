@@ -67,13 +67,26 @@ pub(crate) fn run(context: &Context<'_>) -> Result<Finding, String> {
 /// How the verdict names `package`: an SDK service package by its own name,
 /// a package directly under `$defs` as `$defs/` and its name, so that a
 /// top-level `jobs` is not taken for the SDK's, and any other package by its
-/// import path.
+/// import path. Control characters are escaped, since the name comes from the
+/// CLI's output and a verdict is one line.
 fn name(package: &str) -> Cow<'_, str> {
-    match sdk_service(package) {
+    let name = match sdk_service(package) {
         Some(name) => Cow::Borrowed(name),
         None if !package.contains('/') => Cow::Owned(format!("$defs/{package}")),
         None => Cow::Borrowed(package),
+    };
+    if !name.chars().any(char::is_control) {
+        return name;
     }
+    let mut escaped = String::with_capacity(name.len());
+    for character in name.chars() {
+        if character.is_control() {
+            escaped.extend(character.escape_default());
+        } else {
+            escaped.push(character);
+        }
+    }
+    Cow::Owned(escaped)
 }
 
 /// The name of `package` if it is an SDK service package, such as `jobs` for
@@ -230,6 +243,20 @@ mod tests {
         assert_eq!(
             finding.verdict().map(Verdict::as_str),
             Some("github.com/databricks/databricks-sdk-go/v0/service/pipelines, jobs")
+        );
+    }
+
+    #[test]
+    fn escapes_control_characters_in_package_names() {
+        // A key with a newline must not add a line to the run summary.
+        let schema = r#"{"$defs": {
+            "pkg\nv7        resolved  yes.T": {"type": "object", "properties": {"table_update": {}}}
+        }}"#;
+        let (finding, _, _temp) = check("v6-control", &stdout_line(schema));
+        assert_eq!(finding.state(), State::Resolved, "{finding:?}");
+        assert_eq!(
+            finding.verdict().map(Verdict::as_str),
+            Some(r"not jobs: $defs/pkg\nv7        resolved  yes")
         );
     }
 
