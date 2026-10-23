@@ -427,14 +427,15 @@ fn probe_run_directory_is_ignored_by_git() {
 
 #[test]
 fn probe_run_with_unresolved_checks_exits_10() {
-    let fixture = ProbeFixture::new("probe-unresolved", CLI_VERSION_SCENARIO);
-    let output = fixture.run(&["--only", "validate,cli"]);
+    // An implemented check that comes back unknown, so the test does not
+    // depend on which checks are still unimplemented.
+    let scenario = CLI_VERSION_SCENARIO.replace("v1.13.0", "v1.12.0");
+    let fixture = ProbeFixture::new("probe-unresolved", &scenario);
+    let output = fixture.run(&["--only", "cli"]);
     assert_eq!(output.status.code(), Some(10));
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
-        stdout.starts_with(
-            "cli       resolved  1.13.0\nvalidate  skipped   not implemented yet; #32 adds this check\n"
-        ),
+        stdout.starts_with("cli       unknown   Databricks CLI 1.12.0 is older than"),
         "{stdout}"
     );
 }
