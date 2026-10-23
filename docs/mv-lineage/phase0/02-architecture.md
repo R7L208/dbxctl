@@ -23,7 +23,7 @@ the boundary through which every workspace operation passes. It implements
 | `src/args.rs` | A small reusable option parser over `OsString`. | #29 |
 | `src/exit.rs` | The exit-code table from [R3](01-requirements.md#r3-exit-codes). | #30 |
 | `src/evidence.rs` | Run-ID generation, the run directory, raw evidence writes, `run.json`, and the `.dbxctl/.gitignore`. | #30 |
-| `src/transport.rs` | The `Runner` trait and `CliRunner::for_bundle(binary, root, target, profile)`: captured CLI runs, API GETs through `databricks api get --debug` with HTTP status and `error_code`, and Statement Execution with polling, cancellation at a deadline, result chunks, and error classification. | #31 |
+| `src/transport.rs` | The `Runner` trait and `CliRunner::for_bundle(binary, root, target, profile)`: captured CLI runs, API GETs through `databricks api get --debug` with HTTP status and `error_code`, and Statement Execution with polling, cancellation at a deadline or after a failed poll, result chunks, and error classification. | #31 |
 | `src/safety.rs` | `is_read_statement`, the read-only SQL guard. | #31 |
 | `src/uc/fqn.rs` | Parsing and formatting Unity Catalog three-part names, including backtick quoting. | #31 |
 | `src/text.rs` | SQL string-literal and identifier quoting. | #31 |
