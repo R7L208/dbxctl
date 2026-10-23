@@ -4,9 +4,9 @@ What you need to run the Phase 0 lineage probes, and how to run them. The
 command shapes come from the contract in
 [01-requirements.md](01-requirements.md).
 
-> **Status:** `dbxctl probe run` works, but only the `cli` and `v6` checks
-> resolve so far; every other selected check is reported as skipped, so a
-> full run exits with code 10. `probe report` and `probe cleanup` are not
+> **Status:** `dbxctl probe run` runs the bundle checks and `v6` part A;
+> every other selected check is reported as skipped, so a full run exits
+> with code 10. `probe report` and `probe cleanup` are not
 > implemented yet (#36, #37). #38 checks every command against the real
 > `dbxctl probe ... --help` output.
 
@@ -36,16 +36,20 @@ keeps working. See the check table in [R4](01-requirements.md#r4-checks).
 
 ## Read-Only Run
 
-The `cli` and `v6` checks, the only ones implemented so far, exit 0 when they
-resolve. `v6` runs part A, which reads the CLI's bundle schema offline:
+The offline checks need no bundle or workspace: `cli` reads the CLI's
+version and help, and `v1` and `v6` part A read its bundle schema. They exit
+0 when they resolve:
 
 ```console
 dbxctl probe run --suite lineage --bundle-root <path> --target <non-prod> \
-  --only cli,v6
+  --only cli,v1,v6
 ```
 
-Bundle-only checks, which need no warehouse or catalog. Until #32 implements
-them, every check but `cli` is skipped and the run exits 10:
+Bundle-only checks, which need no warehouse or catalog. `validate`, `plan`,
+and `v8` contact the workspace through the CLI. `bundle validate` creates
+`workspace.file_path` if it does not exist yet, and `state` reads the local
+copy of the deployment state, so deploy the bundle to the target from this
+checkout first. They exit 0 when every check resolves:
 
 ```console
 dbxctl probe run --suite lineage --bundle-root <path> --target <non-prod> \
@@ -55,7 +59,7 @@ dbxctl probe run --suite lineage --bundle-root <path> --target <non-prod> \
 Every check with a read step, which leaves out the mutation-only `v7`. `v6`
 and `v10` run only their read steps, because no mutation step runs without
 `--allow-mutations`. Pass both options so the command keeps working as the
-SQL checks land. Until #32, #33, and #37 implement the remaining checks, they
+SQL checks land. Until #33 and #37 implement the remaining checks, they
 are skipped and the run exits 10, and neither option is read yet:
 
 ```console

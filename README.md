@@ -81,8 +81,10 @@ Probe a bundle for materialized-view lineage facts:
 dbxctl probe run --suite lineage --bundle-root <path> --target <non-prod> --only cli
 ```
 
-Only the `cli` and `v6` checks run so far; `v6` runs part A, which reads the
-CLI's bundle schema offline. Without `--only`, every check is selected,
+The bundle checks (`cli`, `validate`, `plan`, `state`, `v8`, and `v1`) and
+`v6` part A run so far; `v6` part A and `v1` read the CLI's bundle schema
+offline, and `validate`, `plan`, and `v8` contact the workspace through the
+CLI. Without `--only`, every check is selected,
 including the checks with mutation steps (`v6` part B, `v10`, and `v7`), and
 the unimplemented ones are reported as skipped. The mutation steps never run
 without `--allow-mutations` and their own inputs

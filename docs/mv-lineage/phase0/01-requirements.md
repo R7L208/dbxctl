@@ -7,8 +7,8 @@ as defined in the [glossary](../../design-nomenclature-and-glossary.md);
 headings are stable so code sites can link to them.
 
 > **Status:** Argument parsing for R1 and R2 is implemented (#29), and
-> `probe run` runs the `cli` check (#30) and `v6` part A (#34). The other
-> checks are not implemented yet. Each requirement names the issue that implements it.
+> `probe run` runs the bundle checks (#30, #32) and `v6` part A (#34). The
+> other checks are not implemented yet. Each requirement names the issue that implements it.
 
 ## Goal
 
