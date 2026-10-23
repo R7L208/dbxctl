@@ -12,7 +12,7 @@
 //! named `properties` holding only definitions, is taken for a definition.
 
 use std::borrow::Cow;
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::time::Duration;
 
 use crate::json::{Kind, Node, unescape_token};
@@ -57,6 +57,11 @@ const VALUE_KEYWORDS: [&str; 2] = ["const", "default"];
 /// for `jobs.TriggerSettings` at that path, or `None` when `schema` has no
 /// `$defs` object.
 pub(crate) fn packages_with_property(schema: Node<'_>, property: &str) -> Option<BTreeSet<String>> {
+    search(schema, property).map(|(found, _)| found)
+}
+
+/// [`packages_with_property`], and how many times a `$ref` target was walked.
+fn search(schema: Node<'_>, property: &str) -> Option<(BTreeSet<String>, usize)> {
     let defs = schema
         .get("$defs")
         .filter(|defs| defs.kind() == Kind::Object)?;
@@ -66,7 +71,8 @@ pub(crate) fn packages_with_property(schema: Node<'_>, property: &str) -> Option
         root: schema,
         property,
         known: HashMap::new(),
-        open: HashMap::new(),
+        seen: HashSet::new(),
+        walked: 0,
     };
     let mut found = BTreeSet::new();
     collect(
@@ -76,7 +82,7 @@ pub(crate) fn packages_with_property(schema: Node<'_>, property: &str) -> Option
         &mut search,
         &mut found,
     );
-    Some(found)
+    Some((found, search.walked))
 }
 
 /// The decoded `$defs` pointers that `$ref`s name, as a tree of path
@@ -142,7 +148,7 @@ fn collect<'a>(
         let below = targets.and_then(|targets| targets.below.get(key));
         path.push(key);
         if is_definition(child, below.is_some_and(|below| below.named)) {
-            if search.has_property(child).0 {
+            if search.declares(child) {
                 found.insert(package(path));
             }
         } else {
@@ -183,81 +189,78 @@ fn is_schema(node: Node<'_>) -> bool {
 }
 
 /// The search for a property, which remembers what each `$ref` leads to so
-/// a ref that many definitions share is followed once.
+/// a ref that many definitions share is walked once.
 struct Search<'a, 'p> {
     root: Node<'a>,
     property: &'p str,
     /// Whether the schema at each pointer declares the property, once known.
     known: HashMap<String, bool>,
-    /// The pointers being followed, each with its depth in the chain of refs.
-    open: HashMap<String, usize>,
+    /// The pointers walked in the current definition's search.
+    seen: HashSet<String>,
+    /// How many times a `$ref` target was walked, over the whole search.
+    walked: usize,
 }
 
-/// A depth no open ref has: the result relies on no ref still being followed.
-const SETTLED: usize = usize::MAX;
-
 impl<'a> Search<'a, '_> {
+    /// Whether the definition `schema` declares the property. Every ref is
+    /// walked at most once per definition. A ref seen again adds nothing: if
+    /// anything it leads to declares the property, the first walk finds it.
+    /// So a "no" holds for every ref walked, and is remembered for them all.
+    fn declares(&mut self, schema: Node<'a>) -> bool {
+        self.seen.clear();
+        let found = self.has_property(schema);
+        if !found {
+            for pointer in self.seen.drain() {
+                self.known.insert(pointer, false);
+            }
+        }
+        found
+    }
+
     /// Whether `schema` declares the property in its own `properties`, in a
-    /// branch at any depth, or in a schema it names with a `$ref`, and the
-    /// shallowest open ref a "no" relied on, or [`SETTLED`].
-    fn has_property(&mut self, schema: Node<'a>) -> (bool, usize) {
+    /// branch at any depth, or in a schema it names with a `$ref`.
+    fn has_property(&mut self, schema: Node<'a>) -> bool {
         if schema
             .get("properties")
             .is_some_and(|properties| properties.get(self.property).is_some())
         {
-            return (true, SETTLED);
+            return true;
         }
-        let mut relied = SETTLED;
         let pointer = schema
             .get("$ref")
             .and_then(Node::as_str)
             .and_then(ref_pointer);
-        if let Some(pointer) = pointer {
-            match self.follow(&pointer) {
-                (true, _) => return (true, SETTLED),
-                (false, depth) => relied = relied.min(depth),
-            }
+        if pointer.is_some_and(|pointer| self.follow(&pointer)) {
+            return true;
         }
-        for branch in BRANCHES {
-            for schema in schema
+        BRANCHES.iter().any(|branch| {
+            schema
                 .get(branch)
                 .and_then(Node::elements)
                 .into_iter()
                 .flatten()
-            {
-                match self.has_property(schema) {
-                    (true, _) => return (true, SETTLED),
-                    (false, depth) => relied = relied.min(depth),
-                }
-            }
-        }
-        (false, relied)
+                .any(|schema| self.has_property(schema))
+        })
     }
 
-    /// [`Self::has_property`] for the schema at `pointer`. A ref back to one
-    /// still being followed is a cycle and adds nothing. A "no" is remembered
-    /// only once no ref it relied on is still open, since an open ref may
-    /// still turn out to declare the property.
-    fn follow(&mut self, pointer: &str) -> (bool, usize) {
+    /// [`Self::has_property`] for the schema at `pointer`. A "yes" holds
+    /// wherever the ref is reached, so it is remembered at once.
+    fn follow(&mut self, pointer: &str) -> bool {
         if let Some(&found) = self.known.get(pointer) {
-            return (found, SETTLED);
+            return found;
         }
-        if let Some(&depth) = self.open.get(pointer) {
-            return (false, depth);
+        if !self.seen.insert(pointer.to_owned()) {
+            return false;
         }
         let Some(schema) = self.root.pointer(pointer) else {
-            self.known.insert(pointer.to_owned(), false);
-            return (false, SETTLED);
+            return false;
         };
-        let depth = self.open.len();
-        self.open.insert(pointer.to_owned(), depth);
-        let (found, relied) = self.has_property(schema);
-        self.open.remove(pointer);
-        if found || relied >= depth {
-            self.known.insert(pointer.to_owned(), found);
-            return (found, SETTLED);
+        self.walked += 1;
+        let found = self.has_property(schema);
+        if found {
+            self.known.insert(pointer.to_owned(), true);
         }
-        (false, relied)
+        found
     }
 }
 
@@ -305,7 +308,7 @@ fn package(path: &[&str]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::packages_with_property;
+    use super::{packages_with_property, search};
     use crate::json;
 
     fn found(schema: &str) -> Option<Vec<String>> {
@@ -454,6 +457,30 @@ mod tests {
                 "x/p".to_owned(),
                 "x/q".to_owned(),
             ])
+        );
+    }
+
+    #[test]
+    fn walks_each_ref_in_a_dense_cycle_once() {
+        // Every definition refs every other and none declares the property,
+        // so a walk that forgot each "no" would visit every path: about 12!.
+        const COUNT: usize = 12;
+        let definitions: Vec<String> = (0..COUNT)
+            .map(|from| {
+                let refs: Vec<String> = (0..COUNT)
+                    .filter(|&to| to != from)
+                    .map(|to| format!(r##"{{"$ref": "#/$defs/x/d{to}.T"}}"##))
+                    .collect();
+                format!(r#""d{from}.T": {{"oneOf": [{}]}}"#, refs.join(", "))
+            })
+            .collect();
+        let schema = format!(r#"{{"$defs": {{"x": {{{}}}}}}}"#, definitions.join(", "));
+        let document = json::parse(&schema).expect("valid schema");
+        let (found, walked) = search(document.root(), "table_update").expect("has $defs");
+        assert!(found.is_empty(), "{found:?}");
+        assert!(
+            walked <= COUNT,
+            "walked {walked} refs for {COUNT} definitions"
         );
     }
 
