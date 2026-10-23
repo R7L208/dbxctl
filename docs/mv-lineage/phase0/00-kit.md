@@ -23,23 +23,45 @@ command shapes come from the contract in
 - A `dbxctl` build from this repository (`cargo build --locked`).
 
 `v2`, `v9`, and `v4` need `--warehouse-id`; `v3` and `v11` need both
-`--warehouse-id` and `--scope-catalog`; every other check needs neither. See
-the check table in [R4](01-requirements.md#r4-checks).
+`--warehouse-id` and `--scope-catalog`; every other check needs neither. Only
+implemented checks require them, so until #33 implements those checks a run
+needs neither option. Each requirement starts when its check is implemented:
+a run that selects `v2` without `--warehouse-id` exits 10 today, with `v2`
+skipped, and exits 1 with a usage error once #33 lands. If the checks land
+one at a time, the usage error names only the implemented ones: with only
+`v2` implemented, a run missing both options is told that `v2` needs
+`--warehouse-id`, and `--scope-catalog` is not asked for until `v3` or `v11`
+lands. Pass both options whenever you select these checks so the command
+keeps working. See the check table in [R4](01-requirements.md#r4-checks).
 
 ## Read-Only Run
 
-Bundle-only checks, which need no warehouse or catalog:
+The `cli` and `v6` checks, the only ones implemented so far, exit 0 when they
+resolve. `v6` runs part A, which reads the CLI's bundle schema offline:
+
+```console
+dbxctl probe run --suite lineage --bundle-root <path> --target <non-prod> \
+  --only cli,v6
+```
+
+Bundle-only checks, which need no warehouse or catalog. Until #32 implements
+them, every check but `cli` is skipped and the run exits 10:
 
 ```console
 dbxctl probe run --suite lineage --bundle-root <path> --target <non-prod> \
   --only cli,validate,plan,state,v8,v1
 ```
 
-Full read-only suite:
+Every check with a read step, which leaves out the mutation-only `v7`. `v6`
+and `v10` run only their read steps, because no mutation step runs without
+`--allow-mutations`. Pass both options so the command keeps working as the
+SQL checks land. Until #32, #33, and #37 implement the remaining checks, they
+are skipped and the run exits 10, and neither option is read yet:
 
 ```console
-dbxctl probe run --suite lineage --bundle-root <path> --target <target> \
-  --warehouse-id <id> --scope-catalog <catalog>
+dbxctl probe run --suite lineage --bundle-root <path> --target <non-prod> \
+  --warehouse-id <id> --scope-catalog <catalog> \
+  --only cli,validate,plan,state,v8,v1,api,v2,v3,v11,v9,v4,v6,v10
 ```
 
 Never pass `--allow-mutations` for a read-only run.

@@ -238,6 +238,13 @@ fn probe_run_help_succeeds() {
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("--suite") && stdout.contains("--bundle-root"));
+    // Requirements apply only to implemented checks, so the help says when.
+    assert!(stdout.contains(
+        "Warehouse ID for Statement Execution checks (required once a selected one is implemented)"
+    ));
+    assert!(stdout.contains(
+        "Catalog for catalog-scoped checks (required once a selected one is implemented)"
+    ));
 }
 
 #[test]
@@ -502,6 +509,24 @@ fn probe_run_with_a_missing_bundle_root_exits_1() {
 }
 
 #[test]
+fn probe_run_that_cannot_create_its_run_directory_exits_1() {
+    // A file where `.dbxctl/` belongs stops the run before any check, so
+    // the run fails with 1 rather than reporting unresolved checks with 10.
+    let fixture = ProbeFixture::new("probe-unwritable-root", CLI_VERSION_SCENARIO);
+    std::fs::write(fixture.bundle().join(".dbxctl"), b"").expect("block .dbxctl");
+    let output = fixture.run(&["--only", "cli"]);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.starts_with("error: could not create directory ")
+            && stderr.ends_with(": it is not a directory\n"),
+        "{stderr}"
+    );
+    assert!(fixture.cli.invocations().is_empty());
+}
+
+#[test]
 fn probe_report_requires_from() {
     let output = dbxctl()
         .args(["probe", "report"])
@@ -618,56 +643,23 @@ fn probe_run_rejects_empty_check_id() {
     assert!(stderr.contains("empty check ID"));
 }
 
-fn probe_run(extra: &[&str]) -> std::process::Output {
-    dbxctl()
-        .args([
-            "probe",
-            "run",
-            "--suite",
-            "lineage",
-            "--bundle-root",
-            "/tmp",
-            "--target",
-            "dev",
-        ])
-        .args(extra)
-        .output()
-        .expect("run dbxctl probe run")
-}
-
 #[test]
-fn probe_run_without_only_requires_warehouse_for_all_checks() {
-    // With no --only, every check is selected, so the warehouse requirement
-    // lists every warehouse-backed check in the contract's canonical order.
-    let output = probe_run(&[]);
-    assert_eq!(output.status.code(), Some(1));
-    assert_eq!(
-        String::from_utf8_lossy(&output.stderr),
-        "error: --warehouse-id is required by selected checks: v2, v3, v11, v9, v4\n"
-    );
-}
-
-#[test]
-fn probe_run_without_only_requires_scope_catalog_for_catalog_checks() {
-    let output = probe_run(&["--warehouse-id", "w"]);
-    assert_eq!(output.status.code(), Some(1));
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        stderr.starts_with("error: --scope-catalog is required by selected checks: v3"),
-        "{stderr}"
-    );
-}
-
-#[test]
-fn probe_run_with_all_required_options_passes_validation() {
-    // Every check runs; all but `cli` are not implemented yet, so the run
-    // completes with unresolved findings.
+fn probe_run_without_only_runs_every_check() {
+    // Every check is selected. Only `cli` and `v6` are implemented, and
+    // neither reads a warehouse or catalog, so neither option is needed; the
+    // skipped checks leave the run unresolved.
     let fixture = ProbeFixture::new("probe-all-checks", CLI_VERSION_SCENARIO);
-    let output = fixture.run(&["--warehouse-id", "w", "--scope-catalog", "c"]);
+    let output = fixture.run(&[]);
     assert_eq!(output.status.code(), Some(10));
     assert!(output.stderr.is_empty());
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert_eq!(stdout.lines().count(), 16, "{stdout}");
+    // v7 is the last check to land (#37), so a skipped line stays here
+    // until every check is implemented.
+    assert!(
+        stdout.contains("\nv7        skipped   not implemented yet; #37 adds this check\n"),
+        "{stdout}"
+    );
 }
 
 #[test]

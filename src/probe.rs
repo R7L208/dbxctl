@@ -194,8 +194,8 @@ OPTIONS:
     --bundle-root <PATH>            Root directory of the Databricks bundle
     --target <TARGET>               Bundle target name
     --profile <PROFILE>             Databricks CLI profile name
-    --warehouse-id <ID>             Warehouse ID (required for checks using Statement Execution)
-    --scope-catalog <CATALOG>       Catalog name (required for checks using catalog-scoped probes)
+    --warehouse-id <ID>             Warehouse ID for Statement Execution checks (required once a selected one is implemented)
+    --scope-catalog <CATALOG>       Catalog for catalog-scoped checks (required once a selected one is implemented)
     --only <IDS>                    Run only specific checks (comma-separated check IDs)
     --allow-mutations                Allow mutation capabilities (required to unlock mutation checks)
     --v6-table <TABLE>              Per-check mutation input for v6

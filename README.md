@@ -78,10 +78,22 @@ dbxctl doctor
 Probe a bundle for materialized-view lineage facts:
 
 ```console
-dbxctl probe run --suite lineage --bundle-root <path> --target <non-prod>
+dbxctl probe run --suite lineage --bundle-root <path> --target <non-prod> --only cli
 ```
 
-Only the `cli` check runs so far; the others are reported as skipped. See the
+Only the `cli` and `v6` checks run so far; `v6` runs part A, which reads the
+CLI's bundle schema offline. Without `--only`, every check is selected,
+including the checks with mutation steps (`v6` part B, `v10`, and `v7`), and
+the unimplemented ones are reported as skipped. The mutation steps never run
+without `--allow-mutations` and their own inputs
+([R10](docs/mv-lineage/phase0/01-requirements.md#r10-mutation-capability-and-cleanup)).
+The [kit's prerequisites](docs/mv-lineage/phase0/00-kit.md#prerequisites) list
+the checks that need `--warehouse-id` and `--scope-catalog`. A run that
+completes exits 10 whenever a selected check is not resolved, so `--only cli`
+also exits 10 if it cannot confirm Databricks CLI 1.13.0 or newer. A run that
+cannot start or record its evidence, such as one whose bundle root cannot hold
+the `.dbxctl/` run directory, exits 1 instead; see the
+[exit codes](docs/mv-lineage/phase0/00-kit.md#interpreting-results) and the
 [MV-lineage probe docs](docs/mv-lineage/README.md).
 
 ## Supported Platforms
