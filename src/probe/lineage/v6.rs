@@ -153,7 +153,7 @@ mod tests {
     #[test]
     fn names_every_package_that_defines_the_trigger() {
         let schema = sdk_schema(
-            r#""pipelines.PipelineTrigger": {"properties": {"table_update": {}}},
+            r#""pipelines.PipelineTrigger": {"type": "object", "properties": {"table_update": {}}},
             "jobs.TriggerSettings": {"oneOf": [{"properties": {"table_update": {}}}]}"#,
         );
         let (finding, _, _temp) = check("v6-elsewhere", &schema_response(&schema));
@@ -167,8 +167,8 @@ mod tests {
     #[test]
     fn says_when_no_jobs_definition_has_the_trigger() {
         let schema = sdk_schema(
-            r#""pipelines.PipelineTrigger": {"properties": {"table_update": {}}},
-            "jobs.TriggerSettings": {"properties": {"periodic": {}}}"#,
+            r#""pipelines.PipelineTrigger": {"type": "object", "properties": {"table_update": {}}},
+            "jobs.TriggerSettings": {"type": "object", "properties": {"periodic": {}}}"#,
         );
         let (finding, _, _temp) = check("v6-not-jobs", &schema_response(&schema));
         assert_eq!(finding.state(), State::Resolved, "{finding:?}");
@@ -181,7 +181,7 @@ mod tests {
     #[test]
     fn a_jobs_package_outside_the_sdk_is_not_jobs() {
         let schema = r#"{"$defs": {"github.com": {"databricks": {"cli": {"libs": {
-            "jobs.Settings": {"properties": {"table_update": {}}}
+            "jobs.Settings": {"type": "object", "properties": {"table_update": {}}}
         }}}}}}"#;
         let (finding, _, _temp) = check("v6-other-jobs", &schema_response(schema));
         assert_eq!(finding.state(), State::Resolved, "{finding:?}");

@@ -45,8 +45,9 @@ bundle or workspace.
 **Reads:** `$defs` nests definitions by Go import path, one object per path
 segment, so the trigger definition is at
 `$defs/github.com/databricks/databricks-sdk-go/service/jobs.TriggerSettings`.
-An object with a JSON Schema keyword is a definition; any other object is a
-path segment. A definition declares `table_update` if its own `properties`,
+A path segment holds only objects, so an object is a definition if it is
+empty, has a member that is not an object, or is the target of a `$ref`; any
+other object is a path segment. A definition declares `table_update` if its own `properties`,
 or the `properties` of one of its `oneOf`, `anyOf`, or `allOf` branches,
 contain it. Each definition's package is its full import path. Verdicts name
 SDK service packages without the `github.com/databricks/databricks-sdk-go/service/`
