@@ -606,6 +606,12 @@ fn probe_run_without_only_runs_every_check() {
     assert!(output.stderr.is_empty());
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert_eq!(stdout.lines().count(), 16, "{stdout}");
+    // v7 is the last check to land (#37), so a skipped line stays here
+    // until every check is implemented.
+    assert!(
+        stdout.contains("\nv7        skipped   not implemented yet; #37 adds this check\n"),
+        "{stdout}"
+    );
 }
 
 #[test]
