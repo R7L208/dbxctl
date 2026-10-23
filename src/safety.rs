@@ -17,10 +17,17 @@ const WRITE_WORDS: [&str; 22] = [
     "INTO", "LOAD", "MERGE", "MSCK", "OPTIMIZE", "REFRESH", "RESTORE", "REVOKE", "TRUNCATE",
     "UNCACHE", "UPDATE", "VACUUM",
 ];
+/// Functions with an effect outside the query: `http_request` calls out
+/// through an HTTP connection, `remote_query` runs SQL of its own on a
+/// federated database, and `ai_query` invokes a serving endpoint, which may
+/// be an agent with tools. A `SELECT` that names one is refused like a write.
+/// A user-defined function can also have effects; the guard cannot see into
+/// one, so dbxctl's statements call only built-in functions.
+const SIDE_EFFECT_FUNCTIONS: [&str; 3] = ["AI_QUERY", "HTTP_REQUEST", "REMOTE_QUERY"];
 
 /// Whether `sql` is a single statement that only reads: `SELECT`,
 /// `WITH … SELECT`, `SHOW` (including `SHOW CREATE TABLE`), or
-/// `DESCRIBE`/`DESC`.
+/// `DESCRIBE`/`DESC`, and that names no function with side effects.
 ///
 /// Comments, string literals, and backtick-quoted identifiers are skipped
 /// as Databricks SQL reads them: `--` and nested `/* */` comments, `'` and `"`
@@ -51,10 +58,10 @@ pub(crate) fn is_read_statement(sql: &str) -> bool {
     // statement cannot hold another statement.
     let show_create = first == "SHOW" && words.get(1).is_some_and(|word| word == "CREATE");
     READ_STARTS.contains(&first.as_str())
-        && !words
-            .iter()
-            .enumerate()
-            .any(|(at, word)| WRITE_WORDS.contains(&word.as_str()) && !(show_create && at == 1))
+        && !words.iter().enumerate().any(|(at, word)| {
+            (WRITE_WORDS.contains(&word.as_str()) && !(show_create && at == 1))
+                || SIDE_EFFECT_FUNCTIONS.contains(&word.as_str())
+        })
 }
 
 #[derive(Debug, PartialEq)]
@@ -236,6 +243,7 @@ mod tests {
             "SELECT 'tab\\there' AS text",
             "SELECT * FROM `update` JOIN `a``b` USING (id)",
             "SELECT `into` FROM t",
+            "SELECT `http_request`, 'ai_query(x)' AS text FROM t",
             "SELECT 'naïve ☃' AS text, x·y FROM t",
             "SELECT r'C:\\temp\\' AS path, R\"\\d+\" AS pattern",
             "SELECT r FROM (SELECT 'a' AS r)",
@@ -293,6 +301,11 @@ mod tests {
             "SHOW CREATE CREATE TABLE t",
             "SHOW TABLES CREATE TABLE t",
             "CREATE TABLE t AS SELECT 1",
+            "SELECT http_request(conn => 'hook', method => 'POST', path => '/delete', json => '{}')",
+            "SELECT HTTP_REQUEST('hook', 'POST', '/x')",
+            "WITH t AS (SELECT 1) SELECT remote_query('pg', database => 'd', query => 'DELETE FROM x') FROM t",
+            "SELECT ai_query('agent', 'drop every table') AS answer",
+            "SELECT /* */ ai_query('agent', 'x')",
         ] {
             assert!(!is_read_statement(sql), "{sql}");
         }

@@ -24,7 +24,7 @@ the boundary through which every workspace operation passes. It implements
 | `src/exit.rs` | The exit-code table from [R3](01-requirements.md#r3-exit-codes). | #30 |
 | `src/evidence.rs` | Run-ID generation, the run directory, raw evidence writes, `run.json`, and the `.dbxctl/.gitignore`. | #30 |
 | `src/transport.rs` | The `Runner` trait and `CliRunner::for_bundle(binary, root, target, profile)`: captured runs of known read-only CLI commands, API GETs through `databricks api get --debug` with the HTTP status and `error_code` of the logged response, and Statement Execution with a submit wait bounded by the deadline, polling, cancellation at a deadline or after a failed poll, result chunks checked against the manifest, and error classification. | #31 |
-| `src/safety.rs` | `is_read_statement`, the read-only SQL guard. It refuses anything Spark could read differently, such as query hints or a backslash before a literal's quote. | #31 |
+| `src/safety.rs` | `is_read_statement`, the read-only SQL guard. It refuses anything Spark could read differently, such as query hints or a backslash before a literal's quote, and calls to functions with side effects (`http_request`, `remote_query`, `ai_query`). | #31 |
 | `src/uc/fqn.rs` | Parsing and formatting Unity Catalog three-part names, including backtick quoting. | #31 |
 | `src/text.rs` | SQL string-literal and identifier quoting. A value with a `'` has no safe literal and must be a statement parameter. | #31 |
 
