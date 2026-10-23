@@ -5,11 +5,10 @@
 //! job.
 
 use std::collections::BTreeSet;
-use std::ffi::OsString;
 
 use crate::bundle::schema::{SCHEMA_COMMAND, SCHEMA_TIMEOUT, definitions_with_property};
-use crate::databricks::run_captured;
 use crate::json;
+use crate::probe::lineage::{Step, run_step};
 use crate::probe::model::{CheckId, Finding, Verdict};
 use crate::probe::orchestrator::Context;
 
@@ -27,36 +26,21 @@ const OUTSIDE_JOBS: &str = "not jobs: ";
 const FALLBACK: &str = "Assume table-update triggers are job fields, as R5 expects, until v6 part B (#37) checks a live job.";
 
 pub(crate) fn run(context: &Context<'_>) -> Result<Finding, String> {
-    let args = SCHEMA_COMMAND.map(OsString::from);
-    let result = run_captured(context.binary, &args, SCHEMA_TIMEOUT);
-    let evidence = vec![context.run.record_invocation(
-        CHECK.as_str(),
+    let (evidence, step) = run_step(
+        context,
+        CHECK,
         "schema",
-        context.binary,
-        &args,
-        &result,
-    )?];
+        &SCHEMA_COMMAND,
+        SCHEMA_TIMEOUT,
+        SITE,
+    )?;
     let unknown = |reason: &str| Finding::unknown(CHECK, reason, FALLBACK, evidence.clone(), SITE);
-
-    // The error text stays in the evidence, with the binary path removed.
-    let Ok(captured) = result else {
-        return Ok(Finding::failed(
-            CHECK,
-            "`databricks bundle schema` could not be run to completion; see the evidence record",
-            evidence,
-            SITE,
-        ));
+    let stdout = match step {
+        Step::Succeeded(stdout) => stdout,
+        Step::Unsuccessful(reason) => return Ok(unknown(&reason)),
+        Step::Failed(finding) => return Ok(finding),
     };
-    if !captured.status.success() {
-        let status = captured
-            .status
-            .code()
-            .map_or_else(|| "a signal".to_owned(), |code| format!("exit code {code}"));
-        return Ok(unknown(&format!(
-            "`databricks bundle schema` failed with {status}"
-        )));
-    }
-    let Ok(schema) = json::parse_bytes(&captured.stdout) else {
+    let Ok(schema) = json::parse_bytes(&stdout) else {
         return Ok(unknown(
             "`databricks bundle schema` did not print valid JSON",
         ));

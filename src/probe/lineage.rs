@@ -3,9 +3,12 @@ pub(crate) mod v6;
 
 use std::collections::HashSet;
 use std::ffi::{OsStr, OsString};
+use std::time::Duration;
 
 use crate::args::Parser;
-use crate::probe::model::CheckId;
+use crate::databricks::run_captured;
+use crate::probe::model::{CheckId, Finding};
+use crate::probe::orchestrator::Context;
 
 /// Check requirements: whether each check needs warehouse-id and/or scope-catalog.
 /// Derived from #23 checks table: checks using Statement Execution need warehouse-id;
@@ -244,6 +247,58 @@ pub(crate) fn parse_lineage_options(parser: &mut Parser) -> Result<LineageOption
         v7_pipeline_id,
         promote_to,
     })
+}
+
+/// What one CLI step of a check produced.
+pub(crate) enum Step {
+    /// The CLI exited 0 with this stdout.
+    Succeeded(Vec<u8>),
+    /// The CLI exited non-zero or on a signal: the reason for an unknown
+    /// finding.
+    Unsuccessful(String),
+    /// The CLI could not be run to completion.
+    Failed(Finding),
+}
+
+/// Runs `databricks <args>` as `step` of `check` and records the invocation.
+/// Returns the evidence with what the run produced, or an error if the
+/// evidence cannot be written.
+pub(crate) fn run_step(
+    context: &Context<'_>,
+    check: CheckId,
+    step: &str,
+    args: &[&str],
+    timeout: Duration,
+    site: &'static str,
+) -> Result<(Vec<String>, Step), String> {
+    let command = format!("`databricks {}`", args.join(" "));
+    let args: Vec<_> = args.iter().map(OsString::from).collect();
+    let result = run_captured(context.binary, &args, timeout);
+    let evidence = vec![context.run.record_invocation(
+        check.as_str(),
+        step,
+        context.binary,
+        &args,
+        &result,
+    )?];
+    // The error text stays in the evidence, with the binary path removed.
+    let step = match result {
+        Err(_) => Step::Failed(Finding::failed(
+            check,
+            format!("{command} could not be run to completion; see the evidence record"),
+            evidence.clone(),
+            site,
+        )),
+        Ok(captured) if captured.status.success() => Step::Succeeded(captured.stdout),
+        Ok(captured) => {
+            let status = captured
+                .status
+                .code()
+                .map_or_else(|| "a signal".to_owned(), |code| format!("exit code {code}"));
+            Step::Unsuccessful(format!("{command} failed with {status}"))
+        }
+    };
+    Ok((evidence, step))
 }
 
 #[cfg(test)]
