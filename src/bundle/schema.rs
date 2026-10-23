@@ -541,6 +541,19 @@ mod tests {
     }
 
     #[test]
+    fn conditional_and_dependent_schemas_are_out_of_scope() {
+        // Only `properties`, `$ref`, and `allOf`/`anyOf`/`oneOf` count, so a
+        // property added under a condition or a dependency is not the
+        // definition's own. Widening this is a deliberate change to v6.
+        let schema = r#"{"$defs": {"x": {
+            "if.T": {"type": "object", "if": {"required": ["a"]}, "then": {"properties": {"table_update": {}}}},
+            "else.T": {"type": "object", "if": {"required": ["a"]}, "else": {"properties": {"table_update": {}}}},
+            "dependent.T": {"type": "object", "dependentSchemas": {"a": {"properties": {"table_update": {}}}}}
+        }}}"#;
+        assert_eq!(found(schema), Some(Vec::new()));
+    }
+
+    #[test]
     fn walks_each_ref_in_a_dense_cycle_once() {
         // Every definition refs every other and none declares the property,
         // so a walk that forgot each "no" would visit every path: about 12!.
