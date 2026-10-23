@@ -712,20 +712,25 @@ fn find_ignore_case(text: &str, needle: &str) -> Option<usize> {
     text.to_ascii_lowercase().find(needle)
 }
 
-/// `Bearer <token>` becomes `Bearer [REDACTED]`.
+/// `Bearer <token>`, with any run of whitespace after `Bearer`, becomes
+/// `Bearer [REDACTED]`.
 fn replace_bearer(line: &str) -> String {
     // Lowercased once: ASCII case changes keep every byte offset.
     let lower = line.to_ascii_lowercase();
     let mut result = String::with_capacity(line.len());
     let mut start = 0;
-    while let Some(found) = lower[start..].find("bearer ") {
-        let token_start = start + found + "bearer ".len();
+    while let Some(found) = lower[start..].find("bearer") {
+        let word_end = start + found + "bearer".len();
+        let spaces = line[word_end..]
+            .find(|c: char| !c.is_whitespace())
+            .unwrap_or(line.len() - word_end);
+        let token_start = word_end + spaces;
         result.push_str(&line[start..token_start]);
         let after = &line[token_start..];
         let length = after
             .find(|c: char| c.is_whitespace() || c == '"' || c == '\'')
             .unwrap_or(after.len());
-        if length > 0 && &after[..length] != REDACTED {
+        if spaces > 0 && length > 0 && &after[..length] != REDACTED {
             result.push_str(REDACTED);
         } else {
             result.push_str(&after[..length]);
@@ -1564,6 +1569,14 @@ mod tests {
             (
                 "Bearer [REDACTED] stays".to_owned(),
                 "Bearer [REDACTED] stays".to_owned(),
+            ),
+            (
+                format!("a: Bearer  {token} b: BEARER\t\t{token}"),
+                "a: Bearer  [REDACTED] b: BEARER\t\t[REDACTED]".to_owned(),
+            ),
+            (
+                "bearers are people; trailing Bearer ".to_owned(),
+                "bearers are people; trailing Bearer ".to_owned(),
             ),
             (
                 "dapi is short: dapi1234".to_owned(),
