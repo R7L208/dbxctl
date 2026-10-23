@@ -5,7 +5,7 @@ use std::process::Stdio;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use common::scenario::{ScenarioCli, assert_no_mutations};
+use common::scenario::{ScenarioCli, assert_no_mutations, stdout_line};
 use common::{TempDir, dbxctl, fake_databricks};
 
 #[test]
@@ -427,16 +427,64 @@ fn probe_run_directory_is_ignored_by_git() {
 
 #[test]
 fn probe_run_with_unresolved_checks_exits_10() {
-    let fixture = ProbeFixture::new("probe-unresolved", CLI_VERSION_SCENARIO);
-    let output = fixture.run(&["--only", "v6,cli"]);
+    // An implemented check that comes back unknown, so the test does not
+    // depend on which checks are still unimplemented.
+    let scenario = CLI_VERSION_SCENARIO.replace("v1.13.0", "v1.12.0");
+    let fixture = ProbeFixture::new("probe-unresolved", &scenario);
+    let output = fixture.run(&["--only", "cli"]);
     assert_eq!(output.status.code(), Some(10));
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
-        stdout.starts_with(
-            "cli       resolved  1.13.0\nv6        skipped   not implemented yet; #34 adds this check\n"
-        ),
+        stdout.starts_with("cli       unknown   Databricks CLI 1.12.0 is older than"),
         "{stdout}"
     );
+}
+
+#[test]
+fn probe_run_with_skipped_checks_exits_10() {
+    // Whichever checks are still unimplemented come back skipped, so this
+    // checks every skipped line rather than naming one, and holds as checks
+    // land. Once every check is implemented there is nothing left to skip.
+    let fixture = ProbeFixture::new("probe-skipped", CLI_VERSION_SCENARIO);
+    let output = fixture.run(&["--warehouse-id", "w", "--scope-catalog", "c"]);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let skipped: Vec<&str> = stdout
+        .lines()
+        .filter(|line| line.get(10..20) == Some("skipped   "))
+        .collect();
+    for line in &skipped {
+        let reason = &line[20..];
+        let issue = reason
+            .strip_prefix("not implemented yet; #")
+            .and_then(|rest| rest.strip_suffix(" adds this check"));
+        assert!(
+            issue.is_some_and(|issue| !issue.is_empty() && issue.bytes().all(|b| b.is_ascii_digit())),
+            "{line}"
+        );
+    }
+    if !skipped.is_empty() {
+        assert_eq!(output.status.code(), Some(10), "{stdout}");
+    }
+}
+
+#[test]
+fn probe_run_answers_v6_offline() {
+    let schema = include_str!("fixtures/bundle-schema-jobs.json");
+    let scenario = format!(
+        "{CLI_VERSION_SCENARIO}\ncase\narg bundle\narg schema\n{}\n",
+        stdout_line(schema)
+    );
+    let fixture = ProbeFixture::new("probe-v6", &scenario);
+    let output = fixture.run(&["--only", "cli,v6"]);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(output.status.code(), Some(0), "{stdout}");
+    assert!(
+        stdout.starts_with("cli       resolved  1.13.0\nv6        resolved  jobs\n"),
+        "{stdout}"
+    );
+    let invocations = fixture.cli.invocations();
+    assert_eq!(invocations, [vec!["version"], vec!["bundle", "schema"]]);
+    assert_no_mutations(&invocations);
 }
 
 #[test]

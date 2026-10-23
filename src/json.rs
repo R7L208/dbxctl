@@ -232,7 +232,7 @@ impl<'a> Node<'a> {
         }
         let mut current = self.0;
         for token in pointer.strip_prefix('/')?.split('/') {
-            let token = unescape(token)?;
+            let token = unescape_token(token)?;
             current = match current {
                 serde_json::Value::Object(map) => map.get(token.as_str())?,
                 serde_json::Value::Array(items) => items.get(array_index(&token)?)?,
@@ -255,7 +255,9 @@ impl<'a> Node<'a> {
     }
 }
 
-fn unescape(token: &str) -> Option<String> {
+/// Unescapes one JSON Pointer token: `~0` is `~` and `~1` is `/`. `None` for
+/// any other `~`.
+pub(crate) fn unescape_token(token: &str) -> Option<String> {
     let mut unescaped = String::with_capacity(token.len());
     let mut chars = token.chars();
     while let Some(character) = chars.next() {

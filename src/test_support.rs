@@ -9,7 +9,7 @@ use std::sync::OnceLock;
 #[path = "../tests/common/scenario.rs"]
 mod scenario;
 
-pub(crate) use scenario::{ScenarioCli, assert_no_mutations};
+pub(crate) use scenario::{ScenarioCli, assert_no_mutations, stdout_line};
 // For `scenario`, which reaches the guard and the JSON layer through its
 // parent module.
 use crate::{json, safety};

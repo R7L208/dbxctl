@@ -1,4 +1,5 @@
 mod args;
+mod bundle;
 mod databricks;
 mod evidence;
 mod exit;

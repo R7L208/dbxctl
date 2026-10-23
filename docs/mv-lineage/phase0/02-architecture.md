@@ -27,6 +27,7 @@ the boundary through which every workspace operation passes. It implements
 | `src/safety.rs` | `is_read_statement`, the read-only SQL guard. It refuses anything Spark could read differently, such as query hints or a backslash before a literal's quote, and calls to functions with side effects (`http_request`, `remote_query`, `ai_query`). | #31 |
 | `src/uc/fqn.rs` | Parsing and formatting Unity Catalog three-part names, including backtick quoting. | #31 |
 | `src/text.rs` | SQL string-literal and identifier quoting. A value with a `'` or `\` has no literal that means the same text under every `escapedStringLiterals` setting, so it must be a statement parameter. | #31 |
+| `src/bundle/schema.rs` | The `databricks bundle schema` command and timeout, and finding the packages whose definitions declare a property, such as `table_update`: telling definitions from path segments, resolving `$ref`s, and walking each ref once per definition. | #34 |
 
 ### Planned Crate-Level Modules
 
@@ -34,26 +35,26 @@ the boundary through which every workspace operation passes. It implements
 | --- | --- | --- |
 | `src/safety.rs` additions | If #37 ships, the `Mutate` capability and `safety::grant`. | #37 |
 | `src/bundle/paths.rs` | Local-path resolution relative to the bundle root and workspace-path forms. | #32 |
-| `src/bundle/schema.rs` | Running `databricks bundle schema` and locating table-update trigger definitions. | #34 |
 
 ### Implemented Probe Modules
 
-`probe run` runs only the `cli` check so far; every other selected check is
-recorded as skipped and names the issue that adds it.
+`probe run` runs the `cli` and `v6` checks so far; every other selected check
+is recorded as skipped and names the issue that adds it.
 
 | Module | Owns | Issue |
 | --- | --- | --- |
 | `src/probe.rs` | The `probe` command group, its argument parsing, and help. | #29 |
-| `src/probe/lineage.rs` | Lineage suite options from [R2](01-requirements.md#r2-run-options), including which checks need a warehouse or catalog. | #29 |
+| `src/probe/lineage.rs` | Lineage suite options from [R2](01-requirements.md#r2-run-options), including which checks need a warehouse or catalog, and `run_step`, which runs one CLI step of a check, records it as evidence, and classifies its failure. | #29, #34 |
 | `src/probe/model.rs` | `CheckId`, verdict and state types, and the finding struct. | #30 |
 | `src/probe/orchestrator.rs` | Running selected checks in a fixed order and writing the run directory: `run.json`, raw evidence, `findings.json`, and the skeleton `findings.md`. | #30 |
 | `src/probe/lineage/cli.rs` | The minimal `cli` check: which Databricks CLI version is installed. | #30 |
+| `src/probe/lineage/v6.rs` | `v6` part A: running `databricks bundle schema`, naming each package that declares table-update triggers, and building the verdict: `jobs`, the jobs packages and `; also: ` the others, or `not jobs: `. | #34 |
 
 ### Planned Probe Modules
 
 | Module | Will own | Issue |
 | --- | --- | --- |
-| `src/probe/lineage/` | The remaining 14 checks from [R4](01-requirements.md#r4-checks), and nothing else. | #32, #33, #34, #37 |
+| `src/probe/lineage/` | The remaining 13 checks from [R4](01-requirements.md#r4-checks), and nothing else. | #32, #33, #37 |
 | `src/probe/lineage/sites.rs` | The mapping from each `CheckId` to the code or design sites its answer affects. | #36 |
 | `src/probe/report.rs` | `findings.json` and `findings.md` generation and redaction. | #36 |
 
