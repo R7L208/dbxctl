@@ -280,7 +280,7 @@ impl CliRunner {
         }
         args.push("--debug");
         let (args, result) = self.capture(&args, timeout);
-        let response = response(method, &result);
+        let response = response(Request { method, path }, &result);
         (evidence(args, result, kept), response)
     }
 
@@ -637,17 +637,22 @@ fn is_statement_id(id: &str) -> bool {
     !id.is_empty() && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
 }
 
-/// Classifies one `databricks api` run.
-fn response(method: &str, result: &Result<Captured, String>) -> Result<Response, Error> {
+/// Classifies one `databricks api` run of `request`.
+fn response(request: Request<'_>, result: &Result<Captured, String>) -> Result<Response, Error> {
+    let method = request.method;
     let Ok(captured) = result else {
         return Err(Error::Transport(format!(
             "`databricks api {method}` could not be run to completion"
         )));
     };
     let stderr = String::from_utf8_lossy(&captured.stderr);
-    let status = http_status(&stderr);
+    let logged = logged_response(&stderr, Some(request));
+    let status = logged.as_ref().map(|logged| logged.status);
     if let Some(status) = status.filter(|&status| status >= 400) {
-        let error = error_body(&stderr);
+        let error = logged
+            .as_ref()
+            .and_then(|logged| logged_object(&logged.lines))
+            .or_else(|| first_object(&stderr));
         let text = |key| {
             error
                 .as_ref()
@@ -682,45 +687,112 @@ fn response(method: &str, result: &Result<Captured, String>) -> Result<Response,
     })
 }
 
-/// The last response in a debug log: its status and the lines logged with
-/// it, without their `<` prefix.
+/// A logged response: its status and the lines logged with it, without
+/// their `<` prefix.
 struct Logged<'a> {
     status: u16,
     lines: Vec<&'a str>,
 }
 
-/// The last response in a debug log.
+/// The request a `databricks api` run made.
+#[derive(Clone, Copy)]
+struct Request<'a> {
+    method: &'a str,
+    path: &'a str,
+}
+
+/// What a debug log records, in order.
+enum Entry<'a> {
+    Request(&'a str, &'a str),
+    Response(Logged<'a>),
+}
+
+/// The response to `request` in a debug log, or to the last request when
+/// `request` is `None` or the log names no request.
 ///
-/// The SDK logs each response as a `< HTTP/<version> <code>` line, after an
-/// optional timestamp, followed by its headers and body on lines that also
-/// start with `<`. Those lines belong to the response, so text in a body that
-/// looks like a status line cannot be taken for one.
-fn logged_response(stderr: &str) -> Option<Logged<'_>> {
-    let mut last: Option<Logged<'_>> = None;
+/// The SDK logs each request as a line such as `Debug: GET /api/2.0/x`, and
+/// each response as a `< HTTP/<version> <code>` line, after an optional
+/// timestamp, followed by its headers and body on lines that also start with
+/// `<`. Those lines belong to the response, so text in a body that looks
+/// like a status line cannot be taken for one. The response to `request` is
+/// the last one after its last request line: a retry logs the request again,
+/// and a redirect is followed to the request it leads to. A later request
+/// for something else, such as a token refresh, is not this call's.
+fn logged_response<'a>(stderr: &'a str, request: Option<Request<'_>>) -> Option<Logged<'a>> {
+    let mut log = Vec::new();
     let mut in_response = false;
     for line in stderr.lines() {
         let content = without_timestamp(line);
         if in_response && let Some(rest) = content.strip_prefix('<') {
-            if let Some(last) = &mut last {
+            if let Some(Entry::Response(last)) = log.last_mut() {
                 last.lines.push(rest.strip_prefix(' ').unwrap_or(rest));
             }
             continue;
         }
         in_response = false;
         if let Some(status) = status_code(content) {
-            last = Some(Logged {
+            log.push(Entry::Response(Logged {
                 status,
                 lines: Vec::new(),
-            });
+            }));
             in_response = true;
+        } else if let Some((method, path)) = request_line(content) {
+            log.push(Entry::Request(method, path));
         }
     }
-    last
+    let ours = request.and_then(|request| {
+        let path = without_query(request.path);
+        log.iter().rposition(|entry| match entry {
+            Entry::Request(method, logged) => {
+                method.eq_ignore_ascii_case(request.method) && *logged == path
+            }
+            Entry::Response(_) => false,
+        })
+    });
+    let Some(start) = ours else {
+        return log.into_iter().rev().find_map(|entry| match entry {
+            Entry::Response(logged) => Some(logged),
+            Entry::Request(..) => None,
+        });
+    };
+    let mut answer: Option<Logged<'a>> = None;
+    for entry in log.into_iter().skip(start + 1) {
+        match entry {
+            Entry::Response(logged) => answer = Some(logged),
+            // A redirect leads to the next request; anything else is not
+            // this call's.
+            Entry::Request(..)
+                if answer
+                    .as_ref()
+                    .is_some_and(|answer| (300..400).contains(&answer.status)) => {}
+            Entry::Request(..) => break,
+        }
+    }
+    answer
+}
+
+/// The method and path, without a query, of a request line such as
+/// `Debug: GET /api/2.0/x` or `GET /api/2.0/x HTTP/1.1`.
+fn request_line(content: &str) -> Option<(&str, &str)> {
+    let content = content.strip_prefix("Debug: ").unwrap_or(content);
+    let (method, rest) = content.split_once(' ')?;
+    if !matches!(method, "GET" | "POST" | "PUT" | "PATCH" | "DELETE" | "HEAD") {
+        return None;
+    }
+    let target = rest.split_whitespace().next()?;
+    target
+        .starts_with('/')
+        .then(|| (method, without_query(target)))
+}
+
+fn without_query(path: &str) -> &str {
+    path.split_once('?').map_or(path, |(path, _)| path)
 }
 
 /// The status of the last response in a debug log.
+#[cfg(test)]
 fn http_status(stderr: &str) -> Option<u16> {
-    logged_response(stderr).map(|logged| logged.status)
+    logged_response(stderr, None).map(|logged| logged.status)
 }
 
 /// `line` without a leading log timestamp such as `2024/10/23 10:30:45 `.
@@ -735,21 +807,18 @@ fn status_code(content: &str) -> Option<u16> {
     code.parse().ok().filter(|code| (100..600).contains(code))
 }
 
-/// The JSON error body of a failed request.
-///
-/// The CLI logs it with the last response, as `< {` through `< }` followed
-/// by ` pid=… sdk=true`. Failing that, it is the first object that starts a
-/// line of the log, ending on that line when it closes there or else on the
-/// next line that starts with `}`. Output after it is ignored, and each line
-/// is read once.
+/// The JSON error body of the last failed request in a debug log.
+#[cfg(test)]
 fn error_body(stderr: &str) -> Option<Document> {
-    logged_response(stderr)
+    logged_response(stderr, None)
         .and_then(|logged| logged_object(&logged.lines))
         .or_else(|| first_object(stderr))
 }
 
 /// The JSON object in a logged response: from its first line that starts
-/// with `{` to the last `}`, which drops the log fields after it.
+/// with `{` to the last `}`, which drops the log fields after it. The CLI
+/// logs an error body this way, as `< {` through `< }` followed by
+/// ` pid=… sdk=true`.
 fn logged_object(lines: &[&str]) -> Option<Document> {
     let start = lines.iter().position(|line| line.starts_with('{'))?;
     let text = lines[start..].join("\n");
@@ -759,6 +828,10 @@ fn logged_object(lines: &[&str]) -> Option<Document> {
         .filter(|document| document.root().kind() == Kind::Object)
 }
 
+/// The first object that starts a line of the log, when no logged response
+/// holds one: it ends on that line when it closes there, or else on the
+/// next line that starts with `}`. Output after it is ignored, and each line
+/// is read once.
 fn first_object(stderr: &str) -> Option<Document> {
     let mut lines = stderr.split_inclusive('\n');
     let mut offset = 0;
@@ -1062,8 +1135,9 @@ mod tests {
     use std::process::ExitStatus;
 
     use super::{
-        Call, CliRunner, Error, Limits, ResultSet, Runner, STATEMENT_EVIDENCE_BYTES, STATEMENTS,
-        WAIT_TIMEOUT, error_body, http_status, scrub, scrubbed, stopped_at_deadline, submit_body,
+        Call, CliRunner, Error, Limits, Request, ResultSet, Runner, STATEMENT_EVIDENCE_BYTES,
+        STATEMENTS, WAIT_TIMEOUT, error_body, http_status, logged_object, logged_response, scrub,
+        scrubbed, stopped_at_deadline, submit_body,
     };
     use crate::databricks::Captured;
     use crate::json::Node;
@@ -2143,6 +2217,57 @@ mod tests {
         assert_eq!(http_status("GET /x HTTP/1.1\n"), None);
         assert_eq!(http_status("< HTTP/1.1 abc\n"), None);
         assert_eq!(http_status("Debug: x < HTTP/1.1 500 x\n"), None);
+    }
+
+    #[test]
+    fn takes_the_response_to_this_calls_own_request() {
+        let ours = Request {
+            method: "get",
+            path: "/api/x?view=full",
+        };
+        let status = |stderr: &str| logged_response(stderr, Some(ours)).map(|logged| logged.status);
+        // A later, unrelated request does not replace this call's response.
+        let failed_then_telemetry = "Debug: GET /api/x\n< HTTP/1.1 404 Not Found\n< {\"error_code\":\"NOT_FOUND\"} pid=1 sdk=true\nDebug: POST /telemetry-ext\n< HTTP/1.1 200 OK\n< {} pid=1 sdk=true\n";
+        assert_eq!(status(failed_then_telemetry), Some(404));
+        let code = logged_response(failed_then_telemetry, Some(ours))
+            .and_then(|logged| logged_object(&logged.lines))
+            .and_then(|body| body.root().get("error_code")?.as_str().map(str::to_owned));
+        assert_eq!(code.as_deref(), Some("NOT_FOUND"));
+        let ok_then_refresh = "Debug: GET /api/x?view=full\n< HTTP/1.1 200 OK\n< {} pid=1 sdk=true\nDebug: POST /oidc/v1/token\n< HTTP/1.1 500 x\n";
+        assert_eq!(status(ok_then_refresh), Some(200));
+        // A request before this call's, like the CLI's config lookup, is
+        // skipped; a retry and a redirect are followed.
+        let missing = Request {
+            method: "GET",
+            path: "/api/2.0/pipelines/missing",
+        };
+        let logged = logged_response(LOGGED_404, Some(missing)).expect("response");
+        assert_eq!(logged.status, 404);
+        let retried = "Debug: GET /api/x\n< HTTP/1.1 503 x\nDebug: GET /api/x\n< HTTP/1.1 200 OK\n";
+        assert_eq!(status(retried), Some(200));
+        let redirected = "Debug: GET /api/x\n< HTTP/1.1 307 Temporary Redirect\nDebug: GET /api/y\n< HTTP/2.0 200 OK\n";
+        assert_eq!(status(redirected), Some(200));
+        // A request with no logged response has no status, and a log that
+        // names no request falls back to its last response.
+        assert_eq!(
+            status("Debug: GET /api/x\nError: connection refused\n"),
+            None
+        );
+        assert_eq!(status("< HTTP/1.1 403 Forbidden\n"), Some(403));
+    }
+
+    #[test]
+    fn api_get_ignores_a_later_unrelated_request() {
+        let log = "Debug: GET /api/x\n< HTTP/1.1 200 OK\n< {} pid=1 sdk=true\nDebug: POST /telemetry-ext\n< HTTP/1.1 500 Internal Server Error\n< {\"error_code\":\"INTERNAL\"} pid=1 sdk=true\n";
+        let scenario = case(
+            &["api", "get", "/api/x", "--debug"],
+            "{\"ok\":true}",
+            log,
+            0,
+        );
+        let fixture = Fixture::new("transport-later-request", &scenario);
+        let response = fixture.runner(QUICK).api_get("/api/x").result.expect("200");
+        assert_eq!(response.status, Some(200));
     }
 
     #[test]
