@@ -29,9 +29,15 @@ use crate::databricks::{Captured, run_captured_command};
 use crate::json::{self, Document, Kind, Node, Value};
 use crate::safety;
 
-/// How long the warehouse may hold the submit request before answering with
-/// a pending statement. The API accepts 5 to 50 seconds.
-const WAIT_TIMEOUT: &str = "30s";
+/// The longest the warehouse may hold the submit request before answering
+/// with a pending statement. The API accepts 0 (answer at once) or 5 to 50
+/// seconds.
+const WAIT_TIMEOUT: Duration = Duration::from_secs(30);
+/// The shortest wait the API accepts other than 0.
+const MIN_WAIT: Duration = Duration::from_secs(5);
+/// How much of a CLI run a submit leaves for the CLI itself, so the run is
+/// not stopped before the warehouse answers with a statement ID.
+const SUBMIT_MARGIN: Duration = Duration::from_secs(5);
 const STATEMENTS: &str = "/api/2.0/sql/statements";
 const REDACTED: &str = "[REDACTED]";
 /// How much of each statement response a [`Call`] keeps as evidence. The
@@ -41,12 +47,30 @@ const STATEMENT_EVIDENCE_BYTES: usize = 64 * 1024;
 /// The time limits for CLI calls and statements.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Limits {
-    /// One CLI run. Longer than [`WAIT_TIMEOUT`], which a submit can take.
+    /// One CLI run. A submit asks the warehouse to answer within this less
+    /// [`SUBMIT_MARGIN`], so it gets a statement ID to poll or cancel.
     pub(crate) call: Duration,
     /// From submitting a statement until it must have finished.
     pub(crate) deadline: Duration,
     /// Between polls of a running statement.
     pub(crate) poll: Duration,
+}
+
+impl Limits {
+    /// How long the warehouse may hold a submit: [`WAIT_TIMEOUT`], cut to
+    /// the deadline and to the call less [`SUBMIT_MARGIN`]. Below
+    /// [`MIN_WAIT`] it answers at once and the statement is polled instead.
+    fn submit_wait(&self) -> Duration {
+        let wait = WAIT_TIMEOUT
+            .min(self.deadline)
+            .min(self.call.saturating_sub(SUBMIT_MARGIN));
+        let wait = Duration::from_secs(wait.as_secs());
+        if wait < MIN_WAIT {
+            Duration::ZERO
+        } else {
+            wait
+        }
+    }
 }
 
 impl Default for Limits {
@@ -266,7 +290,7 @@ impl CliRunner {
         calls: &mut Vec<Call>,
     ) -> Result<ResultSet, Error> {
         let started = Instant::now();
-        let submit = submit_body(sql, warehouse_id);
+        let submit = submit_body(sql, warehouse_id, self.limits.submit_wait());
         let body =
             self.statement_call("post", STATEMENTS, Some(&submit), self.limits.call, calls)?;
         let statement_id = body
@@ -313,6 +337,10 @@ impl CliRunner {
                 .unwrap_or_default()
                 .to_owned();
             match state.as_str() {
+                // A result that came back after the deadline is too late.
+                "SUCCEEDED" if started.elapsed() > self.limits.deadline => {
+                    return Err(timeout());
+                }
                 "SUCCEEDED" => return Ok(body),
                 "PENDING" | "RUNNING" => {
                     // Neither the sleep nor the poll may outlast the deadline.
@@ -466,14 +494,17 @@ impl Runner for CliRunner {
 }
 
 /// The submit request: inline `JSON_ARRAY` results, and a pending statement
-/// rather than a cancelled one if it outlasts [`WAIT_TIMEOUT`].
-fn submit_body(sql: &str, warehouse_id: &str) -> String {
+/// rather than a cancelled one if it outlasts `wait`.
+fn submit_body(sql: &str, warehouse_id: &str, wait: Duration) -> String {
     let body = Value::object([
         ("disposition", Value::string("INLINE")),
         ("format", Value::string("JSON_ARRAY")),
         ("on_wait_timeout", Value::string("CONTINUE")),
         ("statement", Value::string(sql)),
-        ("wait_timeout", Value::string(WAIT_TIMEOUT)),
+        (
+            "wait_timeout",
+            Value::string(format!("{}s", wait.as_secs())),
+        ),
         ("warehouse_id", Value::string(warehouse_id)),
     ]);
     Document::from(body)
@@ -748,7 +779,7 @@ mod tests {
 
     use super::{
         CliRunner, Error, Limits, ResultSet, Runner, STATEMENT_EVIDENCE_BYTES, STATEMENTS,
-        error_body, http_status, scrub, scrubbed, submit_body,
+        WAIT_TIMEOUT, error_body, http_status, scrub, scrubbed, submit_body,
     };
     use crate::databricks::Captured;
     use crate::json::Node;
@@ -834,9 +865,12 @@ mod tests {
         )
     }
 
-    /// The submit case for [`SQL`], answering with this output.
-    fn submit_case(stdout: &str, stderr: &str, exit: u8) -> String {
-        let body = submit_body(SQL, WAREHOUSE);
+    /// The wait [`Fixture::runner`]'s 10-second call leaves a submit.
+    const TEST_WAIT: Duration = Duration::from_secs(5);
+
+    /// The submit case for [`SQL`] with `wait`, answering with this output.
+    fn submit_case_waiting(wait: Duration, stdout: &str, stderr: &str, exit: u8) -> String {
+        let body = submit_body(SQL, WAREHOUSE, wait);
         case(
             &["api", "post", STATEMENTS, "--json", &body, "--debug"],
             stdout,
@@ -845,9 +879,19 @@ mod tests {
         )
     }
 
-    /// The submit case, answering with `body`.
+    /// The submit case for [`TEST_WAIT`], answering with this output.
+    fn submit_case(stdout: &str, stderr: &str, exit: u8) -> String {
+        submit_case_waiting(TEST_WAIT, stdout, stderr, exit)
+    }
+
+    /// The submit case with `wait`, answering with `body`.
+    fn submit_waiting(wait: Duration, body: &str) -> String {
+        submit_case_waiting(wait, body, &debug_log("post", STATEMENTS, "200 OK"), 0)
+    }
+
+    /// The submit case for [`TEST_WAIT`], answering with `body`.
     fn submit(body: &str) -> String {
-        submit_case(body, &debug_log("post", STATEMENTS, "200 OK"), 0)
+        submit_waiting(TEST_WAIT, body)
     }
 
     fn get(path: &str, body: &str) -> String {
@@ -1098,9 +1142,52 @@ mod tests {
         // Spelled out rather than built with `submit_body`, so a change to
         // any field fails here.
         assert_eq!(
-            submit_body("SELECT 'a\"b'", WAREHOUSE),
+            submit_body("SELECT 'a\"b'", WAREHOUSE, WAIT_TIMEOUT),
             r#"{"disposition":"INLINE","format":"JSON_ARRAY","on_wait_timeout":"CONTINUE","statement":"SELECT 'a\"b'","wait_timeout":"30s","warehouse_id":"abc123"}"#
         );
+    }
+
+    #[test]
+    fn a_submit_waits_no_longer_than_the_deadline_or_call_allows() {
+        let secs = Duration::from_secs;
+        for (call, deadline, wait) in [
+            (secs(60), secs(300), secs(30)),
+            (secs(10), secs(300), secs(5)),
+            (secs(60), secs(7), secs(7)),
+            (secs(60), Duration::from_millis(7_900), secs(7)),
+            (secs(9), secs(300), Duration::ZERO),
+            (secs(60), secs(4), Duration::ZERO),
+            (secs(3), Duration::ZERO, Duration::ZERO),
+        ] {
+            let limits = Limits {
+                call,
+                deadline,
+                poll: Duration::ZERO,
+            };
+            assert_eq!(limits.submit_wait(), wait, "{call:?} {deadline:?}");
+        }
+    }
+
+    #[test]
+    fn refuses_a_result_that_succeeded_after_the_deadline() {
+        // The warehouse answers the submit late with a finished statement.
+        let late = submit_waiting(Duration::ZERO, &succeeded(r#"{"data_array":[["1",null]]}"#))
+            .replace("exit 0", "sleep 300\nexit 0");
+        let scenario = [late, cancel_case()].concat();
+        let fixture = Fixture::new("transport-late-success", &scenario);
+        let runner = fixture.runner(QUICK).with_limits(Limits {
+            call: Duration::from_secs(10),
+            deadline: Duration::from_millis(100),
+            poll: Duration::ZERO,
+        });
+        let outcome = runner.statement(SQL, WAREHOUSE);
+        assert_eq!(
+            outcome.result,
+            Err(Error::Timeout {
+                statement_id: ID.to_owned()
+            })
+        );
+        assert_no_mutations(&fixture.invocations());
     }
 
     #[test]
@@ -1243,7 +1330,11 @@ mod tests {
     #[test]
     fn cancels_a_statement_at_the_deadline() {
         let cancel = cancel_path();
-        let scenario = [submit(&state("PENDING")), cancel_case()].concat();
+        let scenario = [
+            submit_waiting(Duration::ZERO, &state("PENDING")),
+            cancel_case(),
+        ]
+        .concat();
         let fixture = Fixture::new("transport-timeout", &scenario);
         let outcome = fixture.runner(Duration::ZERO).statement(SQL, WAREHOUSE);
         assert_eq!(
@@ -1267,13 +1358,22 @@ mod tests {
             (
                 "transport-long-interval",
                 Duration::from_secs(20),
-                [submit(&state("PENDING")), cancel_case()].concat(),
+                [
+                    submit_waiting(Duration::ZERO, &state("PENDING")),
+                    cancel_case(),
+                ]
+                .concat(),
                 0,
             ),
             (
                 "transport-slow-poll",
                 Duration::ZERO,
-                [submit(&state("PENDING")), slow_poll, cancel_case()].concat(),
+                [
+                    submit_waiting(Duration::ZERO, &state("PENDING")),
+                    slow_poll,
+                    cancel_case(),
+                ]
+                .concat(),
                 1,
             ),
         ] {
