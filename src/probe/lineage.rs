@@ -4,7 +4,26 @@ use std::collections::HashSet;
 use std::ffi::{OsStr, OsString};
 
 use crate::args::Parser;
-use crate::probe::model::CheckId;
+use crate::probe::model::{CheckId, Finding};
+use crate::probe::orchestrator::Context;
+
+/// Runs one check and returns its finding.
+pub(crate) type Runner = fn(&Context<'_>) -> Result<Finding, String>;
+
+/// The runner for `check`, or `None` until its step issue implements it. This
+/// is the only list of implemented checks: the orchestrator runs these and
+/// reports the rest as skipped, and only these require their inputs. Add a
+/// check here when its step issue lands.
+pub(crate) fn runner(check: CheckId) -> Option<Runner> {
+    match check {
+        CheckId::Cli => Some(cli::run),
+        _ => None,
+    }
+}
+
+fn is_implemented(check: CheckId) -> bool {
+    runner(check).is_some()
+}
 
 /// Check requirements: whether each check needs warehouse-id and/or scope-catalog.
 /// Derived from #23 checks table: checks using Statement Execution need warehouse-id;
@@ -111,18 +130,14 @@ fn determine_selected_checks(only: Option<&Vec<String>>) -> Vec<CheckId> {
     }
 }
 
-/// The selected checks that need a warehouse and a scope catalog, in
-/// canonical order. Only checks for which `implemented` holds count: the
-/// others are reported as skipped and never read either option.
-fn check_resource_requirements(
-    selected_checks: &[CheckId],
-    implemented: fn(CheckId) -> bool,
-) -> (Vec<&'static str>, Vec<&'static str>) {
+/// The checks in `checks` that need a warehouse and a scope catalog, in
+/// canonical order.
+fn check_resource_requirements(checks: &[CheckId]) -> (Vec<&'static str>, Vec<&'static str>) {
     let needing = |needs: fn(&CheckRequirements) -> bool| {
-        selected_checks
+        checks
             .iter()
             .copied()
-            .filter(|&id| implemented(id) && needs(&check_requirements(id)))
+            .filter(|&id| needs(&check_requirements(id)))
             .map(CheckId::as_str)
             .collect()
     };
@@ -162,7 +177,7 @@ impl LineageOptions {
 }
 
 pub(crate) fn parse_lineage_options(parser: &mut Parser) -> Result<LineageOptions, String> {
-    parse_with(parser, CheckId::is_implemented)
+    parse_with(parser, is_implemented)
 }
 
 /// Parses the options, requiring a warehouse and catalog only for the
@@ -204,12 +219,10 @@ fn parse_with(
 
     let promote_to = parser.option("promote-to")?.map(OsStr::to_os_string);
 
-    // Determine selected checks in canonical order
-    let selected_checks = determine_selected_checks(only.as_ref());
-
-    // Check resource requirements
-    let (warehouse_checks, catalog_checks) =
-        check_resource_requirements(&selected_checks, implemented);
+    // Only implemented checks read their inputs; the rest are skipped.
+    let mut running_checks = determine_selected_checks(only.as_ref());
+    running_checks.retain(|&id| implemented(id));
+    let (warehouse_checks, catalog_checks) = check_resource_requirements(&running_checks);
 
     if !warehouse_checks.is_empty() && warehouse_id.is_none() {
         return Err(format!(
@@ -321,19 +334,22 @@ mod tests {
     }
 
     #[test]
-    fn requirements_count_only_implemented_checks() {
-        let (warehouse, catalog) = check_resource_requirements(&CheckId::ALL, |_| true);
+    fn requirements_follow_the_check_table() {
+        let (warehouse, catalog) = check_resource_requirements(&CheckId::ALL);
         assert_eq!(warehouse, ["v2", "v3", "v11", "v9", "v4"]);
         assert_eq!(catalog, ["v3", "v11"]);
 
-        let (warehouse, catalog) =
-            check_resource_requirements(&CheckId::ALL, |id| id == CheckId::V3);
-        assert_eq!(warehouse, ["v3"]);
-        assert_eq!(catalog, ["v3"]);
-
-        let (warehouse, catalog) =
-            check_resource_requirements(&CheckId::ALL, CheckId::is_implemented);
+        let (warehouse, catalog) = check_resource_requirements(&[CheckId::Cli, CheckId::V6]);
         assert!(warehouse.is_empty() && catalog.is_empty());
+    }
+
+    #[test]
+    fn only_the_cli_check_is_implemented() {
+        let implemented: Vec<_> = CheckId::ALL
+            .into_iter()
+            .filter(|&id| is_implemented(id))
+            .collect();
+        assert_eq!(implemented, [CheckId::Cli]);
     }
 
     /// Parses `extra` after the required options as if every check were

@@ -138,9 +138,9 @@ fn complete(
 }
 
 fn run_check(check: CheckId, context: &Context<'_>) -> Result<Finding, String> {
-    match check {
-        CheckId::Cli => lineage::cli::run(context),
-        _ => Ok(Finding::skipped(
+    match lineage::runner(check) {
+        Some(run) => run(context),
+        None => Ok(Finding::skipped(
             check,
             format!("not implemented yet; {} adds this check", check.issue()),
         )),
@@ -432,26 +432,6 @@ mod tests {
         );
         // Only the `cli` check runs a command so far.
         assert_eq!(cli.invocations(), [["version"]]);
-    }
-
-    #[test]
-    fn only_implemented_checks_run() {
-        // `CheckId::is_implemented` decides which inputs are required, so it
-        // must match the checks `run_check` actually runs.
-        let (temp, cli) = setup("orchestrator-implemented", VERSION_SCENARIO);
-        let bundle = temp.path().join("bundle");
-        let plan = plan(&bundle, &[]).expect("plan");
-        let outcome =
-            run(&plan, cli.binary().as_os_str(), &FixedClock(FIXED_TIME)).expect("run probe");
-        assert_eq!(outcome.findings.len(), CheckId::ALL.len());
-        for finding in &outcome.findings {
-            assert_eq!(
-                finding.state() == State::Skipped,
-                !finding.check().is_implemented(),
-                "{}",
-                finding.check()
-            );
-        }
     }
 
     #[test]

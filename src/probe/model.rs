@@ -69,13 +69,6 @@ impl CheckId {
         Self::ALL.into_iter().find(|check| check.as_str() == id)
     }
 
-    /// Whether the check runs. The orchestrator reports any other check as
-    /// skipped, and its inputs are not required. Add a check here when its
-    /// step issue lands.
-    pub(crate) const fn is_implemented(self) -> bool {
-        matches!(self, Self::Cli)
-    }
-
     /// The step issue that implements this check, from the #23 checks table.
     pub(crate) const fn issue(self) -> &'static str {
         match self {
