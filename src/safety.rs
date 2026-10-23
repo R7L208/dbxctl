@@ -26,8 +26,9 @@ const WRITE_WORDS: [&str; 22] = [
 /// as Databricks SQL reads them: `--` and nested `/* */` comments, `'` and `"`
 /// literals with backslash escapes, raw `r'…'` and `r"…"` literals without
 /// them, and backtick identifiers with doubled backticks. Anything that
-/// cannot be read, such as an unterminated literal or a `/*+` query hint, is
-/// refused. One trailing semicolon is allowed.
+/// cannot be read, such as an unterminated literal, a `/*+` query hint, or a
+/// backslash before a literal's own quote, is refused. One trailing
+/// semicolon is allowed.
 pub(crate) fn is_read_statement(sql: &str) -> bool {
     let Some(tokens) = tokenize(sql) else {
         return false;
@@ -169,11 +170,17 @@ fn block_comment_end(bytes: &[u8], start: usize) -> Option<usize> {
 
 /// The index after the literal starting at `start`, whose quote is
 /// `bytes[start]`. A backslash escapes the next byte.
+///
+/// With `spark.sql.parser.escapedStringLiterals` on, Spark reads backslashes
+/// literally and ends a literal at its first quote. The two readings end it
+/// in different places only when a backslash escapes the quote, so that is
+/// refused and the guard holds under either setting.
 fn literal_end(bytes: &[u8], start: usize) -> Option<usize> {
     let quote = bytes[start];
     let mut index = start + 1;
     while index < bytes.len() {
         match bytes[index] {
+            b'\\' if bytes.get(index + 1) == Some(&quote) => return None,
             b'\\' => index += 2,
             byte if byte == quote => return Some(index + 1),
             _ => index += 1,
@@ -225,7 +232,8 @@ mod tests {
             "show create table `a`.`b`.`c` AS SERDE",
             "-- leading\n/* block /* nested */ still */ SELECT 1",
             "SELECT 'DROP TABLE t; -- not a comment' AS text",
-            "SELECT \"it\\\"s\" AS text, 'it\\'s' AS other",
+            "SELECT \"it's\" AS text, 'say \"hi\"' AS other, 'C:\\\\' AS path",
+            "SELECT 'tab\\there' AS text",
             "SELECT * FROM `update` JOIN `a``b` USING (id)",
             "SELECT `into` FROM t",
             "SELECT 'naïve ☃' AS text, x·y FROM t",
@@ -264,6 +272,10 @@ mod tests {
             "SELECT /*+ BROADCAST(t) */ * FROM t",
             "SELECT 'unterminated",
             "SELECT 'escaped quote at end\\'",
+            "SELECT '\\'; DROP TABLE t; --'",
+            "SELECT \"it\\\"s\" AS text",
+            "SELECT 'it\\'s' AS text",
+            "SELECT 'C:\\\\\\'; DROP TABLE t; --'",
             "SELECT r'\\'; DROP TABLE t; --'",
             "WITH t AS (SELECT r'\\') INSERT INTO u SELECT 1 --'",
             "SELECT R\"\\\"; DROP TABLE t; --\"",
