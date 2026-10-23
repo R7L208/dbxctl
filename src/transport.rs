@@ -422,7 +422,7 @@ impl CliRunner {
         loop {
             let next = match chunk {
                 Some(result) => {
-                    append_rows(result, &mut rows)?;
+                    append_rows(result, columns.len(), &mut rows)?;
                     result.get("next_chunk_index").and_then(Node::as_u64)
                 }
                 None => None,
@@ -780,15 +780,25 @@ fn columns(body: Node<'_>) -> Result<Vec<String>, Error> {
         .collect()
 }
 
-/// Appends the rows of one result chunk. A chunk without `data_array` has
-/// no rows.
-fn append_rows(chunk: Node<'_>, rows: &mut Vec<Vec<Option<String>>>) -> Result<(), Error> {
+/// Appends the rows of one result chunk, each of which must have one cell
+/// per column. A chunk without `data_array` has no rows.
+fn append_rows(
+    chunk: Node<'_>,
+    width: usize,
+    rows: &mut Vec<Vec<Option<String>>>,
+) -> Result<(), Error> {
     let Some(data) = chunk.get("data_array") else {
         return Ok(());
     };
     let unexpected = || Error::Transport("`data_array` is not an array of rows of text".to_owned());
     for row in data.elements().ok_or_else(unexpected)? {
         let cells = row.elements().ok_or_else(unexpected)?;
+        if cells.len() != width {
+            return Err(Error::Transport(format!(
+                "a result row has {} cells for {width} columns",
+                cells.len()
+            )));
+        }
         let row = cells
             .map(|cell| match cell.kind() {
                 Kind::Null => Ok(None),
@@ -1656,7 +1666,7 @@ mod tests {
             ),
             (
                 "transport-cell",
-                submit(&succeeded(r#"{"data_array":[[1]]}"#)),
+                submit(&succeeded(r#"{"data_array":[[1,null]]}"#)),
                 "data_array",
             ),
             (
@@ -1759,6 +1769,20 @@ mod tests {
                 ]
                 .concat(),
                 "chunk 1 came back without a `chunk_index`",
+            ),
+            (
+                "transport-short-row",
+                submit(&succeeded(r#"{"data_array":[["1"]]}"#)),
+                "a result row has 1 cells for 2 columns",
+            ),
+            (
+                "transport-long-row",
+                [
+                    submit(&succeeded(two_chunks)),
+                    get(&chunk1, r#"{"chunk_index":1,"data_array":[["2","b","c"]]}"#),
+                ]
+                .concat(),
+                "a result row has 3 cells for 2 columns",
             ),
             (
                 "transport-row-total",
