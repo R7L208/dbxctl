@@ -8,9 +8,9 @@
 use crate::probe::model::{CheckId, Finding, Verdict};
 use crate::probe::orchestrator::Context;
 use crate::probe::workspace::{
-    Read, Reply, describe, described_columns, required_words, scope_catalog, step, warehouse, words,
+    Read, Reply, describe, described_columns, list_or_none, scope_catalog, scope_table_types, step,
+    warehouse, words,
 };
-use crate::text;
 
 const CHECK: CheckId = CheckId::V3;
 /// The design page that records how later phases find materialized views.
@@ -19,14 +19,6 @@ const PIPELINES: &str = "system.lakeflow.pipelines";
 const DESCRIBE_PIPELINES: &str = "DESCRIBE TABLE system.lakeflow.pipelines";
 const PIPELINE_TYPES: &str = "SELECT pipeline_type, count(*) AS pipelines FROM system.lakeflow.pipelines GROUP BY pipeline_type ORDER BY pipeline_type";
 const FALLBACK: &str = "Identify materialized views by `table_type` `MATERIALIZED_VIEW` in `information_schema.tables`, and read pipeline metadata from `/api/2.0/pipelines/<id>` instead of `system.lakeflow.pipelines`.";
-
-/// The `table_type` values in `catalog`, which is always quoted.
-fn table_types(catalog: &str) -> String {
-    format!(
-        "SELECT table_type, count(*) AS tables FROM {}.information_schema.tables GROUP BY table_type ORDER BY table_type",
-        text::identifier(catalog)
-    )
-}
 
 pub(crate) fn run(context: &Context<'_>) -> Result<Finding, String> {
     let (warehouse_id, catalog) = match (
@@ -41,34 +33,11 @@ pub(crate) fn run(context: &Context<'_>) -> Result<Finding, String> {
         Finding::unknown(CHECK, reason, FALLBACK, evidence.to_vec(), SITE)
     };
 
-    let sql = table_types(catalog);
-    let types = match step(
-        context,
-        CHECK,
-        "table-types",
-        SITE,
-        &mut evidence,
-        |transport| transport.statement(&sql, warehouse_id),
-    )? {
-        Reply::Answer(result) => match required_words(&result, "table_type") {
-            Ok(types) => types,
-            Err(shape) => {
-                return Ok(unknown(
-                    format!("the scope catalog's `information_schema.tables` {shape}"),
-                    &evidence,
-                ));
-            }
-        },
-        Reply::Error(error) => {
-            return Ok(unknown(
-                format!(
-                    "reading the scope catalog's `information_schema.tables` {}",
-                    describe(&error)
-                ),
-                &evidence,
-            ));
-        }
-        Reply::Failed(finding) => return Ok(finding),
+    let types = match scope_table_types(context, CHECK, SITE, warehouse_id, catalog, &mut evidence)?
+    {
+        Read::Seen(types) => types,
+        Read::Unknown(reason) => return Ok(unknown(reason, &evidence)),
+        Read::Failed(finding) => return Ok(finding),
     };
     let Some(materialized) = types.iter().find(|kind| kind.contains("MATERIALIZED")) else {
         return Ok(unknown(
@@ -87,8 +56,8 @@ pub(crate) fn run(context: &Context<'_>) -> Result<Finding, String> {
         CHECK,
         Verdict::new(format!(
             "materialized views: table_type {materialized}; scope table_type values: {}; {PIPELINES} columns: {}; pipeline_type values: {pipeline_types}",
-            list(&types),
-            list(&columns),
+            list_or_none(&types),
+            list_or_none(&columns),
         )),
         evidence,
         SITE,
@@ -134,7 +103,9 @@ fn pipelines(
             evidence,
             |transport| transport.statement(PIPELINE_TYPES, warehouse_id),
         )? {
-            Reply::Answer(result) => list(&words(&result, "pipeline_type").unwrap_or_default()),
+            Reply::Answer(result) => {
+                list_or_none(&words(&result, "pipeline_type").unwrap_or_default())
+            }
             Reply::Error(error) => {
                 return Ok(Read::Unknown(format!(
                     "reading `pipeline_type` from `{PIPELINES}` {}",
@@ -150,17 +121,9 @@ fn pipelines(
     Ok(Read::Seen((columns, pipeline_types)))
 }
 
-fn list(values: &[String]) -> String {
-    if values.is_empty() {
-        "none".to_owned()
-    } else {
-        values.join(", ")
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{DESCRIBE_PIPELINES, PIPELINE_TYPES, run, table_types};
+    use super::{DESCRIBE_PIPELINES, PIPELINE_TYPES, run};
     use crate::evidence::RunDir;
     use crate::probe::model::{Finding, State, Verdict};
     use crate::probe::orchestrator::Context;
@@ -178,6 +141,7 @@ mod tests {
             transport,
             warehouse_id: Some("w"),
             scope_catalog: catalog,
+            shared: &crate::probe::workspace::Shared::default(),
         })
         .expect("run check")
     }
@@ -205,14 +169,7 @@ mod tests {
     }
 
     #[test]
-    fn quotes_the_scope_catalog_as_an_identifier() {
-        assert_eq!(
-            table_types("main"),
-            "SELECT table_type, count(*) AS tables FROM `main`.information_schema.tables GROUP BY table_type ORDER BY table_type"
-        );
-        for hostile in ["x`; DROP TABLE t; --", "it's", r"a\b", "x'.y"] {
-            assert!(is_read_statement(&table_types(hostile)), "{hostile}");
-        }
+    fn its_statements_are_read_only() {
         assert!(is_read_statement(DESCRIBE_PIPELINES));
         assert!(is_read_statement(PIPELINE_TYPES));
     }

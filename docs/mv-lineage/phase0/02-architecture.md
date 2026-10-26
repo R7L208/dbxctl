@@ -48,7 +48,7 @@ is recorded as skipped and names the issue that adds it.
 | `src/probe/model.rs` | `CheckId`, verdict and state types, and the finding struct. | #30 |
 | `src/probe/orchestrator.rs` | Running selected checks in a fixed order and writing the run directory: `run.json`, raw evidence, `findings.json`, and the skeleton `findings.md`. | #30 |
 | `src/probe/lineage/cli.rs` | The minimal `cli` check: which Databricks CLI version is installed. | #30 |
-| `src/probe/workspace.rs` | Workspace steps for the API and SQL checks: running one transport operation, recording each of its CLI runs as evidence, telling a CLI that could not run from a workspace that answered with an error, and keeping workspace values in verdicts to plain words. | #33 |
+| `src/probe/workspace.rs` | Workspace steps for the API and SQL checks: running one transport operation, recording each of its CLI runs as evidence, telling a CLI that could not run from a workspace that answered with an error, keeping workspace values in verdicts to plain words, and the scope-catalog `table_type` scan that `v3` and `v11` share, run once per run. | #33 |
 | `src/probe/lineage/api.rs` | `api`: whether `databricks api --debug` logs the HTTP status and `error_code`, from one readable and one missing path. | #33 |
 | `src/probe/lineage/v2.rs` | `v2`: which `wait_timeout` values Statement Execution accepts, from one `SELECT 1` submit per value. | #33 |
 | `src/probe/lineage/v3.rs` | `v3`: materialized-view `table_type` in the scope catalog, and the shape and `pipeline_type` values of `system.lakeflow.pipelines`. | #33 |

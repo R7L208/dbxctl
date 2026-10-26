@@ -88,7 +88,7 @@ the transport's 30-second submit wait is inside it.
 
 **Runs:**
 
-1. `table-types`: `SELECT table_type, count(*) AS tables FROM <scope>.information_schema.tables GROUP BY table_type ORDER BY table_type`.
+1. `table-types`: `SELECT table_type, count(*) AS tables FROM <scope>.information_schema.tables GROUP BY table_type ORDER BY table_type`. `v11` reads the same `table_type` values, so the scan runs once per run: the first of the two checks records it under its own evidence, and the other refers to that record.
 1. `pipelines-columns`: `DESCRIBE TABLE system.lakeflow.pipelines`. Columns
    are the `col_name` values up to the first empty or `#` row.
 1. `pipeline-types`, only when that table has a `pipeline_type` column:
@@ -109,7 +109,7 @@ from `/api/2.0/pipelines/<id>` instead of `system.lakeflow.pipelines`.
 
 **Runs:**
 
-1. `table-types`: `SELECT DISTINCT table_type FROM <scope>.information_schema.tables ORDER BY table_type`.
+1. `table-types`: the same scan as `v3`'s first step, shared within a run.
 1. `catalogs`: `databricks api get /api/2.1/unity-catalog/catalogs --debug`.
    Without `max_results`, the API is documented to return every catalog the
    caller can see in one response; a `next_page_token` is followed anyway, as

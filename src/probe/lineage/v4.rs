@@ -10,7 +10,7 @@ use std::collections::BTreeSet;
 use crate::json::Node;
 use crate::probe::model::{CheckId, Finding, Verdict};
 use crate::probe::orchestrator::Context;
-use crate::probe::workspace::{Reply, described_columns, step, warehouse, word};
+use crate::probe::workspace::{Reply, described_columns, list_or_none, step, warehouse, word};
 use crate::transport::Error;
 
 const CHECK: CheckId = CheckId::V4;
@@ -72,11 +72,7 @@ pub(crate) fn run(context: &Context<'_>) -> Result<Finding, String> {
             .filter(|(_, shown)| wanted(shown))
             .map(|(name, _)| *name)
             .collect();
-        if names.is_empty() {
-            "none".to_owned()
-        } else {
-            names.join(", ")
-        }
+        list_or_none(&names)
     };
     let found: Vec<&str> = seen
         .iter()
@@ -266,6 +262,7 @@ mod tests {
             transport,
             warehouse_id: Some("w"),
             scope_catalog: None,
+            shared: &crate::probe::workspace::Shared::default(),
         })
         .expect("run check")
     }
@@ -454,6 +451,7 @@ mod tests {
             transport: &FakeTransport::default(),
             warehouse_id: None,
             scope_catalog: None,
+            shared: &crate::probe::workspace::Shared::default(),
         })
         .expect("run check");
         assert_eq!(finding.state(), State::Failed);

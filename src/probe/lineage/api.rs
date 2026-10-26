@@ -116,6 +116,7 @@ mod tests {
             transport,
             warehouse_id: None,
             scope_catalog: None,
+            shared: &crate::probe::workspace::Shared::default(),
         })
         .expect("run check")
     }

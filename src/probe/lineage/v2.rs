@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use crate::probe::model::{CheckId, Finding, Verdict};
 use crate::probe::orchestrator::Context;
-use crate::probe::workspace::{Reply, describe, step, warehouse};
+use crate::probe::workspace::{Reply, describe, list_or_none, step, warehouse};
 use crate::transport::Error;
 
 const CHECK: CheckId = CheckId::V2;
@@ -105,15 +105,10 @@ fn rejects_wait(error: &Error) -> bool {
             .is_some_and(|message| message.contains("wait_timeout"))
 }
 
+/// `values` as seconds, such as `0s, 5s`, or `none`.
 fn seconds_list(values: &[u64]) -> String {
-    if values.is_empty() {
-        return "none".to_owned();
-    }
-    values
-        .iter()
-        .map(|seconds| format!("{seconds}s"))
-        .collect::<Vec<_>>()
-        .join(", ")
+    let seconds: Vec<String> = values.iter().map(|value| format!("{value}s")).collect();
+    list_or_none(&seconds)
 }
 
 #[cfg(test)]
@@ -158,6 +153,7 @@ mod tests {
             transport,
             warehouse_id,
             scope_catalog: None,
+            shared: &crate::probe::workspace::Shared::default(),
         })
         .expect("run check")
     }

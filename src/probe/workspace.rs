@@ -2,8 +2,11 @@
 //! operation, recording its CLI runs as evidence, and telling an answer from
 //! a CLI that could not run.
 
+use std::cell::RefCell;
+
 use crate::probe::model::{CheckId, Finding};
 use crate::probe::orchestrator::Context;
+use crate::text;
 use crate::transport::{Call, Error, Outcome, ResultSet, Runner};
 
 /// What one workspace step of a check produced.
@@ -197,6 +200,93 @@ pub(crate) fn described_columns(result: &ResultSet) -> Option<Vec<String>> {
     )
 }
 
+/// Steps more than one check reads, run once per probe run. The first
+/// check to need one runs it and records its evidence; later checks reuse
+/// the answer and refer to that evidence.
+#[derive(Default)]
+pub(crate) struct Shared {
+    table_types: RefCell<Option<(Vec<String>, Scan)>>,
+}
+
+/// A shared step's answer, without the check it was run for.
+#[derive(Clone)]
+enum Scan {
+    Seen(Vec<String>),
+    Unknown(String),
+    Failed(String),
+}
+
+/// The `table_type` values in `catalog`, which is always quoted, with how
+/// many tables have each.
+pub(crate) fn table_types_sql(catalog: &str) -> String {
+    format!(
+        "SELECT table_type, count(*) AS tables FROM {}.information_schema.tables GROUP BY table_type ORDER BY table_type",
+        text::identifier(catalog)
+    )
+}
+
+/// The `table_type` values in the scope catalog's
+/// `information_schema.tables`, as verdict words: one scan per run, shared
+/// by `v3` and `v11`.
+pub(crate) fn scope_table_types(
+    context: &Context<'_>,
+    check: CheckId,
+    site: &'static str,
+    warehouse_id: &str,
+    catalog: &str,
+    evidence: &mut Vec<String>,
+) -> Result<Read<Vec<String>>, String> {
+    let cached = context.shared.table_types.borrow().clone();
+    let (references, scan) = if let Some(cached) = cached {
+        cached
+    } else {
+        let mut references = Vec::new();
+        let sql = table_types_sql(catalog);
+        let scan = match step(
+            context,
+            check,
+            "table-types",
+            site,
+            &mut references,
+            |transport| transport.statement(&sql, warehouse_id),
+        )? {
+            Reply::Answer(result) => match required_words(&result, "table_type") {
+                Ok(types) => Scan::Seen(types),
+                Err(shape) => Scan::Unknown(format!(
+                    "the scope catalog's `information_schema.tables` {shape}"
+                )),
+            },
+            Reply::Error(error) => Scan::Unknown(format!(
+                "reading the scope catalog's `information_schema.tables` {}",
+                describe(&error)
+            )),
+            Reply::Failed(finding) => Scan::Failed(finding.reason().unwrap_or_default().to_owned()),
+        };
+        *context.shared.table_types.borrow_mut() = Some((references.clone(), scan.clone()));
+        (references, scan)
+    };
+    evidence.extend(references);
+    Ok(match scan {
+        Scan::Seen(types) => Read::Seen(types),
+        Scan::Unknown(reason) => Read::Unknown(reason),
+        Scan::Failed(reason) => {
+            Read::Failed(Finding::failed(check, reason, evidence.clone(), site))
+        }
+    })
+}
+
+/// `items` joined with `, `, or `none` when there are none.
+pub(crate) fn list_or_none<S: AsRef<str>>(items: &[S]) -> String {
+    if items.is_empty() {
+        return "none".to_owned();
+    }
+    items
+        .iter()
+        .map(AsRef::as_ref)
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 /// `--warehouse-id`, or a failed finding when it is missing. Option parsing
 /// requires it for every implemented check that runs statements, so a
 /// missing one is a bug rather than a usage error.
@@ -234,9 +324,16 @@ fn missing_option(check: CheckId, option: &str, site: &'static str) -> Finding {
 mod tests {
     use std::ffi::OsString;
 
-    use super::{cell, could_not_run, describe, described_columns, required_words, word, words};
+    use super::{
+        Read, Shared, cell, could_not_run, describe, described_columns, list_or_none,
+        required_words, scope_table_types, table_types_sql, word, words,
+    };
     use crate::databricks::Captured;
-    use crate::test_support::exit_success;
+    use crate::evidence::RunDir;
+    use crate::probe::model::{CheckId, State};
+    use crate::probe::orchestrator::Context;
+    use crate::safety::is_read_statement;
+    use crate::test_support::{FakeTransport, TempDir, exit_success};
     use crate::transport::{Call, Error, ResultSet};
 
     fn call(args: &[&str], ran: bool) -> Call {
@@ -312,6 +409,84 @@ mod tests {
         assert_eq!(cell(&rows, &rows.rows[0], "count"), Some("3"));
         assert_eq!(cell(&rows, &rows.rows[2], "count"), None);
         assert_eq!(cell(&rows, &rows.rows[0], "missing"), None);
+    }
+
+    #[test]
+    fn lists_or_says_none() {
+        assert_eq!(list_or_none::<&str>(&[]), "none");
+        assert_eq!(list_or_none(&["a"]), "a");
+        assert_eq!(list_or_none(&["a".to_owned(), "b".to_owned()]), "a, b");
+    }
+
+    #[test]
+    fn quotes_the_scope_catalog_as_an_identifier() {
+        assert_eq!(
+            table_types_sql("main"),
+            "SELECT table_type, count(*) AS tables FROM `main`.information_schema.tables GROUP BY table_type ORDER BY table_type"
+        );
+        for hostile in ["x`; DROP TABLE t; --", "it's", r"a\b", "x'.y"] {
+            assert!(is_read_statement(&table_types_sql(hostile)), "{hostile}");
+        }
+    }
+
+    #[test]
+    fn scans_the_scope_catalog_once_per_run() {
+        let temp = TempDir::new("workspace-shared-scan");
+        let run_dir = RunDir::create(temp.path(), "lineage", 0).expect("create run");
+        let transport = FakeTransport::default().statement(
+            "information_schema.tables",
+            &["table_type", "tables"],
+            &[&[Some("MATERIALIZED_VIEW"), Some("1")]],
+        );
+        let shared = Shared::default();
+        let context = Context {
+            binary: "databricks".as_ref(),
+            run: &run_dir,
+            transport: &transport,
+            warehouse_id: Some("w"),
+            scope_catalog: Some("main"),
+            shared: &shared,
+        };
+        let mut first = Vec::new();
+        let mut second = Vec::new();
+        for (check, evidence) in [(CheckId::V3, &mut first), (CheckId::V11, &mut second)] {
+            let read =
+                scope_table_types(&context, check, "site", "w", "main", evidence).expect("scan");
+            assert!(
+                matches!(read, Read::Seen(ref types) if types == &["MATERIALIZED_VIEW"]),
+                "{check}"
+            );
+        }
+        // One statement, recorded for the first check and referred to by both.
+        assert_eq!(transport.asked().len(), 1);
+        assert_eq!(first, ["evidence/v3/table-types.json"]);
+        assert_eq!(second, first);
+    }
+
+    #[test]
+    fn a_shared_failure_names_each_check() {
+        let temp = TempDir::new("workspace-shared-failure");
+        let run_dir = RunDir::create(temp.path(), "lineage", 0).expect("create run");
+        let transport = FakeTransport::unrunnable();
+        let shared = Shared::default();
+        let context = Context {
+            binary: "databricks".as_ref(),
+            run: &run_dir,
+            transport: &transport,
+            warehouse_id: Some("w"),
+            scope_catalog: Some("main"),
+            shared: &shared,
+        };
+        for check in [CheckId::V3, CheckId::V11] {
+            let read = scope_table_types(&context, check, "site", "w", "main", &mut Vec::new())
+                .expect("scan");
+            let Read::Failed(finding) = read else {
+                panic!("{check} should fail");
+            };
+            assert_eq!(finding.check(), check);
+            assert_eq!(finding.state(), State::Failed);
+        }
+        assert_eq!(transport.asked().len(), 1);
     }
 
     #[test]

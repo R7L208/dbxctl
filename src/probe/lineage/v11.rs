@@ -12,9 +12,8 @@ use crate::json::Node;
 use crate::probe::model::{CheckId, Finding, Verdict};
 use crate::probe::orchestrator::Context;
 use crate::probe::workspace::{
-    Reply, describe, required_words, scope_catalog, step, warehouse, word,
+    Read, Reply, describe, scope_catalog, scope_table_types, step, warehouse, word,
 };
-use crate::text;
 
 const CHECK: CheckId = CheckId::V11;
 /// The design page that records how later phases find metric views and
@@ -26,14 +25,6 @@ const CATALOGS: &str = "/api/2.1/unity-catalog/catalogs";
 /// Pages followed before the list counts as incomplete.
 const MAX_PAGES: usize = 20;
 const FALLBACK: &str = "Treat `table_type` `METRIC_VIEW` as a metric view and `catalog_type` `DELTASHARING_CATALOG` as a shared catalog, as Databricks documents them.";
-
-/// The distinct `table_type` values in `catalog`, which is always quoted.
-fn table_types(catalog: &str) -> String {
-    format!(
-        "SELECT DISTINCT table_type FROM {}.information_schema.tables ORDER BY table_type",
-        text::identifier(catalog)
-    )
-}
 
 /// `text` with everything but unreserved URL characters percent-encoded, so
 /// a page token stays one plain query value.
@@ -62,34 +53,11 @@ pub(crate) fn run(context: &Context<'_>) -> Result<Finding, String> {
         Finding::unknown(CHECK, reason, FALLBACK, evidence.to_vec(), SITE)
     };
 
-    let sql = table_types(catalog);
-    let types = match step(
-        context,
-        CHECK,
-        "table-types",
-        SITE,
-        &mut evidence,
-        |transport| transport.statement(&sql, warehouse_id),
-    )? {
-        Reply::Answer(result) => match required_words(&result, "table_type") {
-            Ok(types) => types,
-            Err(shape) => {
-                return Ok(unknown(
-                    format!("the scope catalog's `information_schema.tables` {shape}"),
-                    &evidence,
-                ));
-            }
-        },
-        Reply::Error(error) => {
-            return Ok(unknown(
-                format!(
-                    "reading the scope catalog's `information_schema.tables` {}",
-                    describe(&error)
-                ),
-                &evidence,
-            ));
-        }
-        Reply::Failed(finding) => return Ok(finding),
+    let types = match scope_table_types(context, CHECK, SITE, warehouse_id, catalog, &mut evidence)?
+    {
+        Read::Seen(types) => types,
+        Read::Unknown(reason) => return Ok(unknown(reason, &evidence)),
+        Read::Failed(finding) => return Ok(finding),
     };
     let Some(metric) = types.iter().find(|kind| kind.contains("METRIC")) else {
         return Ok(unknown(
@@ -204,11 +172,10 @@ fn list_catalogs(
 
 #[cfg(test)]
 mod tests {
-    use super::{CATALOGS, MAX_PAGES, run, table_types};
+    use super::{CATALOGS, MAX_PAGES, run};
     use crate::evidence::RunDir;
     use crate::probe::model::{Finding, State, Verdict};
     use crate::probe::orchestrator::Context;
-    use crate::safety::is_read_statement;
     use crate::test_support::{FakeTransport, TempDir, missing_table};
     use crate::transport::Error;
 
@@ -228,6 +195,7 @@ mod tests {
             transport,
             warehouse_id: Some("w"),
             scope_catalog: Some("main"),
+            shared: &crate::probe::workspace::Shared::default(),
         })
         .expect("run check")
     }
@@ -236,17 +204,6 @@ mod tests {
         let rows: Vec<[Option<&str>; 1]> = types.iter().map(|&kind| [Some(kind)]).collect();
         let rows: Vec<&[Option<&str>]> = rows.iter().map(|row| &row[..]).collect();
         FakeTransport::default().statement("information_schema.tables", &["table_type"], &rows)
-    }
-
-    #[test]
-    fn quotes_the_scope_catalog_as_an_identifier() {
-        assert_eq!(
-            table_types("main"),
-            "SELECT DISTINCT table_type FROM `main`.information_schema.tables ORDER BY table_type"
-        );
-        for hostile in ["x`; DROP TABLE t; --", "it's", r"a\b"] {
-            assert!(is_read_statement(&table_types(hostile)), "{hostile}");
-        }
     }
 
     #[test]

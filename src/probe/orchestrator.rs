@@ -14,6 +14,7 @@ use crate::exit::Exit;
 use crate::json::{Document, Value};
 use crate::probe::lineage::{self, LineageOptions};
 use crate::probe::model::{CheckId, Finding, State};
+use crate::probe::workspace::Shared;
 use crate::transport::{CliRunner, Runner};
 
 const SUITE: &str = "lineage";
@@ -32,6 +33,8 @@ pub(crate) struct Context<'a> {
     pub(crate) warehouse_id: Option<&'a str>,
     /// `--scope-catalog`, which the catalog-scoped checks read.
     pub(crate) scope_catalog: Option<&'a str>,
+    /// Steps more than one check reads, run once per run.
+    pub(crate) shared: &'a Shared,
 }
 
 /// A validated `probe run --suite lineage` request.
@@ -125,12 +128,14 @@ fn complete(
         &plan.target,
         plan.profile.as_deref(),
     );
+    let shared = Shared::default();
     let context = Context {
         binary,
         run: run_dir,
         transport: &transport,
         warehouse_id: plan.warehouse_id.as_deref(),
         scope_catalog: plan.scope_catalog.as_deref(),
+        shared: &shared,
     };
     let findings = plan
         .checks
@@ -531,6 +536,7 @@ mod tests {
                 transport: &FakeTransport::default(),
                 warehouse_id: None,
                 scope_catalog: None,
+                shared: &crate::probe::workspace::Shared::default(),
             },
         )
         .expect_err("blocked evidence");
