@@ -142,4 +142,5 @@ should not depend on graph types.
 ## Open Items
 
 - Where workspace and authentication context is recorded (#55, outside the
-  Phase 0 contract).
+  Phase 0 contract). The CLI's precedence and the planned checks are in
+  [09-auth-context.md](09-auth-context.md).
