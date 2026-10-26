@@ -116,7 +116,7 @@ needed.
 | --- | --- | --- |
 | A plan with entries | resolved | `plan_version 2`, then each action and where its configuration is: `new_state.value`, `validate`, `not in validate` (a deleted resource), or `none` (validate gave no configuration), such as `plan_version 2; skip: validate; update: new_state.value` |
 | A non-zero exit, or output that is not JSON | unknown | The reason names which |
-| No `plan` object, an entry not named `resources.<type>.<key>`, or one without a string `action` | unknown | The reason names which |
+| No `plan` object, an entry not named `resources.<type>.<key>`, one without a string `action`, or a `new_state` without an object `value` | unknown | The reason names which |
 | An empty plan | unknown | The actions cannot be observed |
 
 **Fallback for unknown:** read each resource's configuration from

@@ -241,6 +241,11 @@ mod tests {
                 "stdout {\"plan\": {\"jobs.a\": {\"action\": \"create\"}}}",
                 "not named",
             ),
+            (
+                "plan-config-kind",
+                "stdout {\"plan\": {\"resources.jobs.a\": {\"action\": \"create\", \"new_state\": {\"value\": \"x\"}}}}",
+                "`new_state.value` is not an object",
+            ),
         ] {
             let (finding, _fixture) = check(name, response, "exit 1");
             assert_eq!(finding.state(), State::Unknown, "{name}");

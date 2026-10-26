@@ -38,8 +38,9 @@ pub(crate) struct Plan<'a> {
 }
 
 /// `plan` read as a CLI 1.13.0 plan, or why it cannot be: no `plan` object,
-/// an entry not named `resources.<type>.<key>`, or an entry without a string
-/// `action`.
+/// an entry not named `resources.<type>.<key>`, an entry without a string
+/// `action`, or a `new_state` that is not an object with an object `value`.
+/// An entry without `new_state` carries no configuration.
 pub(crate) fn read(plan: Node<'_>) -> Result<Plan<'_>, String> {
     let members = plan
         .get("plan")
@@ -53,9 +54,15 @@ pub(crate) fn read(plan: Node<'_>) -> Result<Plan<'_>, String> {
             .get("action")
             .and_then(Node::as_str)
             .ok_or("a plan entry has no string `action`")?;
-        let config = entry
-            .pointer(CONFIG_POINTER)
-            .filter(|config| config.members().is_some());
+        let config = match entry.get("new_state") {
+            None => None,
+            Some(_) => Some(
+                entry
+                    .pointer(CONFIG_POINTER)
+                    .filter(|config| config.members().is_some())
+                    .ok_or("a plan entry's `new_state.value` is not an object")?,
+            ),
+        };
         entries.insert(
             name,
             Entry {
@@ -161,12 +168,26 @@ mod tests {
 
     #[test]
     fn config_must_be_an_object() {
+        for new_state in [r#"{"value": 3}"#, r#"{"value": []}"#, "{}", r#""x""#] {
+            let text = format!(
+                r#"{{"plan": {{"resources.jobs.a": {{"action": "create", "new_state": {new_state}}}}}}}"#
+            );
+            let plan = json::parse(&text).expect("parse");
+            let error = read(plan.root()).unwrap_err();
+            assert!(
+                error.contains("`new_state.value` is not an object"),
+                "{new_state}: {error}"
+            );
+        }
         let plan = json::parse(
-            r#"{"plan_version": "2", "plan": {"resources.jobs.a": {"action": "create", "new_state": {"value": 3}}}}"#,
+            r#"{"plan_version": "2", "plan": {"resources.jobs.a": {"action": "skip"}}}"#,
         )
         .expect("parse");
         let plan = read(plan.root()).expect("read");
         assert_eq!(plan.version, None);
-        assert!(plan.entries[0].config.is_none());
+        assert!(
+            plan.entries[0].config.is_none(),
+            "no `new_state`, no configuration"
+        );
     }
 }
