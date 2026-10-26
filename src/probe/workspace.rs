@@ -60,15 +60,31 @@ pub(crate) fn step<T>(
     })
 }
 
-/// Whether `error` means the workspace was never asked: a refused
-/// statement, or a transport error whose last run did not complete or that
-/// was refused before any run.
+/// Whether `error` means the CLI could not run: a refused statement, or a
+/// transport error that came from a run that did not complete, or from a
+/// request refused before any run. The run that produced the error is the
+/// last one that is not a cancel: after a failed poll, the transport sends a
+/// best-effort cancel, which must not hide the poll's failure.
 fn could_not_run(error: &Error, calls: &[Call]) -> bool {
     match error {
         Error::Refused => true,
-        Error::Transport(_) => calls.last().is_none_or(|call| call.result.is_err()),
+        Error::Transport(_) => calls
+            .iter()
+            .rev()
+            .find(|call| !is_cancel(call))
+            .is_none_or(|call| call.result.is_err()),
         _ => false,
     }
+}
+
+/// Whether `call` is `databricks api post <statement>/cancel`.
+fn is_cancel(call: &Call) -> bool {
+    matches!(
+        call.args.as_slice(),
+        [api, post, path, ..] if api == "api"
+            && post == "post"
+            && path.to_str().is_some_and(|path| path.ends_with("/cancel"))
+    )
 }
 
 /// `error` for a reason. Written by dbxctl: it names the kind of error and
@@ -188,8 +204,56 @@ fn missing_option(check: CheckId, option: &str, site: &'static str) -> Finding {
 
 #[cfg(test)]
 mod tests {
-    use super::{cell, describe, described_columns, word, words};
-    use crate::transport::{Error, ResultSet};
+    use std::ffi::OsString;
+
+    use super::{cell, could_not_run, describe, described_columns, word, words};
+    use crate::databricks::Captured;
+    use crate::test_support::exit_success;
+    use crate::transport::{Call, Error, ResultSet};
+
+    fn call(args: &[&str], ran: bool) -> Call {
+        Call {
+            args: args.iter().map(OsString::from).collect(),
+            result: if ran {
+                Ok(Captured {
+                    stdout: Vec::new(),
+                    stderr: Vec::new(),
+                    status: exit_success(),
+                })
+            } else {
+                Err("could not execute databricks: timed out".to_owned())
+            },
+        }
+    }
+
+    #[test]
+    fn classifies_by_the_call_that_produced_the_error() {
+        let transport = Error::Transport("problem".to_owned());
+        let submit = || call(&["api", "post", "/api/2.0/sql/statements"], true);
+        let poll = |ran| call(&["api", "get", "/api/2.0/sql/statements/s"], ran);
+        let cancel = |ran| call(&["api", "post", "/api/2.0/sql/statements/s/cancel"], ran);
+        // A poll that could not run, then a cancel that did.
+        assert!(could_not_run(
+            &transport,
+            &[submit(), poll(false), cancel(true)]
+        ));
+        // A poll that ran but returned junk, then a cancel that could not.
+        assert!(!could_not_run(
+            &transport,
+            &[submit(), poll(true), cancel(false)]
+        ));
+        // A request refused before any run.
+        assert!(could_not_run(&transport, &[]));
+        assert!(could_not_run(&Error::Refused, &[]));
+        // Only a transport error can mean the CLI did not run.
+        let http = Error::Http {
+            status: 500,
+            error_code: None,
+            message: None,
+        };
+        assert!(!could_not_run(&http, &[poll(false)]));
+        assert!(!could_not_run(&transport, &[submit()]));
+    }
 
     fn result(columns: &[&str], rows: &[&[Option<&str>]]) -> ResultSet {
         ResultSet {

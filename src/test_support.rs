@@ -216,7 +216,7 @@ impl FakeTransport {
                 result: Ok(Captured {
                     stdout: Vec::new(),
                     stderr: Vec::new(),
-                    status: success(),
+                    status: exit_success(),
                 }),
             }],
             result: map(answer),
@@ -329,7 +329,7 @@ fn error_of(answer: &Answer) -> Error {
 }
 
 /// An exit status for a process that exited 0.
-fn success() -> ExitStatus {
+pub(crate) fn exit_success() -> ExitStatus {
     #[cfg(unix)]
     {
         use std::os::unix::process::ExitStatusExt;
