@@ -77,8 +77,10 @@ validated configuration even when it exits 1, such as when it cannot create
 the files directory. From it, `bundle.engine`, the string `workspace` fields
 ending in `_path`, the resource types and how many of each, and the keys of
 `experimental.scripts` and `scripts`. The declared resource set is read
-defensively: a missing `resources` object, or a type or resource that is not
-an object, is unknown rather than an empty set.
+defensively: a `resources` that is not an object, or a type or resource that
+is not an object, is unknown rather than an empty set. CLI 1.13.0 leaves
+`resources` out entirely when the bundle declares none, so an absent
+`resources` is that observed shape, and reads as `resources: none`.
 
 **Evidence:** the shared validate's records.
 
@@ -88,7 +90,8 @@ an object, is unknown rather than an empty set.
 | The same, after a non-zero exit | resolved | The verdict ends `; validate exited with exit code 1` |
 | Validate not run (R9) | unknown | The reason says why |
 | No JSON object on stdout | unknown | The reason gives the exit code |
-| No `workspace` or `resources`, or a malformed resource or script map | unknown | The reason names the field |
+| No `resources` key, as for a bundle that declares none | resolved | `resources: none` |
+| No `workspace`, or a malformed resource or script map | unknown | The reason names the field |
 
 **Fallback for unknown:** read the bundle's own configuration files, and
 assume the `direct` engine, workspace paths below `workspace.root_path`, and no
@@ -184,7 +187,7 @@ first location.
 | A resource with no location | resolved | It counts as `unlocated` |
 | The same, after a non-zero validate exit | resolved | The verdict ends `; validate exited with exit code 1`, as `validate`'s does |
 | Validate not run (R9) | unknown | The reason says why |
-| No JSON object, no `workspace.file_path`, no `__locations`, or no `resources` | unknown | The reason names which |
+| No JSON object, no `workspace.file_path`, no `__locations`, or malformed `resources` | unknown | The reason names which |
 | No source paths | unknown | The forms cannot be observed |
 
 **Fallback for unknown:** treat every resource as defined in

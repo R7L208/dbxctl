@@ -36,11 +36,14 @@ pub(crate) const BUNDLE_TIMEOUT: Duration = Duration::from_secs(300);
 pub(crate) type Resources<'a> = BTreeMap<&'a str, BTreeMap<&'a str, Node<'a>>>;
 
 /// The resources in `config`, or why they cannot be read: `resources` is
-/// missing or is not an object of objects of objects.
+/// not an object of objects of objects. CLI 1.13.0 leaves `resources` out of
+/// the validated configuration when the bundle declares none, so an absent
+/// `resources` is that observed shape, not a missing field, and reads as no
+/// resources; a `resources` of any other shape is still an error.
 pub(crate) fn resources(config: Node<'_>) -> Result<Resources<'_>, String> {
-    let resources = config
-        .get("resources")
-        .ok_or("the configuration has no `resources` object")?;
+    let Some(resources) = config.get("resources") else {
+        return Ok(Resources::new());
+    };
     let types = resources
         .members()
         .ok_or("the configuration's `resources` is not an object")?;
@@ -276,8 +279,8 @@ mod tests {
     #[test]
     fn rejects_unexpected_resource_shapes() {
         for (text, reason) in [
-            ("{}", "no `resources` object"),
             (r#"{"resources": []}"#, "`resources` is not an object"),
+            (r#"{"resources": null}"#, "`resources` is not an object"),
             (
                 r#"{"resources": {"jobs": 1}}"#,
                 "`resources.jobs` is not an object",
@@ -293,6 +296,10 @@ mod tests {
         }
         let empty = json::parse(r#"{"resources": {}}"#).expect("parse");
         assert!(resources(empty.root()).expect("empty").is_empty());
+        // CLI 1.13.0 omits `resources` for a bundle that declares none.
+        let none = fixture("validate-no-resources.json");
+        assert!(none.root().get("resources").is_none());
+        assert!(resources(none.root()).expect("no resources").is_empty());
         let none = json::parse(r#"{"bundle": 1, "workspace": []}"#).expect("parse");
         assert_eq!(engine(none.root()), None);
         assert_eq!(workspace_paths(none.root()), None);

@@ -27,6 +27,7 @@ emails, or user paths are present.
 | `plan-delete.json` | `resources/extra.yml` removed after a deploy: `gold_job` is `delete`, the rest `skip`. | Captured (stub) |
 | `validate.json` | `bundle validate -o json -t dev`: the expanded configuration with variables resolved and source paths rewritten below `workspace.file_path`. | Captured (stub) |
 | `validate-locations.json` | The same with `--include-locations`, which adds `__locations`: the configuration files and where each resource is defined. | Captured (stub) |
+| `validate-no-resources.json` | `bundle validate -o json` for a bundle that declares no resources: the output has no `resources` key at all. | Captured (stub) |
 | `validate-exit-1.stdout`, `validate-exit-1.stderr` | `bundle validate -o json` exiting 1 because it could not create `workspace.file_path`: the configuration is still on stdout. | Captured (stub); the stub's address replaced by the placeholder host |
 | `dot-databricks.gitignore` | Sample `.databricks/.gitignore` template | Synthesized best-practice pattern |
 | `bundle/databricks.yml` | Minimal bundle definition with pipeline and job, including `resources/*.yml` | Synthesized example DAB |

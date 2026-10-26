@@ -216,9 +216,9 @@ mod tests {
         for (name, validate, reason) in [
             ("plan-skip-no-validate", "exit 1", "printed no JSON object"),
             (
-                "plan-skip-no-resources",
-                "stdout {\"workspace\": {}}",
-                "no `resources` object",
+                "plan-skip-bad-resources",
+                "stdout {\"workspace\": {}, \"resources\": []}",
+                "`resources` is not an object",
             ),
         ] {
             let (finding, _fixture) = check(

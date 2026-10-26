@@ -245,7 +245,7 @@ mod tests {
             (
                 "v8-no-resources",
                 "stdout {\"workspace\": {\"file_path\": \"/w\"}, \"__locations\": {\"files\": [], \"locations\": {}}}",
-                "no `resources` object",
+                "name no source paths",
             ),
             (
                 "v8-no-paths",

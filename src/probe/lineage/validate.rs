@@ -243,6 +243,20 @@ mod tests {
     }
 
     #[test]
+    fn a_bundle_without_resources_declares_none() {
+        // CLI 1.13.0 omits `resources` for a bundle that declares none.
+        let stdout = include_str!("../../../tests/fixtures/cli-1.13.0/validate-no-resources.json");
+        let (finding, _fixture) = check("validate-no-resources", 200, &stdout_line(stdout));
+        assert_eq!(finding.state(), State::Resolved, "{finding:?}");
+        assert_eq!(
+            finding.verdict().map(Verdict::as_str),
+            Some(
+                "engine direct; workspace paths: artifact_path, file_path, resource_path, root_path, state_path; resources: none; experimental scripts: none; scripts: none"
+            )
+        );
+    }
+
+    #[test]
     fn reports_scripts_and_unset_engine() {
         let config = r#"{"workspace": {"file_path": "/w", "root_path": "/r", "current_user": {}},
             "resources": {}, "experimental": {"scripts": {"predeploy": "x", "pre\ndeploy": "y"}},
@@ -276,9 +290,9 @@ mod tests {
                 "no `workspace` object",
             ),
             (
-                "validate-no-resources",
-                "stdout {\"workspace\": {}}",
-                "no `resources` object",
+                "validate-bad-resources",
+                "stdout {\"workspace\": {}, \"resources\": []}",
+                "`resources` is not an object",
             ),
             (
                 "validate-bad-scripts",
