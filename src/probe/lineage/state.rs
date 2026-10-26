@@ -9,8 +9,8 @@
 //! (`bundle::state::layout`), never the file.
 
 use std::collections::BTreeMap;
-use std::fs::File;
-use std::io::Read;
+use std::fs::{self, File};
+use std::io::{ErrorKind, Read};
 
 use crate::bundle::state::{layout, local_state, read, terraform_state};
 use crate::json::{self, Document};
@@ -31,33 +31,10 @@ pub(crate) fn run(context: &Context<'_>) -> Result<Finding, String> {
     let unknown = |reason: &str, evidence: Vec<String>| {
         Finding::unknown(CHECK, reason, FALLBACK, evidence, SITE)
     };
-    let Some(path) = local_state(context.bundle_root, context.target) else {
-        return Ok(unknown(
-            "the target is not a plain directory name, so its local state cannot be found",
-            Vec::new(),
-        ));
+    let bytes = match read_local(context) {
+        Ok(bytes) => bytes,
+        Err(reason) => return Ok(unknown(reason, Vec::new())),
     };
-    let mut bytes = Vec::new();
-    let read_result =
-        File::open(&path).and_then(|file| file.take(MAX_STATE_BYTES + 1).read_to_end(&mut bytes));
-    if read_result.is_err() {
-        let terraform =
-            terraform_state(context.bundle_root, context.target).is_some_and(|path| path.is_file());
-        return Ok(unknown(
-            if terraform {
-                "the bundle keeps Terraform state for the target, not `resources.json`"
-            } else {
-                "there is no local `resources.json` for the target; deploy the bundle to it from this checkout and re-run"
-            },
-            Vec::new(),
-        ));
-    }
-    if bytes.len() as u64 > MAX_STATE_BYTES {
-        return Ok(unknown(
-            "the local `resources.json` is larger than 64 MiB",
-            Vec::new(),
-        ));
-    }
     let Ok(document) = json::parse_bytes(&bytes) else {
         return Ok(unknown(
             "the local `resources.json` is not valid JSON",
@@ -119,6 +96,36 @@ pub(crate) fn run(context: &Context<'_>) -> Result<Finding, String> {
         evidence,
         SITE,
     ))
+}
+
+/// The local `resources.json` for the target, or why it cannot be read.
+/// Its metadata is checked before it is opened, so a FIFO or device there
+/// cannot block the probe.
+fn read_local(context: &Context<'_>) -> Result<Vec<u8>, &'static str> {
+    let path = local_state(context.bundle_root, context.target)
+        .ok_or("the target is not a plain directory name, so its local state cannot be found")?;
+    let metadata = fs::metadata(&path).map_err(|error| {
+        if error.kind() != ErrorKind::NotFound {
+            "the local `resources.json` exists but could not be inspected"
+        } else if terraform_state(context.bundle_root, context.target)
+            .is_some_and(|path| path.is_file())
+        {
+            "the bundle keeps Terraform state for the target, not `resources.json`"
+        } else {
+            "there is no local `resources.json` for the target; deploy the bundle to it from this checkout and re-run"
+        }
+    })?;
+    if !metadata.is_file() {
+        return Err("the local `resources.json` is not a regular file");
+    }
+    let mut bytes = Vec::new();
+    File::open(&path)
+        .and_then(|file| file.take(MAX_STATE_BYTES + 1).read_to_end(&mut bytes))
+        .map_err(|_| "the local `resources.json` could not be read")?;
+    if bytes.len() as u64 > MAX_STATE_BYTES {
+        return Err("the local `resources.json` is larger than 64 MiB");
+    }
+    Ok(bytes)
 }
 
 #[cfg(test)]
@@ -197,6 +204,56 @@ mod tests {
                 .reason()
                 .unwrap_or_default()
                 .contains("Terraform state")
+        );
+    }
+
+    #[test]
+    fn reports_unreadable_state_as_unknown() {
+        // A directory where the file belongs.
+        let fixture = Fixture::new("state-directory", "");
+        fs::create_dir_all(
+            fixture
+                .bundle()
+                .join(".databricks/bundle/dev/resources.json"),
+        )
+        .expect("create directory");
+        assert_eq!(
+            fixture.run(run).reason(),
+            Some("the local `resources.json` is not a regular file")
+        );
+    }
+
+    /// A file where a parent directory belongs is not a missing state but
+    /// one that cannot be inspected. Windows reports it as not found.
+    #[cfg(unix)]
+    #[test]
+    fn reports_an_uninspectable_path_distinctly() {
+        let fixture = Fixture::new("state-blocked", "");
+        fs::create_dir_all(fixture.bundle().join(".databricks")).expect("create dir");
+        fs::write(fixture.bundle().join(".databricks/bundle"), "").expect("write file");
+        assert_eq!(
+            fixture.run(run).reason(),
+            Some("the local `resources.json` exists but could not be inspected")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_fifo_does_not_block_the_probe() {
+        let fixture = Fixture::new("state-fifo", "");
+        let dir = fixture.bundle().join(".databricks/bundle/dev");
+        fs::create_dir_all(&dir).expect("create state dir");
+        let made = std::process::Command::new("mkfifo")
+            .arg(dir.join("resources.json"))
+            .status();
+        if !made.is_ok_and(|status| status.success()) {
+            eprintln!("mkfifo is unavailable; skipping");
+            return;
+        }
+        // Opening a FIFO with no writer would block; the check must not.
+        assert_eq!(
+            fixture.run(run).reason(),
+            Some("the local `resources.json` is not a regular file")
         );
     }
 

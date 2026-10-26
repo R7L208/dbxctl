@@ -145,6 +145,7 @@ and its values, IDs included, are never copied.
 | --- | --- | --- |
 | Every entry has a string `__id__`, and there are pipelines | resolved | `state_version 2; ids at /state/resources.<type>.<key>/__id__; config in state; resources: jobs 2, pipelines 1` |
 | No local `resources.json`, or Terraform state instead | unknown | The reason names which |
+| Something other than a regular file there, such as a directory or FIFO, or a path that cannot be inspected or read | unknown | The reason names which; the check never opens a non-file, so a FIFO cannot block it |
 | Not JSON, no `state` object, a malformed entry, or an entry without a string `__id__` | unknown | The reason names which |
 | No pipeline entries | unknown | The pipeline-ID path cannot be observed |
 
