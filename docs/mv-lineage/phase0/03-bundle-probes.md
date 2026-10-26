@@ -135,7 +135,10 @@ Each entry of `state` is named `resources.<type>.<key>` and has the resource's
 `/state/resources.pipelines.<key>/__id__`. The copy matched the file deployed
 to `workspace.state_path`.
 
-**Evidence:** `resources.json`, the local copy with credentials scrubbed.
+**Evidence:** `resources-layout.json`: the file's top-level keys and, for each
+entry, its name, whether it has an `__id__`, and the keys of its `state`. The
+deployed configuration can hold secrets in plain fields, so the file itself
+and its values, IDs included, are never copied.
 
 | Outcome | State | Verdict or reason |
 | --- | --- | --- |

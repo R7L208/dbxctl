@@ -11,7 +11,7 @@
 
 use std::path::{Component, Path, PathBuf};
 
-use crate::json::Node;
+use crate::json::{Node, Value};
 
 /// The local copy of the state for `target`, or `None` if `target` is not a
 /// plain directory name.
@@ -96,11 +96,38 @@ pub(crate) fn read(state: Node<'_>) -> Result<State<'_>, String> {
     })
 }
 
+/// The layout of `state` without its values, for evidence: the file's
+/// top-level keys and, for each entry of `state`, whether it has an
+/// `__id__` and the keys of its own `state`. The deployed configuration can
+/// hold secrets in plain fields, so only names are kept.
+pub(crate) fn layout(state: Node<'_>) -> Value {
+    let names = |node: Option<Node<'_>>| {
+        node.and_then(Node::members).map_or(Value::Null, |members| {
+            Value::Array(members.map(|(name, _)| Value::string(name)).collect())
+        })
+    };
+    let entries = state
+        .get("state")
+        .and_then(Node::members)
+        .map_or(Value::Null, |members| {
+            Value::object(members.map(|(name, entry)| {
+                (
+                    name,
+                    Value::object([
+                        ("has_id", Value::Bool(entry.get("__id__").is_some())),
+                        ("state_keys", names(entry.get("state"))),
+                    ]),
+                )
+            }))
+        });
+    Value::object([("keys", names(Some(state))), ("entries", entries)])
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::Path;
 
-    use super::{Entry, id_pointer, local_state, read, resource_name, terraform_state};
+    use super::{Entry, id_pointer, layout, local_state, read, resource_name, terraform_state};
     use crate::json;
 
     #[test]
@@ -133,6 +160,32 @@ mod tests {
                 .pointer("/state/resources.pipelines.dlt_pipeline/__id__")
                 .and_then(json::Node::as_str),
             Some("01a23b45c67d8901")
+        );
+    }
+
+    #[test]
+    fn layout_keeps_names_but_no_values() {
+        let document = json::parse(
+            r#"{"state_version": 2, "state": {
+                "resources.jobs.a": {"__id__": "1", "state": {"name": "a", "spark_env_vars": {"PASSWORD": "hunter2"}}},
+                "resources.pipelines.p": {"state": 3}
+            }}"#,
+        )
+        .expect("parse");
+        let text = json::Document::from(layout(document.root()))
+            .to_compact_string()
+            .expect("serialize");
+        assert_eq!(
+            text,
+            "{\"entries\":{\"resources.jobs.a\":{\"has_id\":true,\"state_keys\":[\"name\",\"spark_env_vars\"]},\"resources.pipelines.p\":{\"has_id\":false,\"state_keys\":null}},\"keys\":[\"state\",\"state_version\"]}\n"
+        );
+        assert!(!text.contains("hunter2"));
+        let bare = json::parse("[]").expect("parse");
+        assert_eq!(
+            json::Document::from(layout(bare.root()))
+                .to_compact_string()
+                .expect("serialize"),
+            "{\"entries\":null,\"keys\":null}\n"
         );
     }
 

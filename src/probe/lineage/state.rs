@@ -4,19 +4,19 @@
 //! Reads the copy the CLI keeps in the bundle root,
 //! `.databricks/bundle/<target>/resources.json`, so it runs no command and
 //! contacts no workspace. The copy exists once the bundle has been deployed
-//! to the target from this checkout. Its copy in the evidence has
-//! credentials scrubbed, as captured CLI output does.
+//! to the target from this checkout. The deployed configuration in it can
+//! hold secrets, so the evidence keeps only its layout
+//! (`bundle::state::layout`), never the file.
 
 use std::collections::BTreeMap;
 use std::fs::File;
 use std::io::Read;
 
-use crate::bundle::state::{local_state, read, terraform_state};
-use crate::json;
+use crate::bundle::state::{layout, local_state, read, terraform_state};
+use crate::json::{self, Document};
 use crate::probe::lineage::one_line;
 use crate::probe::model::{CheckId, Finding, Verdict};
 use crate::probe::orchestrator::Context;
-use crate::transport::scrub;
 
 const CHECK: CheckId = CheckId::State;
 /// The expectation the answer confirms or corrects.
@@ -58,19 +58,20 @@ pub(crate) fn run(context: &Context<'_>) -> Result<Finding, String> {
             Vec::new(),
         ));
     }
-    // The state holds deployed configuration, which may carry credentials.
-    let bytes = scrub(bytes);
-    let evidence = vec![
-        context
-            .run
-            .write_evidence(CHECK.as_str(), "resources.json", &bytes)?,
-    ];
     let Ok(document) = json::parse_bytes(&bytes) else {
         return Ok(unknown(
             "the local `resources.json` is not valid JSON",
-            evidence,
+            Vec::new(),
         ));
     };
+    let layout = Document::from(layout(document.root()))
+        .to_pretty_string()
+        .map_err(|error| format!("could not serialize the state layout: {error}"))?;
+    let evidence = vec![context.run.write_evidence(
+        CHECK.as_str(),
+        "resources-layout.json",
+        layout.as_bytes(),
+    )?];
     let state = match read(document.root()) {
         Ok(state) => state,
         Err(reason) => return Ok(unknown(&reason, evidence)),
@@ -155,7 +156,24 @@ mod tests {
             fixture.invocations().is_empty(),
             "the check runs no command"
         );
-        assert_eq!(fixture.evidence("state", "resources.json"), STATE);
+        // Only the layout is kept: names, never the deployed values.
+        let layout = fixture.evidence("state", "resources-layout.json");
+        assert!(
+            layout.contains("\"resources.pipelines.dlt_pipeline\""),
+            "{layout}"
+        );
+        assert!(layout.contains("\"has_id\": true"), "{layout}");
+        assert!(layout.contains("\"storage\""), "{layout}");
+        assert!(!layout.contains("01a23b45c67d8901"), "no IDs: {layout}");
+        assert!(!layout.contains("/Workspace/"), "no values: {layout}");
+        assert!(
+            !fixture
+                .run_dir
+                .path()
+                .join("evidence/state/resources.json")
+                .exists(),
+            "the state file itself is never copied"
+        );
     }
 
     #[test]
