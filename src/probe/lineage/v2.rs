@@ -2,7 +2,10 @@
 //! accepts, probed with `SELECT 1`.
 //!
 //! Submits the statement once per value, on each side of both documented
-//! edges. A statement the submit leaves running is cancelled.
+//! edges. A statement the submit leaves running is cancelled. Each submit
+//! runs for at most the transport's call limit, or its wait plus a margin
+//! when longer, and never past the statement deadline, so with the default
+//! limits the five take at most five minutes.
 
 use std::time::Duration;
 

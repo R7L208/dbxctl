@@ -59,7 +59,13 @@ code alone, as an error with no HTTP status or `error_code`.
 **Runs:** `SELECT 1`, submitted once for each `wait_timeout` of 0, 4, 5, 50,
 and 51 seconds (steps `wait-0s` through `wait-51s`): each side of the documented
 range, 0 or 5 to 50 seconds. A statement the submit leaves pending or running
-is cancelled. The CLI run is allowed the wait plus five seconds. A submit
+is cancelled. Each CLI run is allowed the call limit (60 seconds by default),
+or the wait plus five seconds when longer, but never more than the statement
+deadline (300 seconds by default), so the five submits take at most five
+minutes. If a submit's own CLI run fails, the statement it may have created
+cannot be found: its ID was in the lost response, and query history cannot
+tell it from another `SELECT 1`. It is left to finish, which `SELECT 1` does
+at once. A submit
 rejects the wait when it fails with HTTP 400 and its `error_code` is
 `INVALID_PARAMETER_VALUE` or its message names `wait_timeout`. A submit is
 accepted when the statement succeeded, or was left pending or running and then

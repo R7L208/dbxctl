@@ -73,6 +73,18 @@ impl Limits {
     }
 }
 
+impl Limits {
+    /// How long a single submit with `wait` may run: the call, or the wait
+    /// plus [`SUBMIT_MARGIN`] when longer, so the warehouse can answer,
+    /// and never past the deadline. `None` when the wait and margin do not
+    /// fit the deadline, since the CLI would then be stopped before the
+    /// warehouse answers with a statement ID.
+    fn single_submit(&self, wait: Duration) -> Option<Duration> {
+        let needed = wait + SUBMIT_MARGIN;
+        (needed <= self.deadline).then(|| self.call.max(needed).min(self.deadline))
+    }
+}
+
 impl Default for Limits {
     fn default() -> Self {
         Self {
@@ -368,6 +380,15 @@ impl CliRunner {
         }
     }
 
+    /// One submit, bounded by [`Limits::single_submit`].
+    ///
+    /// If the submit's own CLI run fails or is stopped, the warehouse may
+    /// already have created the statement, but its ID is only in the
+    /// response that was lost. The Statement Execution API cannot look a
+    /// statement up by its request, and query history cannot tell this
+    /// run's statement from an identical one, so cancelling by a guess could
+    /// stop someone else's. Callers should therefore submit only statements
+    /// that end on their own at once, such as v2's `SELECT 1`.
     fn submit_once(
         &self,
         sql: &str,
@@ -375,9 +396,14 @@ impl CliRunner {
         wait: Duration,
         calls: &mut Vec<Call>,
     ) -> Result<Submitted, Error> {
+        let Some(timeout) = self.limits.single_submit(wait) else {
+            return Err(Error::Transport(format!(
+                "a {}s wait does not fit the {}s deadline",
+                wait.as_secs(),
+                self.limits.deadline.as_secs()
+            )));
+        };
         let submit = submit_body(sql, warehouse_id, wait);
-        // The CLI run must outlast the wait, so the warehouse can answer.
-        let timeout = self.limits.call.max(wait + SUBMIT_MARGIN);
         let body = self.statement_call("post", STATEMENTS, Some(&submit), timeout, calls)?;
         let statement_id = statement_id(&body)?;
         let state = body
@@ -1748,6 +1774,41 @@ mod tests {
             .runner(QUICK)
             .submit("DROP TABLE t", WAREHOUSE, Duration::ZERO);
         assert_eq!(outcome.result, Err(Error::Refused));
+        assert!(outcome.calls.is_empty());
+        assert!(fixture.invocations().is_empty());
+    }
+
+    #[test]
+    fn a_single_submit_fits_its_wait_and_the_deadline() {
+        let secs = Duration::from_secs;
+        let limits = |call, deadline| Limits {
+            call: secs(call),
+            deadline: secs(deadline),
+            poll: Duration::ZERO,
+        };
+        // The call when it is longer than the wait and margin.
+        assert_eq!(limits(60, 300).single_submit(secs(5)), Some(secs(60)));
+        // The wait and margin when they are longer than the call.
+        assert_eq!(limits(10, 300).single_submit(secs(50)), Some(secs(55)));
+        // Never past the deadline.
+        assert_eq!(limits(60, 30).single_submit(secs(5)), Some(secs(30)));
+        assert_eq!(limits(60, 55).single_submit(secs(50)), Some(secs(55)));
+        // Nothing when the warehouse could not answer in time.
+        assert_eq!(limits(60, 54).single_submit(secs(50)), None);
+    }
+
+    #[test]
+    fn submit_refuses_a_wait_that_does_not_fit_the_deadline() {
+        let fixture = Fixture::new("transport-submit-no-time", "");
+        let outcome = fixture
+            .runner(Duration::from_secs(4))
+            .submit(SQL, WAREHOUSE, Duration::ZERO);
+        assert_eq!(
+            outcome.result,
+            Err(Error::Transport(
+                "a 0s wait does not fit the 4s deadline".to_owned()
+            ))
+        );
         assert!(outcome.calls.is_empty());
         assert!(fixture.invocations().is_empty());
     }
