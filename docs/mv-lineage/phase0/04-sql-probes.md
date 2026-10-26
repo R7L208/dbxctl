@@ -172,8 +172,10 @@ or, for the API, **unobserved** when there is nothing to see. For the API:
   or whose first pipeline has no plain `pipeline_id`, is unreadable.
 - An updates response with no `updates` member, or an empty array, is a
   pipeline with no history, so unobserved. An `updates` that is not an array,
-  or no response body, is unreadable. The verdict names
-the API as `/api/2.0/pipelines/{id}/updates`, never with an ID.
+  or no response body, is unreadable.
+
+The verdict names the API as `/api/2.0/pipelines/{id}/updates`, never with an
+ID.
 
 | Outcome | State | Verdict or reason |
 | --- | --- | --- |

@@ -315,19 +315,47 @@ mod tests {
         );
     }
 
+    /// A transport on which neither candidate table exists.
+    fn missing(transport: FakeTransport) -> FakeTransport {
+        TABLES.iter().fold(transport, |transport, table| {
+            transport.statement_error(&format!("DESCRIBE TABLE {table}"), missing_table())
+        })
+    }
+
+    fn assert_unknown(cases: Vec<(&str, FakeTransport, &str)>) {
+        for (name, transport, reason) in cases {
+            let finding = check(name, &transport);
+            assert_eq!(finding.state(), State::Unknown, "{name}");
+            let actual = finding.reason().unwrap_or_default();
+            assert!(actual.contains(reason), "{name}: {actual}");
+            assert!(finding.fallback().is_some(), "{name}");
+        }
+    }
+
     #[test]
     fn reports_no_history_anywhere_as_unknown() {
-        let missing = |transport: FakeTransport| {
-            TABLES.iter().fold(transport, |transport, table| {
-                transport.statement_error(&format!("DESCRIBE TABLE {table}"), missing_table())
-            })
-        };
-        for (name, transport, reason) in [
+        assert_unknown(vec![
             (
                 "v4-nothing",
                 missing(FakeTransport::default()).get(PIPELINES, "{}"),
                 "no candidate showed refresh history: absent system.lakeflow.pipeline_update_timeline, system.lakeflow.job_run_timeline; unreadable none; unobserved /api/2.0/pipelines/{id}/updates",
             ),
+            (
+                "v4-empty-describe",
+                TABLES
+                    .iter()
+                    .fold(FakeTransport::default(), |transport, table| {
+                        transport.statement(&format!("DESCRIBE TABLE {table}"), &DESCRIBE, &[])
+                    })
+                    .get(PIPELINES, "{}"),
+                "unreadable system.lakeflow.pipeline_update_timeline, system.lakeflow.job_run_timeline",
+            ),
+        ]);
+    }
+
+    #[test]
+    fn tells_an_unobserved_api_from_an_unreadable_one() {
+        assert_unknown(vec![
             (
                 "v4-list-denied",
                 missing(FakeTransport::default()).get_error(
@@ -408,28 +436,12 @@ mod tests {
                 "unreadable /api/2.0/pipelines/{id}/updates",
             ),
             (
-                "v4-empty-describe",
-                TABLES
-                    .iter()
-                    .fold(FakeTransport::default(), |transport, table| {
-                        transport.statement(&format!("DESCRIBE TABLE {table}"), &DESCRIBE, &[])
-                    })
-                    .get(PIPELINES, "{}"),
-                "unreadable system.lakeflow.pipeline_update_timeline, system.lakeflow.job_run_timeline",
-            ),
-            (
                 "v4-unsafe-id",
                 missing(FakeTransport::default())
                     .get(PIPELINES, r#"{"statuses":[{"pipeline_id":"../x"}]}"#),
                 "unreadable /api/2.0/pipelines/{id}/updates",
             ),
-        ] {
-            let finding = check(name, &transport);
-            assert_eq!(finding.state(), State::Unknown, "{name}");
-            let actual = finding.reason().unwrap_or_default();
-            assert!(actual.contains(reason), "{name}: {actual}");
-            assert!(finding.fallback().is_some(), "{name}");
-        }
+        ]);
     }
 
     #[test]
