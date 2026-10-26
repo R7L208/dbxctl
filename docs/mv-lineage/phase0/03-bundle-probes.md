@@ -43,13 +43,34 @@ alone proves nothing.
 **Fallback for unknown:** assume only what `dbxctl doctor` enforces, and treat
 the checks that run a missing command as unknown.
 
+## The Shared Validate
+
+`validate`, `plan`, and `v8` read one `bundle validate` per probe run.
+Validation contacts the workspace: on CLI 1.13.0 it reads the current user
+and checks `workspace.file_path`, and if that directory does not exist,
+**creates it** (`POST /api/2.0/workspace/mkdirs`), so it is not read-only
+([R9](01-requirements.md#r9-read-only-by-default)). Before running it, the
+probe:
+
+1. Runs `databricks bundle summary -o json`, which prints the same resolved
+   workspace paths but only reads, and takes `workspace.file_path` from it.
+1. Runs `databricks api get /api/2.0/workspace/get-status?path=<file_path>`.
+   HTTP 200 means the directory exists, and 404 that it does not.
+1. Runs `databricks bundle validate -o json --include-locations` only if the
+   directory exists, or if `--allow-mutations` was given.
+
+If the directory does not exist and `--allow-mutations` was not given, or the
+summary or get-status gives no answer, validate does not run and each check
+that needs it is unknown, with a reason naming R9 and its own fallback. The
+first check that needs validate records `summary.json`, `get-status.json`,
+and `validate.json` in its evidence directory; the others refer to the same
+records. Validation and planning also write the CLI's local cache under
+`.databricks/` in the bundle root, and every CLI command posts the CLI's own
+telemetry; neither changes a workspace object.
+
 ## validate
 
-**Runs:** `databricks bundle validate -o json`. Validation contacts the
-workspace: on CLI 1.13.0 it reads the current user and checks
-`workspace.file_path`, and if that directory does not exist, **creates it**
-(`POST /api/2.0/workspace/mkdirs`). It also writes the CLI's local cache under
-`.databricks/` in the bundle root. Neither changes a deployed resource.
+**Runs:** the shared validate.
 
 **Reads:** the JSON on stdout, whatever the exit code: CLI 1.13.0 prints the
 validated configuration even when it exits 1, such as when it cannot create
@@ -59,12 +80,13 @@ ending in `_path`, the resource types and how many of each, and the keys of
 defensively: a missing `resources` object, or a type or resource that is not
 an object, is unknown rather than an empty set.
 
-**Evidence:** `validate.json`, with the configuration in `validate.stdout`.
+**Evidence:** the shared validate's records.
 
 | Outcome | State | Verdict or reason |
 | --- | --- | --- |
 | A configuration with `workspace` and `resources` | resolved | `engine direct; workspace paths: artifact_path, file_path, …; resources: jobs 2, pipelines 1; experimental scripts: none; scripts: none` |
 | The same, after a non-zero exit | resolved | The verdict ends `; validate exited with exit code 1` |
+| Validate not run (R9) | unknown | The reason says why |
 | No JSON object on stdout | unknown | The reason gives the exit code |
 | No `workspace` or `resources`, or a malformed resource or script map | unknown | The reason names the field |
 
@@ -75,8 +97,8 @@ scripts.
 ## plan
 
 **Runs:** `databricks bundle plan -o json`, which reads the deployed state but
-deploys nothing. If an entry carries no configuration, also
-`databricks bundle validate -o json`.
+deploys nothing and, on CLI 1.13.0, creates no directory. If an entry carries
+no configuration, also the shared validate.
 
 **Reads:** on CLI 1.13.0 the plan is
 `{"plan_version": 2, "cli_version": …, "plan": {…}}`. Each entry of `plan` is
@@ -87,7 +109,8 @@ configuration it would deploy in `new_state.value`, and the deployed copy in
 `new_state`, so for each such entry the check looks for the resource in the
 validated configuration.
 
-**Evidence:** `plan.json`, and `validate.json` when validate ran.
+**Evidence:** `plan.json`, and the shared validate's records when it was
+needed.
 
 | Outcome | State | Verdict or reason |
 | --- | --- | --- |
@@ -127,10 +150,10 @@ R5 expects.
 
 ## v8
 
-**Runs:** `databricks bundle validate -o json --include-locations`. CLI 1.13.0
-accepts `--include-locations` though its help does not list it; it adds
-`__locations`, with the configuration `files` and, for each resource, the file,
-line, and column where it is defined.
+**Runs:** the shared validate, whose `--include-locations` CLI 1.13.0 accepts
+though its help does not list it. It adds `__locations`, with the
+configuration `files` and, for each resource, the file, line, and column where
+it is defined.
 
 **Reads:** the source paths each resource names: job tasks' notebooks, Python
 files, SQL files, and dbt projects (including a `for_each_task`'s task),
@@ -148,12 +171,13 @@ bundle root: the file itself, a notebook with one of the extensions `py`,
 an empty segment matches nothing. Each resource's origin is the file of its
 first location.
 
-**Evidence:** `validate.json`, with the configuration in `validate.stdout`.
+**Evidence:** the shared validate's records.
 
 | Outcome | State | Verdict or reason |
 | --- | --- | --- |
 | Source paths and locations | resolved | Each form's count, with the local matches of `file_path`, then each origin's resource count, such as `paths: file_path 6 (4 files, 2 notebooks without extension); origins: databricks.yml 2, resources/extra.yml 1` |
 | A resource with no location | resolved | It counts as `unlocated` |
+| Validate not run (R9) | unknown | The reason says why |
 | No JSON object, no `workspace.file_path`, no `__locations`, or no `resources` | unknown | The reason names which |
 | No source paths | unknown | The forms cannot be observed |
 

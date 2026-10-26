@@ -548,7 +548,7 @@ impl Runner for CliRunner {
             .collect();
         // Anything but a known read-only command is refused without
         // starting a process.
-        if !safety::READ_ONLY_COMMANDS.contains(&path.as_slice()) {
+        if !safety::is_read_only_command(&path) {
             return Call {
                 args: self.arguments(args),
                 result: Err(format!(

@@ -24,7 +24,7 @@ the boundary through which every workspace operation passes. It implements
 | `src/exit.rs` | The exit-code table from [R3](01-requirements.md#r3-exit-codes). | #30 |
 | `src/evidence.rs` | Run-ID generation, the run directory, raw evidence writes, `run.json`, and the `.dbxctl/.gitignore`. | #30 |
 | `src/transport.rs` | The `Runner` trait and `CliRunner::for_bundle(binary, root, target, profile)`: captured runs of known read-only CLI commands, API GETs through `databricks api get --debug` with the HTTP status and `error_code` of the logged response, and Statement Execution with a submit wait, polls, and result-chunk reads all bounded by the deadline, cancellation of a still-running statement at the deadline or after a failed poll, result chunks checked against the manifest, and error classification. | #31 |
-| `src/safety.rs` | `is_read_statement`, the read-only SQL guard. It refuses anything Spark could read differently, such as query hints or a backslash before a literal's quote, and calls to functions with side effects (`http_request`, `remote_query`, `ai_query`). | #31 |
+| `src/safety.rs` | The read-only CLI commands, as offline commands and commands that contact the workspace, and `is_read_only_command`. `is_read_statement`, the read-only SQL guard. It refuses anything Spark could read differently, such as query hints or a backslash before a literal's quote, and calls to functions with side effects (`http_request`, `remote_query`, `ai_query`). | #31 |
 | `src/uc/fqn.rs` | Parsing and formatting Unity Catalog three-part names, including backtick quoting. | #31 |
 | `src/text.rs` | SQL string-literal and identifier quoting. A value with a `'` or `\` has no literal that means the same text under every `escapedStringLiterals` setting, so it must be a statement parameter. | #31 |
 | `src/bundle/config.rs` | Reading `bundle validate -o json` output: the engine, workspace paths, the declared resources, script keys, the source paths each resource names, and resource locations from `--include-locations`. | #32 |
@@ -49,9 +49,10 @@ is recorded as skipped and names the issue that adds it.
 | `src/probe.rs` | The `probe` command group, its argument parsing, and help. | #29 |
 | `src/probe/lineage.rs` | Lineage suite options from [R2](01-requirements.md#r2-run-options), including which checks need a warehouse or catalog; `run_step`, which runs one offline CLI step of a check, records it as evidence, and classifies its failure; and `run_bundle_step`, which does the same for a bundle command through the transport, keeping the output of a non-zero exit. | #29, #32, #34 |
 | `src/probe/model.rs` | `CheckId`, verdict and state types, and the finding struct. | #30 |
+| `src/probe/validation.rs` | The probe run's one `bundle validate`, shared by `validate`, `plan`, and `v8`: it reads `workspace.file_path` with `bundle summary`, checks it with a read-only `get-status`, and runs validate only if the directory exists or `--allow-mutations` was given ([R9](01-requirements.md#r9-read-only-by-default)). | #32 |
 | `src/probe/orchestrator.rs` | Running selected checks in a fixed order and writing the run directory: `run.json`, raw evidence, `findings.json`, and the skeleton `findings.md`. | #30 |
 | `src/probe/lineage/cli.rs` | The `cli` check: which Databricks CLI version is installed, and whether its help offers every command the suite runs. | #30, #32 |
-| `src/probe/lineage/validate.rs` | The `validate` check, and reading `bundle validate` output whatever its exit code, which `plan` and `v8` share. | #32 |
+| `src/probe/lineage/validate.rs` | The `validate` check, from the shared validate. | #32 |
 | `src/probe/lineage/plan.rs` | The `plan` check: the plan's actions and where each carries its configuration, looking up `skip` and `delete` entries in validate output. | #32 |
 | `src/probe/lineage/state.rs` | The `state` check: the layout of the local `resources.json` and its ID paths. | #32 |
 | `src/probe/lineage/v8.rs` | The `v8` check: source path forms, their local files, and where each resource is defined. | #32 |

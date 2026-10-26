@@ -14,6 +14,7 @@ use crate::exit::Exit;
 use crate::json::{Document, Value};
 use crate::probe::lineage::{self, LineageOptions};
 use crate::probe::model::{CheckId, Finding, State};
+use crate::probe::validation::Shared;
 use crate::transport::{CliRunner, Runner};
 
 const SUITE: &str = "lineage";
@@ -30,6 +31,10 @@ pub(crate) struct Context<'a> {
     /// Runs read-only CLI commands from the bundle root for the target and
     /// profile, with credentials scrubbed from their output.
     pub(crate) cli: &'a dyn Runner,
+    /// Whether `--allow-mutations` was given.
+    pub(crate) allow_mutations: bool,
+    /// The run's one `bundle validate`, shared by the checks that need it.
+    pub(crate) shared: &'a Shared,
 }
 
 /// A validated `probe run --suite lineage` request.
@@ -38,6 +43,7 @@ pub(crate) struct Plan {
     bundle_root: PathBuf,
     target: String,
     profile: Option<String>,
+    allow_mutations: bool,
     /// Selected checks in canonical order.
     checks: Vec<CheckId>,
 }
@@ -58,6 +64,7 @@ impl Plan {
             bundle_root: PathBuf::from(bundle_root),
             target,
             profile,
+            allow_mutations: options.allow_mutations,
             checks: options.selected_checks(),
         })
     }
@@ -115,12 +122,15 @@ fn complete(
         &plan.target,
         plan.profile.as_deref(),
     );
+    let shared = Shared::default();
     let context = Context {
         binary,
         run: run_dir,
         bundle_root: &plan.bundle_root,
         target: &plan.target,
         cli: &cli,
+        allow_mutations: plan.allow_mutations,
+        shared: &shared,
     };
     let findings = plan
         .checks
@@ -280,6 +290,7 @@ mod tests {
     use crate::probe::lineage::cli::SURFACES;
     use crate::probe::lineage::parse_lineage_options;
     use crate::probe::model::{CheckId, Finding, State};
+    use crate::probe::validation::Shared;
     use crate::test_support::{
         ScenarioCli, TempDir, assert_no_mutations, fake_databricks, read_tree,
     };
@@ -509,6 +520,8 @@ mod tests {
                 bundle_root: &bundle,
                 target: "dev",
                 cli: &runner,
+                allow_mutations: false,
+                shared: &Shared::default(),
             },
         )
         .expect_err("blocked evidence");

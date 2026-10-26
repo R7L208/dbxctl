@@ -5,7 +5,9 @@
 //! variables resolved and source paths rewritten to workspace paths. On CLI
 //! 1.13.0 it prints that JSON even when it exits 1, and it contacts the
 //! workspace: it reads the current user and checks, and if need be creates,
-//! the directory at `workspace.file_path`.
+//! the directory at `workspace.file_path`. `bundle summary -o json` prints
+//! the same workspace paths but only reads, so the probe uses it to check
+//! that directory first (`src/probe/validation.rs`).
 //!
 //! Every reader returns `None` or an error for a missing or unexpected
 //! field, so a caller can make it an explicit unknown rather than an empty
@@ -17,10 +19,14 @@ use std::time::Duration;
 use crate::json::{Kind, Node};
 
 /// The CLI arguments that validate the bundle and print its configuration.
-pub(crate) const VALIDATE_COMMAND: [&str; 4] = ["bundle", "validate", "-o", "json"];
-/// Adds `__locations`: the configuration files, and where in them each
-/// resource is defined. Accepted by CLI 1.13.0, though not in its help.
-pub(crate) const LOCATIONS_FLAG: &str = "--include-locations";
+/// `--include-locations` adds `__locations`: the configuration files, and
+/// where in them each resource is defined. CLI 1.13.0 accepts it, though
+/// its help does not list it.
+pub(crate) const VALIDATE_COMMAND: [&str; 5] =
+    ["bundle", "validate", "-o", "json", "--include-locations"];
+/// The CLI arguments that print the bundle's configuration and deployed
+/// resources without validating, so without creating any directory.
+pub(crate) const SUMMARY_COMMAND: [&str; 4] = ["bundle", "summary", "-o", "json"];
 /// Validation and planning contact the workspace, so they get more time than
 /// an offline command.
 pub(crate) const BUNDLE_TIMEOUT: Duration = Duration::from_secs(300);

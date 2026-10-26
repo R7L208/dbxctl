@@ -46,8 +46,10 @@ dbxctl probe run --suite lineage --bundle-root <path> --target <non-prod> \
 ```
 
 Bundle-only checks, which need no warehouse or catalog. `validate`, `plan`,
-and `v8` contact the workspace through the CLI. `bundle validate` creates
-`workspace.file_path` if it does not exist yet, and `state` reads the local
+and `v8` contact the workspace through the CLI. They share one
+`bundle validate`, which runs only if `workspace.file_path` already exists,
+because validate would create it; otherwise those checks are unknown unless
+you pass `--allow-mutations`. `state` reads the local
 copy of the deployment state, so deploy the bundle to the target from this
 checkout first. They exit 0 when every check resolves:
 

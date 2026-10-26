@@ -1,20 +1,21 @@
 //! The `v8` check (#32): where the bundle's resources are defined, and what
 //! form their source paths take once validated.
 //!
-//! Runs `bundle validate` with `--include-locations`, which adds the
-//! configuration files and where in them each resource is defined. Each
+//! Reads the probe run's `bundle validate` (`src/probe/validation.rs`),
+//! which passes `--include-locations` to add the configuration files and
+//! where in them each resource is defined. Each
 //! source path is classified by [`crate::bundle::paths::form`], and a path
 //! below `workspace.file_path` is matched with its file in the bundle root.
 
 use std::collections::BTreeMap;
 
-use crate::bundle::config::{LOCATIONS_FLAG, Locations, VALIDATE_COMMAND, resources, source_paths};
+use crate::bundle::config::{Locations, resources, source_paths};
 use crate::bundle::paths::{Form, Local, form, local};
 use crate::json::Node;
 use crate::probe::lineage::one_line;
-use crate::probe::lineage::validate::{Validated, validated};
 use crate::probe::model::{CheckId, Finding, Verdict};
 use crate::probe::orchestrator::Context;
+use crate::probe::validation::{Outcome, validation};
 
 const CHECK: CheckId = CheckId::V8;
 /// The expectation the answer confirms or corrects.
@@ -22,15 +23,16 @@ const SITE: &str = "docs/mv-lineage/phase0/03-bundle-probes.md#v8";
 const FALLBACK: &str = "Treat every resource as defined in `databricks.yml`, and each source path as `workspace.file_path` plus its path in the bundle root, with a notebook's extension dropped.";
 
 pub(crate) fn run(context: &Context<'_>) -> Result<Finding, String> {
-    let mut args = VALIDATE_COMMAND.to_vec();
-    args.push(LOCATIONS_FLAG);
-    let (evidence, validated) = validated(context, CHECK, "validate", &args, SITE)?;
+    let validation = validation(context, CHECK)?;
+    let evidence = validation.evidence.clone();
     let unknown =
         |reason: String| Finding::unknown(CHECK, reason, FALLBACK, evidence.clone(), SITE);
-    let config = match validated {
-        Validated::Config { config, .. } => config,
-        Validated::Unknown(reason) => return Ok(unknown(reason)),
-        Validated::Failed(finding) => return Ok(finding),
+    let config = match &validation.outcome {
+        Outcome::Config { config, .. } => config,
+        Outcome::Unknown(reason) => return Ok(unknown(reason.clone())),
+        Outcome::Failed(reason) => {
+            return Ok(Finding::failed(CHECK, reason.clone(), evidence, SITE));
+        }
     };
     let root = config.root();
     let Some(file_path) = root.pointer("/workspace/file_path").and_then(Node::as_str) else {
@@ -119,11 +121,10 @@ mod tests {
     use std::path::Path;
 
     use super::run;
-    use crate::probe::lineage::testing::{Fixture, bundle_case};
+    use crate::probe::lineage::testing::{Fixture, VALIDATE, bundle_case, gate_cases};
     use crate::probe::model::{Finding, State, Verdict};
     use crate::test_support::{assert_no_mutations, stdout_line};
 
-    const ARGS: [&str; 5] = ["bundle", "validate", "-o", "json", "--include-locations"];
     const VALIDATED: &str =
         include_str!("../../../tests/fixtures/cli-1.13.0/validate-locations.json");
     const BUNDLE: &str = concat!(
@@ -146,7 +147,8 @@ mod tests {
     }
 
     fn check(name: &str, response: &str, files: bool) -> (Finding, Fixture) {
-        let fixture = Fixture::new(name, &bundle_case(&ARGS, response));
+        let scenario = gate_cases(200) + &bundle_case(&VALIDATE, response);
+        let fixture = Fixture::new(name, &scenario);
         if files {
             copy_bundle(Path::new(BUNDLE), &fixture.bundle());
         }
@@ -163,10 +165,12 @@ mod tests {
                 "paths: file_path 6 (4 files, 2 notebooks without extension); origins: databricks.yml 2, resources/extra.yml 1"
             )
         );
+        // The summary and get-status gate, then validate.
         let invocations = fixture.invocations();
+        assert_eq!(invocations.len(), 3, "{invocations:?}");
         assert_eq!(
-            invocations,
-            [[
+            invocations[2],
+            [
                 "bundle",
                 "validate",
                 "-o",
@@ -174,7 +178,7 @@ mod tests {
                 "--include-locations",
                 "-t",
                 "dev"
-            ]]
+            ]
         );
         assert_no_mutations(&invocations);
     }

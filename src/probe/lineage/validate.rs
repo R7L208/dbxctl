@@ -1,16 +1,15 @@
 //! The `validate` check (#32): what `bundle validate` reports about the
 //! bundle for the target: its engine, workspace paths, declared resources,
 //! and scripts.
+//!
+//! Validate runs once per probe run, behind a read-only check that it would
+//! not create `workspace.file_path` (`src/probe/validation.rs`).
 
-use std::process::ExitStatus;
-
-use crate::bundle::config::{
-    BUNDLE_TIMEOUT, Keys, VALIDATE_COMMAND, engine, keys, resources, workspace_paths,
-};
-use crate::json::{self, Document};
-use crate::probe::lineage::{Ran, exit_text, one_line, run_bundle_step};
+use crate::bundle::config::{Keys, engine, keys, resources, workspace_paths};
+use crate::probe::lineage::{exit_text, one_line};
 use crate::probe::model::{CheckId, Finding, Verdict};
 use crate::probe::orchestrator::Context;
+use crate::probe::validation::{Outcome, validation};
 
 const CHECK: CheckId = CheckId::Validate;
 /// The expectation the answer confirms or corrects.
@@ -18,13 +17,16 @@ const SITE: &str = "docs/mv-lineage/phase0/01-requirements.md#r5-cli-baseline";
 const FALLBACK: &str = "Read the bundle's own configuration files instead, and assume the `direct` engine, workspace paths below `workspace.root_path`, and no scripts.";
 
 pub(crate) fn run(context: &Context<'_>) -> Result<Finding, String> {
-    let (evidence, validated) = validated(context, CHECK, "validate", &VALIDATE_COMMAND, SITE)?;
+    let validation = validation(context, CHECK)?;
+    let evidence = validation.evidence.clone();
     let unknown =
         |reason: String| Finding::unknown(CHECK, reason, FALLBACK, evidence.clone(), SITE);
-    let (config, status) = match validated {
-        Validated::Config { config, status } => (config, status),
-        Validated::Unknown(reason) => return Ok(unknown(reason)),
-        Validated::Failed(finding) => return Ok(finding),
+    let (config, status) = match &validation.outcome {
+        Outcome::Config { config, status } => (config, *status),
+        Outcome::Unknown(reason) => return Ok(unknown(reason.clone())),
+        Outcome::Failed(reason) => {
+            return Ok(Finding::failed(CHECK, reason.clone(), evidence, SITE));
+        }
     };
     let root = config.root();
     let Some(paths) = workspace_paths(root) else {
@@ -93,64 +95,38 @@ fn list(names: &[&str]) -> String {
         .join(", ")
 }
 
-/// What a `bundle validate` step produced.
-pub(crate) enum Validated {
-    /// The configuration it printed, and how it exited.
-    Config {
-        config: Document,
-        status: ExitStatus,
-    },
-    /// A reason for an unknown finding.
-    Unknown(String),
-    Failed(Finding),
-}
-
-/// Runs `args`, a `bundle validate -o json` command, as `step` of `check`
-/// and reads the configuration it prints. Any exit with a JSON object on
-/// stdout counts: CLI 1.13.0 prints the configuration even when it exits 1.
-pub(crate) fn validated(
-    context: &Context<'_>,
-    check: CheckId,
-    step: &str,
-    args: &[&str],
-    site: &'static str,
-) -> Result<(Vec<String>, Validated), String> {
-    let (evidence, ran) = run_bundle_step(context, check, step, args, BUNDLE_TIMEOUT, site)?;
-    let command = format!("`databricks {}`", args.join(" "));
-    let validated = match ran {
-        Ran::Failed(finding) => Validated::Failed(finding),
-        Ran::Completed { status, stdout } => match json::parse_bytes(&stdout) {
-            Ok(config) if config.root().members().is_some() => Validated::Config { config, status },
-            _ if status.success() => {
-                Validated::Unknown(format!("{command} did not print a JSON object"))
-            }
-            _ => Validated::Unknown(format!(
-                "{command} failed with {} and printed no JSON object",
-                exit_text(status)
-            )),
-        },
-    };
-    Ok((evidence, validated))
-}
-
 #[cfg(test)]
 mod tests {
     use super::run;
-    use crate::probe::lineage::testing::{Fixture, bundle_case};
-    use crate::probe::model::{State, Verdict};
+    use crate::probe::lineage::testing::{
+        Fixture, VALIDATE, bundle_case, gate_cases, get_status_path,
+    };
+    use crate::probe::model::{Finding, State, Verdict};
     use crate::test_support::{assert_no_mutations, stdout_line};
 
-    const VALIDATE: &str = include_str!("../../../tests/fixtures/cli-1.13.0/validate.json");
-    const ARGS: [&str; 4] = ["bundle", "validate", "-o", "json"];
+    const VALIDATED: &str = include_str!("../../../tests/fixtures/cli-1.13.0/validate.json");
+    const SUMMARY: [&str; 4] = ["bundle", "summary", "-o", "json"];
 
-    fn check(name: &str, response: &str) -> (crate::probe::model::Finding, Fixture) {
-        let fixture = Fixture::new(name, &bundle_case(&ARGS, response));
+    /// Runs the check with `file_path` answered with HTTP `status` and
+    /// validate with `response`.
+    fn check(name: &str, status: u16, response: &str) -> (Finding, Fixture) {
+        let scenario = gate_cases(status) + &bundle_case(&VALIDATE, response);
+        let fixture = Fixture::new(name, &scenario);
         (fixture.run(run), fixture)
+    }
+
+    /// The argv `args` with the target appended, as the bundle runner calls
+    /// the CLI.
+    fn argv(args: &[&str]) -> Vec<String> {
+        args.iter()
+            .chain(&["-t", "dev"])
+            .map(|argument| (*argument).to_owned())
+            .collect()
     }
 
     #[test]
     fn resolves_the_validated_fixture() {
-        let (finding, fixture) = check("validate-resolved", &stdout_line(VALIDATE));
+        let (finding, fixture) = check("validate-resolved", 200, &stdout_line(VALIDATED));
         assert_eq!(finding.state(), State::Resolved, "{finding:?}");
         assert_eq!(
             finding.verdict().map(Verdict::as_str),
@@ -159,11 +135,95 @@ mod tests {
             )
         );
         let invocations = fixture.invocations();
+        let status = get_status_path();
         assert_eq!(
             invocations,
-            [["bundle", "validate", "-o", "json", "-t", "dev"]]
+            [
+                argv(&SUMMARY),
+                argv(&["api", "get", &status, "--debug"]),
+                argv(&VALIDATE),
+            ]
         );
         assert_no_mutations(&invocations);
+        assert!(
+            fixture
+                .evidence("validate", "get-status.json")
+                .contains("/api/2.0/workspace/get-status")
+        );
+    }
+
+    #[test]
+    fn does_not_validate_when_the_files_folder_is_missing() {
+        let (finding, fixture) = check("validate-missing-folder", 404, &stdout_line(VALIDATED));
+        assert_eq!(finding.state(), State::Unknown, "{finding:?}");
+        let reason = finding.reason().unwrap_or_default();
+        assert!(reason.contains("does not exist"), "{reason}");
+        assert!(reason.contains("(R9)"), "{reason}");
+        let invocations = fixture.invocations();
+        assert_eq!(
+            invocations.len(),
+            2,
+            "summary and get-status only: {invocations:?}"
+        );
+        assert!(
+            invocations
+                .iter()
+                .all(|argv| argv[..2] != ["bundle", "validate"]),
+            "{invocations:?}"
+        );
+        assert_no_mutations(&invocations);
+    }
+
+    #[test]
+    fn validates_a_missing_folder_with_mutations_allowed() {
+        let scenario = gate_cases(404) + &bundle_case(&VALIDATE, &stdout_line(VALIDATED));
+        let fixture = Fixture::new("validate-allowed", &scenario);
+        let finding = fixture.run_allowing_mutations(run);
+        assert_eq!(finding.state(), State::Resolved, "{finding:?}");
+        assert_eq!(fixture.invocations().len(), 3);
+    }
+
+    #[test]
+    fn does_not_validate_when_the_folder_cannot_be_checked() {
+        for (name, scenario, reason) in [
+            (
+                "validate-status-403",
+                gate_cases(403),
+                "get-status answered HTTP 403",
+            ),
+            (
+                "validate-status-broken",
+                gate_cases(200)
+                    .replace("exit 0", "")
+                    .replace("stdout {\"object_type\": \"DIRECTORY\"}", "stdout not json"),
+                "no usable response",
+            ),
+            (
+                "validate-summary-exit",
+                bundle_case(&SUMMARY, "exit 1"),
+                "`databricks bundle summary -o json` failed with exit code 1",
+            ),
+            (
+                "validate-summary-path",
+                bundle_case(&SUMMARY, r#"stdout {"workspace": {"file_path": "files"}}"#),
+                "no absolute `workspace.file_path`",
+            ),
+        ] {
+            let scenario = scenario + &bundle_case(&VALIDATE, &stdout_line(VALIDATED));
+            let fixture = Fixture::new(name, &scenario);
+            let finding = fixture.run(run);
+            assert_eq!(finding.state(), State::Unknown, "{name}: {finding:?}");
+            let actual = finding.reason().unwrap_or_default();
+            assert!(actual.contains(reason), "{name}: {actual}");
+            assert!(actual.contains("(R9)"), "{name}: {actual}");
+            assert!(
+                fixture
+                    .invocations()
+                    .iter()
+                    .all(|argv| argv[..2] != ["bundle", "validate"]),
+                "{name}: validate must not run"
+            );
+        }
     }
 
     #[test]
@@ -171,6 +231,7 @@ mod tests {
         let stdout = include_str!("../../../tests/fixtures/cli-1.13.0/validate-exit-1.stdout");
         let (finding, _fixture) = check(
             "validate-exit-1",
+            200,
             &format!("{}\nexit 1", stdout_line(stdout)),
         );
         assert_eq!(finding.state(), State::Resolved, "{finding:?}");
@@ -186,7 +247,7 @@ mod tests {
         let config = r#"{"workspace": {"file_path": "/w", "root_path": "/r", "current_user": {}},
             "resources": {}, "experimental": {"scripts": {"predeploy": "x", "pre\ndeploy": "y"}},
             "scripts": {"hello": {"content": "echo"}}}"#;
-        let (finding, _fixture) = check("validate-scripts", &stdout_line(config));
+        let (finding, _fixture) = check("validate-scripts", 200, &stdout_line(config));
         assert_eq!(
             finding.verdict().map(Verdict::as_str),
             Some(
@@ -230,7 +291,7 @@ mod tests {
                 "`experimental.scripts` in the validated configuration is not an object",
             ),
         ] {
-            let (finding, _fixture) = check(name, response);
+            let (finding, _fixture) = check(name, 200, response);
             assert_eq!(finding.state(), State::Unknown, "{name}");
             let actual = finding.reason().unwrap_or_default();
             assert!(actual.contains(reason), "{name}: {actual}");
@@ -240,7 +301,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn reports_signal_termination_as_unknown() {
-        let (finding, _fixture) = check("validate-signal", "abort");
+        let (finding, _fixture) = check("validate-signal", 200, "abort");
         assert_eq!(finding.state(), State::Unknown);
         assert!(finding.reason().unwrap_or_default().contains("a signal"));
     }

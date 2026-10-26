@@ -544,17 +544,28 @@ fn probe_run_answers_the_bundle_checks() {
         }
         case + &stdout_line(stdout) + "\n"
     };
-    let validate = ["bundle", "validate", "-o", "json"];
+    // `bundle validate` runs once, after a read-only summary and get-status
+    // find `workspace.file_path`, so validate cannot create it (R9).
+    let file_path = "/Workspace/Users/user@example.test/projects/example-dev/files";
+    let status_path = format!(
+        "/api/2.0/workspace/get-status?path={}",
+        file_path.replace('@', "%40")
+    );
+    let get_status = format!(
+        "case\narg api\narg get\narg {status_path}\narg --debug\narg -t\narg dev\nstdout {{}}\nstderr GET {status_path} HTTP/1.1\\n< HTTP/1.1 200 OK\\n\n"
+    );
+    let validate = ["bundle", "validate", "-o", "json", "--include-locations"];
     let scenario = [
         CLI_VERSION_SCENARIO.to_owned(),
-        bundle_case(&validate, &fixture_file("validate.json")),
+        bundle_case(
+            &["bundle", "summary", "-o", "json"],
+            &format!(r#"{{"workspace": {{"file_path": "{file_path}"}}}}"#),
+        ),
+        get_status,
+        bundle_case(&validate, &fixture_file("validate-locations.json")),
         bundle_case(
             &["bundle", "plan", "-o", "json"],
             &fixture_file("plan-mixed.json"),
-        ),
-        bundle_case(
-            &["bundle", "validate", "-o", "json", "--include-locations"],
-            &fixture_file("validate-locations.json"),
         ),
         format!(
             "case\narg bundle\narg schema\n{}\n",
@@ -590,7 +601,19 @@ fn probe_run_answers_the_bundle_checks() {
             "v1        resolved  not rejected: experimental.scripts accepts any key",
         ]
     );
-    assert_no_mutations(&fixture.cli.invocations());
+    let invocations = fixture.cli.invocations();
+    let validates = invocations
+        .iter()
+        .filter(|argv| {
+            argv.get(..3)
+                .is_some_and(|path| path == ["bundle", "validate", "-o"])
+        })
+        .count();
+    assert_eq!(
+        validates, 1,
+        "validate runs once per probe run: {invocations:?}"
+    );
+    assert_no_mutations(&invocations);
 }
 
 #[test]

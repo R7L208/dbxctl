@@ -3,17 +3,18 @@
 //! deploy.
 //!
 //! A `skip` carries none, so when an entry has no configuration the check
-//! runs `bundle validate` and looks for the resource there.
+//! looks for the resource in the probe run's `bundle validate`
+//! (`src/probe/validation.rs`).
 
 use std::collections::BTreeMap;
 
-use crate::bundle::config::{BUNDLE_TIMEOUT, VALIDATE_COMMAND, resources};
+use crate::bundle::config::{BUNDLE_TIMEOUT, resources};
 use crate::bundle::plan::{CONFIG_POINTER, Entry, PLAN_COMMAND, read};
 use crate::json;
-use crate::probe::lineage::validate::{Validated, validated};
 use crate::probe::lineage::{Ran, exit_text, one_line, run_bundle_step};
 use crate::probe::model::{CheckId, Finding, Verdict};
 use crate::probe::orchestrator::Context;
+use crate::probe::validation::{Outcome, validation};
 
 const CHECK: CheckId = CheckId::Plan;
 /// The expectation the answer confirms or corrects.
@@ -22,7 +23,7 @@ const FALLBACK: &str = "Read each resource's configuration from `bundle validate
 
 pub(crate) fn run(context: &Context<'_>) -> Result<Finding, String> {
     let (mut evidence, ran) =
-        run_bundle_step(context, CHECK, "plan", &PLAN_COMMAND, BUNDLE_TIMEOUT, SITE)?;
+        run_bundle_step(context, CHECK, "plan", &PLAN_COMMAND, BUNDLE_TIMEOUT)?;
     let unknown = |reason: String, evidence: &[String]| {
         Finding::unknown(CHECK, reason, FALLBACK, evidence.to_vec(), SITE)
     };
@@ -37,7 +38,7 @@ pub(crate) fn run(context: &Context<'_>) -> Result<Finding, String> {
                 &evidence,
             ));
         }
-        Ran::Failed(finding) => return Ok(finding),
+        Ran::Failed(reason) => return Ok(Finding::failed(CHECK, reason, evidence, SITE)),
     };
     let Ok(document) = json::parse_bytes(&stdout) else {
         return Ok(unknown(
@@ -65,11 +66,10 @@ pub(crate) fn run(context: &Context<'_>) -> Result<Finding, String> {
         .collect();
     let mut declared = BTreeMap::new();
     if !unconfigured.is_empty() {
-        let (validate_evidence, validated) =
-            validated(context, CHECK, "validate", &VALIDATE_COMMAND, SITE)?;
-        evidence.extend(validate_evidence);
-        match validated {
-            Validated::Config { config, .. } => {
+        let validation = validation(context, CHECK)?;
+        evidence.extend(validation.evidence.iter().cloned());
+        match &validation.outcome {
+            Outcome::Config { config, .. } => {
                 if let Ok(resources) = resources(config.root()) {
                     for entry in &unconfigured {
                         let found = resources
@@ -79,14 +79,9 @@ pub(crate) fn run(context: &Context<'_>) -> Result<Finding, String> {
                     }
                 }
             }
-            Validated::Unknown(_) => {}
-            Validated::Failed(finding) => {
-                return Ok(Finding::failed(
-                    CHECK,
-                    finding.reason().unwrap_or_default(),
-                    evidence,
-                    SITE,
-                ));
+            Outcome::Unknown(_) => {}
+            Outcome::Failed(reason) => {
+                return Ok(Finding::failed(CHECK, reason.clone(), evidence, SITE));
             }
         }
     }
@@ -141,12 +136,11 @@ fn actions(entries: &[Entry<'_>], declared: &BTreeMap<(&str, &str), bool>) -> Ve
 #[cfg(test)]
 mod tests {
     use super::run;
-    use crate::probe::lineage::testing::{Fixture, bundle_case};
+    use crate::probe::lineage::testing::{Fixture, VALIDATE, bundle_case, gate_cases};
     use crate::probe::model::{Finding, State, Verdict};
     use crate::test_support::{assert_no_mutations, stdout_line};
 
     const PLAN: [&str; 4] = ["bundle", "plan", "-o", "json"];
-    const VALIDATE: [&str; 4] = ["bundle", "validate", "-o", "json"];
     const VALIDATED: &str = include_str!("../../../tests/fixtures/cli-1.13.0/validate.json");
 
     fn plan_fixture(name: &str) -> String {
@@ -158,7 +152,8 @@ mod tests {
     }
 
     fn check(name: &str, plan: &str, validate: &str) -> (Finding, Fixture) {
-        let scenario = bundle_case(&PLAN, plan) + &bundle_case(&VALIDATE, validate);
+        let scenario =
+            bundle_case(&PLAN, plan) + &gate_cases(200) + &bundle_case(&VALIDATE, validate);
         let fixture = Fixture::new(name, &scenario);
         (fixture.run(run), fixture)
     }
@@ -193,7 +188,7 @@ mod tests {
             "plan_version 2; skip: validate; update: new_state.value"
         );
         let invocations = fixture.invocations();
-        assert_eq!(invocations.len(), 2);
+        assert_eq!(invocations.len(), 4, "plan, then the gated validate");
         assert_no_mutations(&invocations);
 
         // The deleted job is gone from the configuration.
