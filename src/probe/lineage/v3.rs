@@ -8,7 +8,7 @@
 use crate::probe::model::{CheckId, Finding, Verdict};
 use crate::probe::orchestrator::Context;
 use crate::probe::workspace::{
-    Reply, describe, described_columns, scope_catalog, step, warehouse, words,
+    Read, Reply, describe, described_columns, required_words, scope_catalog, step, warehouse, words,
 };
 use crate::text;
 
@@ -50,7 +50,15 @@ pub(crate) fn run(context: &Context<'_>) -> Result<Finding, String> {
         &mut evidence,
         |transport| transport.statement(&sql, warehouse_id),
     )? {
-        Reply::Answer(result) => words(&result, "table_type").unwrap_or_default(),
+        Reply::Answer(result) => match required_words(&result, "table_type") {
+            Ok(types) => types,
+            Err(shape) => {
+                return Ok(unknown(
+                    format!("the scope catalog's `information_schema.tables` {shape}"),
+                    &evidence,
+                ));
+            }
+        },
         Reply::Error(error) => {
             return Ok(unknown(
                 format!(
@@ -69,53 +77,10 @@ pub(crate) fn run(context: &Context<'_>) -> Result<Finding, String> {
         ));
     };
 
-    let columns = match step(
-        context,
-        CHECK,
-        "pipelines-columns",
-        SITE,
-        &mut evidence,
-        |transport| transport.statement(DESCRIBE_PIPELINES, warehouse_id),
-    )? {
-        Reply::Answer(result) => described_columns(&result).unwrap_or_default(),
-        Reply::Error(error) => {
-            return Ok(unknown(
-                format!("describing `{PIPELINES}` {}", describe(&error)),
-                &evidence,
-            ));
-        }
-        Reply::Failed(finding) => return Ok(finding),
-    };
-    if columns.is_empty() {
-        return Ok(unknown(
-            format!("describing `{PIPELINES}` listed no columns"),
-            &evidence,
-        ));
-    }
-
-    let pipeline_types = if columns.iter().any(|column| column == "pipeline_type") {
-        match step(
-            context,
-            CHECK,
-            "pipeline-types",
-            SITE,
-            &mut evidence,
-            |transport| transport.statement(PIPELINE_TYPES, warehouse_id),
-        )? {
-            Reply::Answer(result) => list(&words(&result, "pipeline_type").unwrap_or_default()),
-            Reply::Error(error) => {
-                return Ok(unknown(
-                    format!(
-                        "reading `pipeline_type` from `{PIPELINES}` {}",
-                        describe(&error)
-                    ),
-                    &evidence,
-                ));
-            }
-            Reply::Failed(finding) => return Ok(finding),
-        }
-    } else {
-        "no such column".to_owned()
+    let (columns, pipeline_types) = match pipelines(context, warehouse_id, &mut evidence)? {
+        Read::Seen(shape) => shape,
+        Read::Unknown(reason) => return Ok(unknown(reason, &evidence)),
+        Read::Failed(finding) => return Ok(finding),
     };
 
     Ok(Finding::resolved(
@@ -128,6 +93,61 @@ pub(crate) fn run(context: &Context<'_>) -> Result<Finding, String> {
         evidence,
         SITE,
     ))
+}
+
+/// The columns of `system.lakeflow.pipelines` and its `pipeline_type`
+/// values, or `no such column`.
+fn pipelines(
+    context: &Context<'_>,
+    warehouse_id: &str,
+    evidence: &mut Vec<String>,
+) -> Result<Read<(Vec<String>, String)>, String> {
+    let columns = match step(
+        context,
+        CHECK,
+        "pipelines-columns",
+        SITE,
+        evidence,
+        |transport| transport.statement(DESCRIBE_PIPELINES, warehouse_id),
+    )? {
+        Reply::Answer(result) => described_columns(&result).unwrap_or_default(),
+        Reply::Error(error) => {
+            return Ok(Read::Unknown(format!(
+                "describing `{PIPELINES}` {}",
+                describe(&error)
+            )));
+        }
+        Reply::Failed(finding) => return Ok(Read::Failed(finding)),
+    };
+    if columns.is_empty() {
+        return Ok(Read::Unknown(format!(
+            "describing `{PIPELINES}` listed no columns"
+        )));
+    }
+
+    let pipeline_types = if columns.iter().any(|column| column == "pipeline_type") {
+        match step(
+            context,
+            CHECK,
+            "pipeline-types",
+            SITE,
+            evidence,
+            |transport| transport.statement(PIPELINE_TYPES, warehouse_id),
+        )? {
+            Reply::Answer(result) => list(&words(&result, "pipeline_type").unwrap_or_default()),
+            Reply::Error(error) => {
+                return Ok(Read::Unknown(format!(
+                    "reading `pipeline_type` from `{PIPELINES}` {}",
+                    describe(&error)
+                )));
+            }
+            Reply::Failed(finding) => return Ok(Read::Failed(finding)),
+        }
+    } else {
+        "no such column".to_owned()
+    };
+
+    Ok(Read::Seen((columns, pipeline_types)))
 }
 
 fn list(values: &[String]) -> String {
@@ -280,6 +300,34 @@ mod tests {
             let actual = finding.reason().unwrap_or_default();
             assert!(actual.contains(reason), "{name}: {actual}");
             assert!(finding.fallback().is_some(), "{name}");
+        }
+    }
+
+    #[test]
+    fn reports_an_unexpected_tables_shape_as_unknown() {
+        for (case, transport, reason) in [
+            (
+                "v3-no-type-column",
+                FakeTransport::default().statement(
+                    "information_schema.tables",
+                    &["kind"],
+                    &[&[Some("MANAGED")]],
+                ),
+                "the scope catalog's `information_schema.tables` has no `table_type` column",
+            ),
+            (
+                "v3-null-type",
+                FakeTransport::default().statement(
+                    "information_schema.tables",
+                    &["table_type", "tables"],
+                    &[&[Some("MANAGED"), Some("1")], &[None, Some("2")]],
+                ),
+                "the scope catalog's `information_schema.tables` has a null `table_type`",
+            ),
+        ] {
+            let finding = check(case, &transport, Some("main"));
+            assert_eq!(finding.state(), State::Unknown, "{case}");
+            assert_eq!(finding.reason(), Some(reason), "{case}");
         }
     }
 

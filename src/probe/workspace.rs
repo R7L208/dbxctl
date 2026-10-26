@@ -18,6 +18,14 @@ pub(crate) enum Reply<T> {
     Failed(Finding),
 }
 
+/// What a part of a check read: its value, the reason it is unknown, or
+/// the finding when the CLI could not run.
+pub(crate) enum Read<T> {
+    Seen(T),
+    Unknown(String),
+    Failed(Finding),
+}
+
 /// Runs `operation` as `step` of `check`, records each CLI run it took in
 /// `evidence`, and classifies the result. One run is recorded as
 /// `<step>.json`; more, such as a statement's submit and polls, as
@@ -142,6 +150,26 @@ pub(crate) fn words(result: &ResultSet, column: &str) -> Option<Vec<String>> {
     )
 }
 
+/// Every cell of `column` in `result`, as verdict words. `Err` describes
+/// the unexpected shape: no such column, or a null cell.
+pub(crate) fn required_words(result: &ResultSet, column: &str) -> Result<Vec<String>, String> {
+    let at = result
+        .columns
+        .iter()
+        .position(|name| name == column)
+        .ok_or_else(|| format!("has no `{column}` column"))?;
+    result
+        .rows
+        .iter()
+        .map(|row| {
+            row.get(at)
+                .and_then(Option::as_deref)
+                .map(word)
+                .ok_or_else(|| format!("has a null `{column}`"))
+        })
+        .collect()
+}
+
 /// The cell of `column` in `row` of `result`, if both exist and it is not
 /// null.
 pub(crate) fn cell<'a>(
@@ -206,7 +234,7 @@ fn missing_option(check: CheckId, option: &str, site: &'static str) -> Finding {
 mod tests {
     use std::ffi::OsString;
 
-    use super::{cell, could_not_run, describe, described_columns, word, words};
+    use super::{cell, could_not_run, describe, described_columns, required_words, word, words};
     use crate::databricks::Captured;
     use crate::test_support::exit_success;
     use crate::transport::{Call, Error, ResultSet};
@@ -284,6 +312,24 @@ mod tests {
         assert_eq!(cell(&rows, &rows.rows[0], "count"), Some("3"));
         assert_eq!(cell(&rows, &rows.rows[2], "count"), None);
         assert_eq!(cell(&rows, &rows.rows[0], "missing"), None);
+    }
+
+    #[test]
+    fn requires_a_column_with_no_null_cells() {
+        let rows = result(&["kind"], &[&[Some("MANAGED")], &[Some("VIEW")]]);
+        assert_eq!(
+            required_words(&rows, "kind"),
+            Ok(vec!["MANAGED".to_owned(), "VIEW".to_owned()])
+        );
+        assert_eq!(
+            required_words(&rows, "type"),
+            Err("has no `type` column".to_owned())
+        );
+        let nulls = result(&["kind"], &[&[Some("MANAGED")], &[None]]);
+        assert_eq!(
+            required_words(&nulls, "kind"),
+            Err("has a null `kind`".to_owned())
+        );
     }
 
     #[test]

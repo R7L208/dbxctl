@@ -98,7 +98,7 @@ the transport's 30-second submit wait is inside it.
 | --- | --- | --- |
 | A `table_type` in the scope catalog names a materialized view, and the pipelines table is described | resolved | `materialized views: table_type MATERIALIZED_VIEW; scope table_type values: …; system.lakeflow.pipelines columns: …; pipeline_type values: …`, where the last is `no such column` when there is none |
 | No `table_type` in the scope catalog names a materialized view | unknown | Choose a scope catalog with a materialized view |
-| A step fails, such as a missing catalog or table, or the describe lists no columns | unknown | The reason names the step and the kind of error |
+| A step fails, such as a missing catalog or table, the tables result has no `table_type` column or a null one, or the describe lists no columns | unknown | The reason names the step and the kind of error or shape |
 | The CLI cannot be run to completion | failed | See the evidence record |
 
 **Fallback for unknown:** identify materialized views by `table_type`
@@ -120,7 +120,7 @@ from `/api/2.0/pipelines/<id>` instead of `system.lakeflow.pipelines`.
 | A `table_type` in the scope catalog names a metric view, and a listed catalog has a sharing `catalog_type` | resolved | `metric views: table_type METRIC_VIEW; shared catalogs: catalog_type DELTASHARING_CATALOG; scope catalog: …; catalog_type values: …`, sorted; the scope catalog is matched case-insensitively, or `not listed` |
 | No metric-view `table_type` in the scope catalog | unknown | Choose a scope catalog with a metric view |
 | No visible catalog has a sharing `catalog_type` | unknown | The reason says so |
-| A step fails, a response has no `catalogs` array, or a token remains after 20 pages | unknown | The reason names which |
+| A step fails, the tables result has no `table_type` column or a null one, a response has no `catalogs` array, or a token remains after 20 pages | unknown | The reason names which |
 | The CLI cannot be run to completion | failed | See the evidence record |
 
 **Fallback for unknown:** treat `table_type` `METRIC_VIEW` as a metric view and

@@ -11,7 +11,9 @@ use std::fmt::Write as _;
 use crate::json::Node;
 use crate::probe::model::{CheckId, Finding, Verdict};
 use crate::probe::orchestrator::Context;
-use crate::probe::workspace::{Reply, describe, scope_catalog, step, warehouse, word, words};
+use crate::probe::workspace::{
+    Reply, describe, required_words, scope_catalog, step, warehouse, word,
+};
 use crate::text;
 
 const CHECK: CheckId = CheckId::V11;
@@ -69,7 +71,15 @@ pub(crate) fn run(context: &Context<'_>) -> Result<Finding, String> {
         &mut evidence,
         |transport| transport.statement(&sql, warehouse_id),
     )? {
-        Reply::Answer(result) => words(&result, "table_type").unwrap_or_default(),
+        Reply::Answer(result) => match required_words(&result, "table_type") {
+            Ok(types) => types,
+            Err(shape) => {
+                return Ok(unknown(
+                    format!("the scope catalog's `information_schema.tables` {shape}"),
+                    &evidence,
+                ));
+            }
+        },
         Reply::Error(error) => {
             return Ok(unknown(
                 format!(
@@ -361,6 +371,34 @@ mod tests {
         );
         // One statement and exactly the capped number of pages.
         assert_eq!(transport.asked().len(), 1 + MAX_PAGES);
+    }
+
+    #[test]
+    fn reports_an_unexpected_tables_shape_as_unknown() {
+        for (case, transport, reason) in [
+            (
+                "v11-no-type-column",
+                FakeTransport::default().statement(
+                    "information_schema.tables",
+                    &["kind"],
+                    &[&[Some("MANAGED")]],
+                ),
+                "the scope catalog's `information_schema.tables` has no `table_type` column",
+            ),
+            (
+                "v11-null-type",
+                FakeTransport::default().statement(
+                    "information_schema.tables",
+                    &["table_type", "tables"],
+                    &[&[Some("MANAGED"), Some("1")], &[None, Some("2")]],
+                ),
+                "the scope catalog's `information_schema.tables` has a null `table_type`",
+            ),
+        ] {
+            let finding = check(case, &transport);
+            assert_eq!(finding.state(), State::Unknown, "{case}");
+            assert_eq!(finding.reason(), Some(reason), "{case}");
+        }
     }
 
     #[test]
