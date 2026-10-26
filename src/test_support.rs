@@ -100,8 +100,9 @@ enum Answer {
 }
 
 /// A [`Runner`] that answers from a script, for checks that read the
-/// workspace. A request nothing in the script answers panics, so a test sees
-/// every request a check makes. Statements must pass the read-only guard,
+/// workspace. The answer scripted last for a request wins, so a test can
+/// override one answer of a shared script. A request nothing in the script
+/// answers panics, so a test sees every request a check makes. Statements must pass the read-only guard,
 /// as with the real transport.
 ///
 /// Each answer comes with one CLI run that exited 0 with no output, or,
@@ -109,7 +110,7 @@ enum Answer {
 #[derive(Default)]
 pub(crate) struct FakeTransport {
     gets: Vec<(String, Answer)>,
-    /// Matched by a fragment of the SQL, first match first.
+    /// Matched by a fragment of the SQL.
     statements: Vec<(String, Answer)>,
     submits: Vec<(Duration, Answer)>,
     unrunnable: bool,
@@ -150,7 +151,7 @@ impl FakeTransport {
         self
     }
 
-    /// Answers the first statement containing `fragment` with these rows.
+    /// Answers a statement containing `fragment` with these rows.
     pub(crate) fn statement(
         mut self,
         fragment: &str,
@@ -232,7 +233,7 @@ impl Runner for FakeTransport {
         let answer = self
             .gets
             .iter()
-            .find(|(scripted, _)| scripted == path)
+            .rfind(|(scripted, _)| scripted == path)
             .map(|(_, answer)| answer);
         self.outcome(&format!("GET {path}"), answer, |answer| match answer {
             Answer::Body(status, body) => Ok(Response {
@@ -256,7 +257,7 @@ impl Runner for FakeTransport {
         let answer = self
             .statements
             .iter()
-            .find(|(fragment, _)| sql.contains(fragment.as_str()))
+            .rfind(|(fragment, _)| sql.contains(fragment.as_str()))
             .map(|(_, answer)| answer);
         self.outcome(&format!("SQL {sql}"), answer, |answer| match answer {
             Answer::Rows(columns, rows) => Ok(ResultSet {
@@ -278,7 +279,7 @@ impl Runner for FakeTransport {
         let answer = self
             .submits
             .iter()
-            .find(|(scripted, _)| *scripted == wait)
+            .rfind(|(scripted, _)| *scripted == wait)
             .map(|(_, answer)| answer);
         let request = format!("SUBMIT {}s {sql}", wait.as_secs());
         self.outcome(&request, answer, |answer| match answer {

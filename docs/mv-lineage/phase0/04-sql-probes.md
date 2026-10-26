@@ -59,12 +59,15 @@ code alone, as an error with no HTTP status or `error_code`.
 **Runs:** `SELECT 1`, submitted once for each `wait_timeout` of 0, 4, 5, 50,
 and 51 seconds (steps `wait-0s` through `wait-51s`): each side of the documented
 range, 0 or 5 to 50 seconds. A statement the submit leaves pending or running
-is cancelled. The CLI run is allowed the wait plus five seconds.
+is cancelled. The CLI run is allowed the wait plus five seconds. A submit
+rejects the wait when it fails with HTTP 400 and its `error_code` is
+`INVALID_PARAMETER_VALUE` or its message names `wait_timeout`.
 
 | Outcome | State | Verdict or reason |
 | --- | --- | --- |
-| Each submit is accepted or rejected with HTTP 400 | resolved | `accepted 0s, 5s, 50s; rejected 4s, 51s`, with the observed lists, or `none` |
-| A submit fails any other way | unknown | The reason names the wait and the kind of error; the check stops there |
+| Each submit is accepted or rejects the wait, and at least one of 0s, 5s, and 50s is accepted | resolved | `accepted 0s, 5s, 50s; rejected 4s, 51s`, with the observed lists, or `none` |
+| None of 0s, 5s, and 50s, which the API documents as valid, is accepted | unknown | The request itself was likely rejected, such as for an unknown warehouse |
+| A submit fails any other way, including an HTTP 400 that does not reject the wait | unknown | The reason names the wait and the kind of error; the check stops there |
 | The CLI cannot be run to completion | failed | See the evidence record |
 
 **Fallback for unknown:** assume the documented range, 0 or 5 to 50 seconds;

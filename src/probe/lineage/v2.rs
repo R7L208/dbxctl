@@ -18,6 +18,9 @@ const SITE: &str = "src/transport.rs WAIT_TIMEOUT";
 const PROBE: &str = "SELECT 1";
 /// Each side of the documented range, 0 or 5 to 50 seconds.
 const WAITS: [u64; 5] = [0, 4, 5, 50, 51];
+/// The waits the API documents as valid. If it rejects all of them, it is
+/// rejecting the request, such as an unknown warehouse, not the wait.
+const DOCUMENTED: [u64; 3] = [0, 5, 50];
 const FALLBACK: &str = "Assume the documented range, 0 or 5 to 50 seconds; the transport's 30-second submit wait is inside it.";
 
 pub(crate) fn run(context: &Context<'_>) -> Result<Finding, String> {
@@ -40,8 +43,7 @@ pub(crate) fn run(context: &Context<'_>) -> Result<Finding, String> {
         )?;
         match reply {
             Reply::Answer(_) => accepted.push(seconds),
-            // The API rejects a wait it does not accept as a bad request.
-            Reply::Error(Error::Http { status: 400, .. }) => rejected.push(seconds),
+            Reply::Error(error) if rejects_wait(&error) => rejected.push(seconds),
             Reply::Error(error) => {
                 return Ok(Finding::unknown(
                     CHECK,
@@ -57,6 +59,18 @@ pub(crate) fn run(context: &Context<'_>) -> Result<Finding, String> {
             Reply::Failed(finding) => return Ok(finding),
         }
     }
+    if !DOCUMENTED.iter().any(|seconds| accepted.contains(seconds)) {
+        return Ok(Finding::unknown(
+            CHECK,
+            format!(
+                "none of the waits the API documents as valid ({}) was accepted, so the request itself was likely rejected, such as for an unknown warehouse",
+                seconds_list(&DOCUMENTED)
+            ),
+            FALLBACK,
+            evidence,
+            SITE,
+        ));
+    }
     Ok(Finding::resolved(
         CHECK,
         Verdict::new(format!(
@@ -67,6 +81,25 @@ pub(crate) fn run(context: &Context<'_>) -> Result<Finding, String> {
         evidence,
         SITE,
     ))
+}
+
+/// Whether `error` rejects the wait rather than the request: a bad request
+/// whose `error_code` is `INVALID_PARAMETER_VALUE` or whose message names
+/// `wait_timeout`. Any other error, such as an unknown warehouse with
+/// another code, is not an answer about the wait.
+fn rejects_wait(error: &Error) -> bool {
+    let Error::Http {
+        status: 400,
+        error_code,
+        message,
+    } = error
+    else {
+        return false;
+    };
+    error_code.as_deref() == Some("INVALID_PARAMETER_VALUE")
+        || message
+            .as_deref()
+            .is_some_and(|message| message.contains("wait_timeout"))
 }
 
 fn seconds_list(values: &[u64]) -> String {
@@ -157,18 +190,73 @@ mod tests {
             verdict.as_deref(),
             Some("accepted 0s, 4s, 5s, 50s, 51s; rejected none")
         );
-        let transport = WAITS
-            .iter()
-            .fold(FakeTransport::default(), |transport, &seconds| {
-                transport.submit_error(secs(seconds), rejected())
-            });
-        let verdict = check("v2-none", &transport, Some("w"))
+        // A narrower range than documented still answers the question.
+        let transport = FakeTransport::default()
+            .submit_error(secs(0), rejected())
+            .submit_error(secs(4), rejected())
+            .submit(secs(5), "SUCCEEDED")
+            .submit_error(secs(50), rejected())
+            .submit_error(secs(51), rejected());
+        let verdict = check("v2-narrow", &transport, Some("w"))
             .verdict()
             .map(|verdict| verdict.as_str().to_owned());
         assert_eq!(
             verdict.as_deref(),
-            Some("accepted none; rejected 0s, 4s, 5s, 50s, 51s")
+            Some("accepted 5s; rejected 0s, 4s, 50s, 51s")
         );
+    }
+
+    #[test]
+    fn counts_only_a_rejection_of_the_wait() {
+        let bad_request = |code: Option<&str>, message: Option<&str>| Error::Http {
+            status: 400,
+            error_code: code.map(str::to_owned),
+            message: message.map(str::to_owned),
+        };
+        // Named by its message, without the usual code.
+        let transport = documented().submit_error(
+            secs(4),
+            bad_request(Some("BAD_REQUEST"), Some("wait_timeout must be 0 or 5-50s")),
+        );
+        let finding = check("v2-message", &transport, Some("w"));
+        assert_eq!(finding.state(), State::Resolved, "{finding:?}");
+        // Any other bad request is not an answer about the wait.
+        let transport =
+            documented().submit_error(secs(4), bad_request(Some("BAD_REQUEST"), Some("bad JSON")));
+        let finding = check("v2-other-400", &transport, Some("w"));
+        assert_eq!(finding.state(), State::Unknown);
+        assert_eq!(
+            finding.reason(),
+            Some("the submit of `SELECT 1` with `wait_timeout` 4s failed with HTTP 400")
+        );
+    }
+
+    #[test]
+    fn reports_a_rejected_request_as_unknown() {
+        // An unknown warehouse is rejected with the same code on every
+        // submit, including the waits that must be valid.
+        let unknown_warehouse =
+            WAITS
+                .iter()
+                .fold(FakeTransport::default(), |transport, &seconds| {
+                    transport.submit_error(
+                        secs(seconds),
+                        Error::Http {
+                            status: 400,
+                            error_code: Some("INVALID_PARAMETER_VALUE".to_owned()),
+                            message: Some("Warehouse wh-x does not exist".to_owned()),
+                        },
+                    )
+                });
+        let finding = check("v2-bad-warehouse", &unknown_warehouse, Some("wh-x"));
+        assert_eq!(finding.state(), State::Unknown);
+        assert_eq!(
+            finding.reason(),
+            Some(
+                "none of the waits the API documents as valid (0s, 5s, 50s) was accepted, so the request itself was likely rejected, such as for an unknown warehouse"
+            )
+        );
+        assert!(finding.fallback().is_some());
     }
 
     #[test]
