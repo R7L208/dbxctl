@@ -113,20 +113,29 @@ pub(crate) fn local(bundle_root: &Path, relative: &str) -> Local {
 fn join_relative(root: &Path, relative: &str) -> Option<PathBuf> {
     let mut path = root.to_path_buf();
     for segment in relative.split('/') {
-        let mut components = Path::new(segment).components();
-        match (components.next(), components.next()) {
-            (Some(Component::Normal(name)), None) if name == segment => path.push(name),
-            _ => return None,
+        if !is_plain_name(segment) {
+            return None;
         }
+        path.push(segment);
     }
     Some(path)
+}
+
+/// Whether `name` is one plain path component on this platform: not empty,
+/// `.`, `..`, a root or drive, or anything with a separator.
+pub(crate) fn is_plain_name(name: &str) -> bool {
+    let mut components = Path::new(name).components();
+    matches!(
+        (components.next(), components.next()),
+        (Some(Component::Normal(component)), None) if component == name
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use std::fs;
 
-    use super::{Form, Local, form, local};
+    use super::{Form, Local, form, is_plain_name, local};
     use crate::test_support::TempDir;
 
     const FILE_PATH: &str = "/Workspace/Users/user@example.test/projects/example-dev/files";
@@ -158,6 +167,16 @@ mod tests {
             assert_eq!(form(path, FILE_PATH), (expected, None), "{path}");
         }
         assert_eq!(form("/a/b", ""), (Form::Workspace, None));
+    }
+
+    #[test]
+    fn plain_names_are_single_components() {
+        for name in ["dev", "my-target", "a.b"] {
+            assert!(is_plain_name(name), "{name}");
+        }
+        for name in ["", ".", "..", "a/b", "/abs", "a/"] {
+            assert!(!is_plain_name(name), "{name}");
+        }
     }
 
     #[test]

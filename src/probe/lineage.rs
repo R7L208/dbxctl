@@ -571,15 +571,9 @@ pub(crate) mod testing {
     /// A scenario case answering `args`, then `-t dev`, the way the bundle
     /// runner calls the CLI.
     pub(crate) fn bundle_case(args: &[&str], response: &str) -> String {
-        let mut case = String::from("case\n");
-        for argument in args.iter().chain(&["-t", TARGET]) {
-            case.push_str("arg ");
-            case.push_str(argument);
-            case.push('\n');
-        }
-        case.push_str(response);
-        case.push('\n');
-        case
+        let mut args = args.to_vec();
+        args.extend(["-t", TARGET]);
+        case(&args, response)
     }
 
     /// A scenario case answering `args` exactly.

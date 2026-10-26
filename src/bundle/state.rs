@@ -9,7 +9,9 @@
 //! `/state/resources.pipelines.<key>/__id__`. The `terraform` engine keeps
 //! `terraform/terraform.tfstate` there instead.
 
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
+
+use crate::bundle::paths::is_plain_name;
 
 use crate::json::{Node, Value};
 
@@ -26,13 +28,7 @@ pub(crate) fn terraform_state(bundle_root: &Path, target: &str) -> Option<PathBu
 }
 
 fn target_dir(bundle_root: &Path, target: &str) -> Option<PathBuf> {
-    let mut components = Path::new(target).components();
-    match (components.next(), components.next()) {
-        (Some(Component::Normal(name)), None) if name == target => {
-            Some(bundle_root.join(".databricks").join("bundle").join(name))
-        }
-        _ => None,
-    }
+    is_plain_name(target).then(|| bundle_root.join(".databricks").join("bundle").join(target))
 }
 
 /// The type and key of a resource named `resources.<type>.<key>`, as plan
@@ -40,12 +36,6 @@ fn target_dir(bundle_root: &Path, target: &str) -> Option<PathBuf> {
 pub(crate) fn resource_name(name: &str) -> Option<(&str, &str)> {
     let (kind, key) = name.strip_prefix("resources.")?.split_once('.')?;
     (!kind.is_empty() && !key.is_empty()).then_some((kind, key))
-}
-
-/// The JSON Pointer to the ID of resource `key` of type `kind`.
-pub(crate) fn id_pointer(kind: &str, key: &str) -> String {
-    let escape = |text: &str| text.replace('~', "~0").replace('/', "~1");
-    format!("/state/resources.{}.{}/__id__", escape(kind), escape(key))
 }
 
 /// One deployed resource.
@@ -86,7 +76,7 @@ pub(crate) fn read(state: Node<'_>) -> Result<State<'_>, String> {
         entries.push(Entry {
             kind,
             key,
-            id: state.pointer(&id_pointer(kind, key)).and_then(Node::as_str),
+            id: entry.get("__id__").and_then(Node::as_str),
             has_config: entry.get("state").and_then(Node::members).is_some(),
         });
     }
@@ -127,7 +117,7 @@ pub(crate) fn layout(state: Node<'_>) -> Value {
 mod tests {
     use std::path::Path;
 
-    use super::{Entry, id_pointer, layout, local_state, read, resource_name, terraform_state};
+    use super::{Entry, layout, local_state, read, resource_name, terraform_state};
     use crate::json;
 
     #[test]
@@ -219,7 +209,7 @@ mod tests {
     }
 
     #[test]
-    fn names_and_pointers() {
+    fn names_resources() {
         assert_eq!(resource_name("resources.jobs.a.b"), Some(("jobs", "a.b")));
         for name in [
             "jobs.a",
@@ -229,10 +219,6 @@ mod tests {
         ] {
             assert_eq!(resource_name(name), None, "{name}");
         }
-        assert_eq!(
-            id_pointer("jobs", "a/b~c"),
-            "/state/resources.jobs.a~1b~0c/__id__"
-        );
     }
 
     #[test]

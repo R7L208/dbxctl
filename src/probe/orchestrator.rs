@@ -298,6 +298,17 @@ mod tests {
 
     const VERSION_SCENARIO: &str = include_str!("../../tests/fixtures/scenarios/cli-version.txt");
 
+    /// What the `cli` check runs: `version`, then each surface's `--help`.
+    fn cli_check_invocations() -> Vec<Vec<String>> {
+        let mut invocations = vec![vec!["version".to_owned()]];
+        for surface in SURFACES {
+            let mut argv: Vec<String> = surface.iter().map(|part| (*part).to_owned()).collect();
+            argv.push("--help".to_owned());
+            invocations.push(argv);
+        }
+        invocations
+    }
+
     fn plan(bundle_root: &Path, extra: &[&str]) -> Result<Plan, String> {
         let mut args = vec![
             OsString::from("--bundle-root"),
@@ -336,11 +347,7 @@ mod tests {
             outcome.run_dir,
             bundle.join(".dbxctl/probe/lineage/20260102T030405Z")
         );
-        assert_eq!(
-            cli.invocations().len(),
-            1 + SURFACES.len(),
-            "version, then help"
-        );
+        assert_eq!(cli.invocations(), cli_check_invocations());
         assert_no_mutations(&cli.invocations());
 
         let files: Vec<_> = read_tree(&outcome.run_dir)
@@ -480,7 +487,7 @@ mod tests {
             "{report}"
         );
         // The skipped `v7` runs no command; only `cli` does.
-        assert_eq!(cli.invocations().len(), 1 + SURFACES.len());
+        assert_eq!(cli.invocations(), cli_check_invocations());
     }
 
     #[test]
