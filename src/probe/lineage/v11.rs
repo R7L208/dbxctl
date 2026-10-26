@@ -6,6 +6,7 @@
 //! caller can see from `/api/2.1/unity-catalog/catalogs`.
 
 use std::collections::BTreeSet;
+use std::fmt::Write as _;
 
 use crate::json::Node;
 use crate::probe::model::{CheckId, Finding, Verdict};
@@ -17,8 +18,11 @@ const CHECK: CheckId = CheckId::V11;
 /// The design page that records how later phases find metric views and
 /// shared catalogs.
 const SITE: &str = "docs/mv-lineage/phase0/04-sql-probes.md#v11";
-/// Without `max_results`, the API returns every catalog in one response.
+/// Without `max_results`, the API is documented to return every catalog in
+/// one response, but a `next_page_token` is followed in case it does not.
 const CATALOGS: &str = "/api/2.1/unity-catalog/catalogs";
+/// Pages followed before the list counts as incomplete.
+const MAX_PAGES: usize = 20;
 const FALLBACK: &str = "Treat `table_type` `METRIC_VIEW` as a metric view and `catalog_type` `DELTASHARING_CATALOG` as a shared catalog, as Databricks documents them.";
 
 /// The distinct `table_type` values in `catalog`, which is always quoted.
@@ -27,6 +31,20 @@ fn table_types(catalog: &str) -> String {
         "SELECT DISTINCT table_type FROM {}.information_schema.tables ORDER BY table_type",
         text::identifier(catalog)
     )
+}
+
+/// `text` with everything but unreserved URL characters percent-encoded, so
+/// a page token stays one plain query value.
+fn percent_encode(text: &str) -> String {
+    let mut encoded = String::with_capacity(text.len());
+    for byte in text.bytes() {
+        if byte.is_ascii_alphanumeric() || b"-._~".contains(&byte) {
+            encoded.push(char::from(byte));
+        } else {
+            let _ = write!(encoded, "%{byte:02X}");
+        }
+    }
+    encoded
 }
 
 pub(crate) fn run(context: &Context<'_>) -> Result<Finding, String> {
@@ -70,50 +88,11 @@ pub(crate) fn run(context: &Context<'_>) -> Result<Finding, String> {
         ));
     };
 
-    let catalogs = match step(
-        context,
-        CHECK,
-        "catalogs",
-        SITE,
-        &mut evidence,
-        |transport| transport.api_get(CATALOGS),
-    )? {
-        Reply::Answer(response) => response.body,
-        Reply::Error(error) => {
-            return Ok(unknown(
-                format!("listing catalogs from `{CATALOGS}` {}", describe(&error)),
-                &evidence,
-            ));
-        }
-        Reply::Failed(finding) => return Ok(finding),
+    let (catalog_types, scope_type) = match list_catalogs(context, catalog, &mut evidence)? {
+        Listing::Listed(types, scope) => (types, scope),
+        Listing::Unknown(reason) => return Ok(unknown(reason, &evidence)),
+        Listing::Failed(finding) => return Ok(finding),
     };
-    let Some(listed) = catalogs
-        .as_ref()
-        .and_then(|body| body.root().get("catalogs"))
-        .and_then(Node::elements)
-    else {
-        return Ok(unknown(
-            format!("`{CATALOGS}` returned no `catalogs` array"),
-            &evidence,
-        ));
-    };
-    let mut catalog_types = BTreeSet::new();
-    let mut scope_type = None;
-    for listed in listed {
-        let Some(kind) = listed.get("catalog_type").and_then(Node::as_str) else {
-            continue;
-        };
-        let kind = word(kind);
-        // Unity Catalog compares names case-insensitively.
-        let is_scope = listed
-            .get("name")
-            .and_then(Node::as_str)
-            .is_some_and(|name| name.eq_ignore_ascii_case(catalog));
-        if is_scope {
-            scope_type = Some(kind.clone());
-        }
-        catalog_types.insert(kind);
-    }
     let Some(shared) = catalog_types.iter().find(|kind| kind.contains("SHARING")) else {
         return Ok(unknown(
             "no catalog the caller can see has a shared-catalog `catalog_type`".to_owned(),
@@ -133,9 +112,89 @@ pub(crate) fn run(context: &Context<'_>) -> Result<Finding, String> {
     ))
 }
 
+/// Every catalog the caller can see, from every page of the list.
+enum Listing {
+    /// The `catalog_type` values, as verdict words, and the scope
+    /// catalog's, if it is listed.
+    Listed(BTreeSet<String>, Option<String>),
+    Unknown(String),
+    Failed(Finding),
+}
+
+fn list_catalogs(
+    context: &Context<'_>,
+    catalog: &str,
+    evidence: &mut Vec<String>,
+) -> Result<Listing, String> {
+    let mut catalog_types = BTreeSet::new();
+    let mut scope_type = None;
+    let mut token: Option<String> = None;
+    for page in 1..=MAX_PAGES {
+        let path = match &token {
+            None => CATALOGS.to_owned(),
+            Some(token) => format!("{CATALOGS}?page_token={}", percent_encode(token)),
+        };
+        let name = if page == 1 {
+            "catalogs".to_owned()
+        } else {
+            format!("catalogs-page-{page}")
+        };
+        let body = match step(context, CHECK, &name, SITE, evidence, |transport| {
+            transport.api_get(&path)
+        })? {
+            Reply::Answer(response) => response.body,
+            Reply::Error(error) => {
+                return Ok(Listing::Unknown(format!(
+                    "listing catalogs from `{CATALOGS}` {}",
+                    describe(&error)
+                )));
+            }
+            Reply::Failed(finding) => return Ok(Listing::Failed(finding)),
+        };
+        let root = body.as_ref().map(|body| body.root());
+        let Some(listed) = root
+            .and_then(|root| root.get("catalogs"))
+            .and_then(Node::elements)
+        else {
+            return Ok(Listing::Unknown(format!(
+                "`{CATALOGS}` returned no `catalogs` array"
+            )));
+        };
+        for listed in listed {
+            let Some(kind) = listed.get("catalog_type").and_then(Node::as_str) else {
+                continue;
+            };
+            let kind = word(kind);
+            // Unity Catalog compares names case-insensitively.
+            let is_scope = listed
+                .get("name")
+                .and_then(Node::as_str)
+                .is_some_and(|name| name.eq_ignore_ascii_case(catalog));
+            if is_scope {
+                scope_type = Some(kind.clone());
+            }
+            catalog_types.insert(kind);
+        }
+        token = root
+            .and_then(|root| root.get("next_page_token"))
+            .and_then(Node::as_str)
+            .filter(|token| !token.is_empty())
+            .map(str::to_owned);
+        if token.is_none() {
+            break;
+        }
+    }
+    if token.is_some() {
+        return Ok(Listing::Unknown(format!(
+            "`{CATALOGS}` still had a `next_page_token` after {MAX_PAGES} pages, so the list is incomplete"
+        )));
+    }
+    Ok(Listing::Listed(catalog_types, scope_type))
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{CATALOGS, run, table_types};
+    use super::{CATALOGS, MAX_PAGES, run, table_types};
     use crate::evidence::RunDir;
     use crate::probe::model::{Finding, State, Verdict};
     use crate::probe::orchestrator::Context;
@@ -256,6 +315,52 @@ mod tests {
             assert!(actual.contains(reason), "{name}: {actual}");
             assert!(finding.fallback().is_some(), "{name}");
         }
+    }
+
+    #[test]
+    fn follows_next_page_tokens() {
+        let transport = with_types(&["METRIC_VIEW"])
+            .get(
+                CATALOGS,
+                r#"{"catalogs":[{"name":"main","catalog_type":"MANAGED_CATALOG"}],"next_page_token":"a+b/c="}"#,
+            )
+            .get(
+                &format!("{CATALOGS}?page_token=a%2Bb%2Fc%3D"),
+                r#"{"catalogs":[{"name":"partner","catalog_type":"DELTASHARING_CATALOG"}],"next_page_token":""}"#,
+            );
+        let finding = check("v11-pages", &transport);
+        assert_eq!(finding.state(), State::Resolved, "{finding:?}");
+        assert!(
+            finding
+                .verdict()
+                .map(Verdict::as_str)
+                .unwrap_or_default()
+                .contains("scope catalog: MANAGED_CATALOG; catalog_type values: DELTASHARING_CATALOG, MANAGED_CATALOG"),
+            "{finding:?}"
+        );
+        assert_eq!(finding.evidence().len(), 3);
+    }
+
+    #[test]
+    fn reports_a_list_with_too_many_pages_as_unknown() {
+        let mut transport =
+            with_types(&["METRIC_VIEW"]).get(CATALOGS, r#"{"catalogs":[],"next_page_token":"t1"}"#);
+        for page in 1..=MAX_PAGES {
+            transport = transport.get(
+                &format!("{CATALOGS}?page_token=t{page}"),
+                &format!(r#"{{"catalogs":[],"next_page_token":"t{}"}}"#, page + 1),
+            );
+        }
+        let finding = check("v11-endless", &transport);
+        assert_eq!(finding.state(), State::Unknown);
+        assert_eq!(
+            finding.reason(),
+            Some(
+                "`/api/2.1/unity-catalog/catalogs` still had a `next_page_token` after 20 pages, so the list is incomplete"
+            )
+        );
+        // One statement and exactly the capped number of pages.
+        assert_eq!(transport.asked().len(), 1 + MAX_PAGES);
     }
 
     #[test]

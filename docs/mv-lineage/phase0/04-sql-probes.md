@@ -105,15 +105,16 @@ from `/api/2.0/pipelines/<id>` instead of `system.lakeflow.pipelines`.
 
 1. `table-types`: `SELECT DISTINCT table_type FROM <scope>.information_schema.tables ORDER BY table_type`.
 1. `catalogs`: `databricks api get /api/2.1/unity-catalog/catalogs --debug`.
-   Without `max_results`, the API returns every catalog the caller can see in
-   one response.
+   Without `max_results`, the API is documented to return every catalog the
+   caller can see in one response; a `next_page_token` is followed anyway, as
+   `?page_token=`, for up to 20 pages (steps `catalogs-page-2` onward).
 
 | Outcome | State | Verdict or reason |
 | --- | --- | --- |
 | A `table_type` in the scope catalog names a metric view, and a listed catalog has a sharing `catalog_type` | resolved | `metric views: table_type METRIC_VIEW; shared catalogs: catalog_type DELTASHARING_CATALOG; scope catalog: …; catalog_type values: …`, sorted; the scope catalog is matched case-insensitively, or `not listed` |
 | No metric-view `table_type` in the scope catalog | unknown | Choose a scope catalog with a metric view |
 | No visible catalog has a sharing `catalog_type` | unknown | The reason says so |
-| A step fails, or the response has no `catalogs` array | unknown | The reason names which |
+| A step fails, a response has no `catalogs` array, or a token remains after 20 pages | unknown | The reason names which |
 | The CLI cannot be run to completion | failed | See the evidence record |
 
 **Fallback for unknown:** treat `table_type` `METRIC_VIEW` as a metric view and
