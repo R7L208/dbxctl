@@ -12,7 +12,7 @@ use std::collections::BTreeMap;
 use crate::bundle::config::{Locations, resources, source_paths};
 use crate::bundle::paths::{Form, Local, form, local};
 use crate::json::Node;
-use crate::probe::lineage::one_line;
+use crate::probe::lineage::{exit_text, one_line};
 use crate::probe::model::{CheckId, Finding, Verdict};
 use crate::probe::orchestrator::Context;
 use crate::probe::validation::{Outcome, validation};
@@ -27,8 +27,8 @@ pub(crate) fn run(context: &Context<'_>) -> Result<Finding, String> {
     let evidence = validation.evidence.clone();
     let unknown =
         |reason: String| Finding::unknown(CHECK, reason, FALLBACK, evidence.clone(), SITE);
-    let config = match &validation.outcome {
-        Outcome::Config { config, .. } => config,
+    let (config, status) = match &validation.outcome {
+        Outcome::Config { config, status } => (config, *status),
         Outcome::Unknown(reason) => return Ok(unknown(reason.clone())),
         Outcome::Failed(reason) => {
             return Ok(Finding::failed(CHECK, reason.clone(), evidence, SITE));
@@ -106,9 +106,14 @@ pub(crate) fn run(context: &Context<'_>) -> Result<Finding, String> {
     Ok(Finding::resolved(
         CHECK,
         Verdict::new(format!(
-            "paths: {}; origins: {}",
+            "paths: {}; origins: {}{}",
             forms.join(", "),
-            origins.join(", ")
+            origins.join(", "),
+            if status.success() {
+                String::new()
+            } else {
+                format!("; validate exited with {}", exit_text(status))
+            }
         )),
         evidence,
         SITE,
@@ -181,6 +186,21 @@ mod tests {
             ]
         );
         assert_no_mutations(&invocations);
+    }
+
+    #[test]
+    fn qualifies_a_verdict_after_a_failed_validate() {
+        let (finding, _fixture) = check(
+            "v8-exit-1",
+            &format!("{}\nexit 1", stdout_line(VALIDATED)),
+            true,
+        );
+        assert_eq!(finding.state(), State::Resolved, "{finding:?}");
+        let verdict = finding.verdict().map(Verdict::as_str).unwrap_or_default();
+        assert!(
+            verdict.ends_with("; origins: databricks.yml 2, resources/extra.yml 1; validate exited with exit code 1"),
+            "{verdict}"
+        );
     }
 
     #[test]

@@ -182,6 +182,7 @@ first location.
 | --- | --- | --- |
 | Source paths and locations | resolved | Each form's count, with the local matches of `file_path`, then each origin's resource count, such as `paths: file_path 6 (4 files, 2 notebooks without extension); origins: databricks.yml 2, resources/extra.yml 1` |
 | A resource with no location | resolved | It counts as `unlocated` |
+| The same, after a non-zero validate exit | resolved | The verdict ends `; validate exited with exit code 1`, as `validate`'s does |
 | Validate not run (R9) | unknown | The reason says why |
 | No JSON object, no `workspace.file_path`, no `__locations`, or no `resources` | unknown | The reason names which |
 | No source paths | unknown | The forms cannot be observed |
