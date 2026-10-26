@@ -249,8 +249,11 @@ pub(crate) trait Runner {
 
     /// Submits a read-only statement once with `wait` as its `wait_timeout`,
     /// and returns the statement as the submit left it, without polling or
-    /// reading rows. One still pending or running is cancelled. A
-    /// `wait_timeout` the API rejects comes back as an HTTP error.
+    /// reading rows: succeeded, or pending or running and then cancelled. A
+    /// statement that ended `FAILED`, `CANCELED`, or `CLOSED` is a SQL error.
+    /// A missing or unexpected state is a transport error, and the statement
+    /// is cancelled in case it is still running. A `wait_timeout` the API
+    /// rejects comes back as an HTTP error.
     fn submit(&self, sql: &str, warehouse_id: &str, wait: Duration) -> Outcome<Submitted>;
 }
 
@@ -383,9 +386,25 @@ impl CliRunner {
             .and_then(Node::as_str)
             .unwrap_or_default()
             .to_owned();
-        // Only the submit was asked for, so nothing is left running.
-        if matches!(state.as_str(), "PENDING" | "RUNNING") {
-            self.cancel(&format!("{STATEMENTS}/{statement_id}"), calls);
+        let status_path = format!("{STATEMENTS}/{statement_id}");
+        match state.as_str() {
+            "SUCCEEDED" => {}
+            // Only the submit was asked for, so nothing is left running.
+            "PENDING" | "RUNNING" => self.cancel(&status_path, calls),
+            "FAILED" | "CANCELED" | "CLOSED" => return Err(sql_error(&body, state)),
+            // A state it cannot read may be a statement still running.
+            "" => {
+                self.cancel(&status_path, calls);
+                return Err(Error::Transport(
+                    "the statement response has no `status.state`".to_owned(),
+                ));
+            }
+            other => {
+                let error =
+                    Error::Transport(format!("the statement is in an unexpected state {other:?}"));
+                self.cancel(&status_path, calls);
+                return Err(error);
+            }
         }
         Ok(Submitted {
             statement_id,
@@ -436,18 +455,7 @@ impl CliRunner {
                         .map_err(running)?;
                 }
                 "FAILED" | "CANCELED" | "CLOSED" => {
-                    let error = body.root().pointer("/status/error");
-                    let text = |key| {
-                        error
-                            .and_then(|error| error.get(key))
-                            .and_then(Node::as_str)
-                            .map(str::to_owned)
-                    };
-                    return Err(ended(Error::Sql {
-                        state,
-                        error_code: text("error_code"),
-                        message: text("message"),
-                    }));
+                    return Err(ended(sql_error(&body, state)));
                 }
                 "" => {
                     return Err(running(Error::Transport(
@@ -719,6 +727,23 @@ fn check_path(path: &str) -> Result<(), String> {
         Ok(())
     } else {
         Err(format!("refused API path {path:?}"))
+    }
+}
+
+/// The error of a statement that ended in `state`, with the `error_code`
+/// and `message` from its `status.error`.
+fn sql_error(body: &Document, state: String) -> Error {
+    let error = body.root().pointer("/status/error");
+    let text = |key| {
+        error
+            .and_then(|error| error.get(key))
+            .and_then(Node::as_str)
+            .map(str::to_owned)
+    };
+    Error::Sql {
+        state,
+        error_code: text("error_code"),
+        message: text("message"),
     }
 }
 
@@ -1639,6 +1664,53 @@ mod tests {
             );
             let invocations = fixture.invocations();
             assert_eq!(invocations.len(), 2, "{pending}");
+            assert_eq!(invocations[1][2], cancel_path());
+            assert_no_mutations(&invocations);
+        }
+    }
+
+    #[test]
+    fn submit_reports_an_ended_statement_as_a_sql_error() {
+        let failed = format!(
+            r#"{{"statement_id":"{ID}","status":{{"state":"FAILED","error":{{"error_code":"BAD_REQUEST","message":"m"}}}}}}"#
+        );
+        let fixture = Fixture::new(
+            "transport-submit-failed",
+            &submit_waiting(Duration::ZERO, &failed),
+        );
+        let outcome = fixture.runner(QUICK).submit(SQL, WAREHOUSE, Duration::ZERO);
+        assert_eq!(
+            outcome.result,
+            Err(Error::Sql {
+                state: "FAILED".to_owned(),
+                error_code: Some("BAD_REQUEST".to_owned()),
+                message: Some("m".to_owned()),
+            })
+        );
+        // It has ended, so it is not cancelled.
+        assert_eq!(fixture.invocations().len(), 1);
+    }
+
+    #[test]
+    fn submit_cancels_a_statement_whose_state_it_cannot_read() {
+        for (name, body, problem) in [
+            (
+                "transport-submit-no-state",
+                format!(r#"{{"statement_id":"{ID}"}}"#),
+                "the statement response has no `status.state`".to_owned(),
+            ),
+            (
+                "transport-submit-odd-state",
+                state("QUEUED"),
+                "the statement is in an unexpected state \"QUEUED\"".to_owned(),
+            ),
+        ] {
+            let scenario = [submit_waiting(Duration::ZERO, &body), cancel_case()].concat();
+            let fixture = Fixture::new(name, &scenario);
+            let outcome = fixture.runner(QUICK).submit(SQL, WAREHOUSE, Duration::ZERO);
+            assert_eq!(outcome.result, Err(Error::Transport(problem)), "{name}");
+            let invocations = fixture.invocations();
+            assert_eq!(invocations.len(), 2, "{name}");
             assert_eq!(invocations[1][2], cancel_path());
             assert_no_mutations(&invocations);
         }

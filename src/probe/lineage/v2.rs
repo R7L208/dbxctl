@@ -286,6 +286,23 @@ mod tests {
         let transport = FakeTransport::default().submit_error(secs(0), denied());
         let finding = check("v2-sql-denied", &transport, Some("w"));
         assert_eq!(finding.state(), State::Unknown);
+
+        // A `SELECT 1` that ended on the warehouse says nothing about the
+        // wait it was submitted with.
+        let transport = FakeTransport::default().submit_error(
+            secs(0),
+            Error::Sql {
+                state: "CANCELED".to_owned(),
+                error_code: None,
+                message: None,
+            },
+        );
+        let finding = check("v2-ended", &transport, Some("w"));
+        assert_eq!(finding.state(), State::Unknown);
+        assert_eq!(
+            finding.reason(),
+            Some("the submit of `SELECT 1` with `wait_timeout` 0s ended CANCELED")
+        );
     }
 
     #[test]

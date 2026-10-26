@@ -61,7 +61,12 @@ and 51 seconds (steps `wait-0s` through `wait-51s`): each side of the documented
 range, 0 or 5 to 50 seconds. A statement the submit leaves pending or running
 is cancelled. The CLI run is allowed the wait plus five seconds. A submit
 rejects the wait when it fails with HTTP 400 and its `error_code` is
-`INVALID_PARAMETER_VALUE` or its message names `wait_timeout`.
+`INVALID_PARAMETER_VALUE` or its message names `wait_timeout`. A submit is
+accepted when the statement succeeded, or was left pending or running and then
+cancelled. A `SELECT 1` that ended `FAILED`, `CANCELED`, or `CLOSED` says
+nothing about the wait, so the check is unknown. A response with a missing or
+unexpected state is unknown too, and its statement is cancelled in case it is
+still running.
 
 | Outcome | State | Verdict or reason |
 | --- | --- | --- |
