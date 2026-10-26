@@ -123,20 +123,26 @@ fn updates_api(
         Reply::Error(error) => return Ok(Ok(unanswered(&error))),
         Reply::Failed(finding) => return Ok(Err(finding)),
     };
-    let Some(id) = first_pipeline(listed.body.as_ref().map(|body| body.root())) else {
-        return Ok(Ok(Seen::Unobserved));
+    let id = match first_pipeline(listed.body.as_ref().map(|body| body.root())) {
+        Listed::First(id) => id,
+        Listed::Empty => return Ok(Ok(Seen::Unobserved)),
+        Listed::Malformed => return Ok(Ok(Seen::Unreadable)),
     };
     let path = format!("/api/2.0/pipelines/{id}/updates?max_results=1");
     Ok(
         match step(context, CHECK, "updates", SITE, evidence, |transport| {
             transport.api_get(&path)
         })? {
-            Reply::Answer(response) => Ok(
-                match response.body.as_ref().and_then(|body| shape(body.root())) {
-                    Some(shape) => Seen::Found(format!("{UPDATES} ({shape})")),
-                    None => Seen::Unreadable,
+            Reply::Answer(response) => Ok(match response.body.as_ref() {
+                Some(body) => match shape(body.root()) {
+                    Updates::Shape(shape) => Seen::Found(format!("{UPDATES} ({shape})")),
+                    // A pipeline that has never been updated has no history
+                    // to show.
+                    Updates::None => Seen::Unobserved,
+                    Updates::Malformed => Seen::Unreadable,
                 },
-            ),
+                None => Seen::Unreadable,
+            }),
             Reply::Error(error) => Ok(unanswered(&error)),
             Reply::Failed(finding) => Err(finding),
         },
@@ -153,27 +159,72 @@ fn unanswered(error: &Error) -> Seen {
     }
 }
 
-/// The ID of the first pipeline listed, if it is safe to put in a path.
-fn first_pipeline(body: Option<Node<'_>>) -> Option<String> {
-    let id = body?
-        .get("statuses")?
-        .index(0)?
-        .get("pipeline_id")?
-        .as_str()?;
-    let plain = !id.is_empty() && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-');
-    plain.then(|| id.to_owned())
+/// What the pipelines list holds.
+enum Listed {
+    /// The ID of the first pipeline, which is safe to put in a path.
+    First(String),
+    /// A valid list with no pipeline: an empty `statuses` array, or an empty
+    /// object, as the API omits an empty array.
+    Empty,
+    /// No `statuses` array in a non-empty response, or a first pipeline
+    /// without a plain `pipeline_id`.
+    Malformed,
 }
 
-/// The keys of an updates response and of its first update, such as
-/// `next_page_token, updates[]: cause, state, update_id`. `None` without an
-/// `updates` array.
-fn shape(body: Node<'_>) -> Option<String> {
+fn first_pipeline(body: Option<Node<'_>>) -> Listed {
+    let Some(body) = body else {
+        return Listed::Malformed;
+    };
+    let Some(statuses) = body.get("statuses") else {
+        let empty = body
+            .members()
+            .is_some_and(|mut members| members.next().is_none());
+        return if empty {
+            Listed::Empty
+        } else {
+            Listed::Malformed
+        };
+    };
+    let Some(mut statuses) = statuses.elements() else {
+        return Listed::Malformed;
+    };
+    let Some(first) = statuses.next() else {
+        return Listed::Empty;
+    };
+    match first.get("pipeline_id").and_then(Node::as_str) {
+        Some(id) if !id.is_empty() && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') => {
+            Listed::First(id.to_owned())
+        }
+        _ => Listed::Malformed,
+    }
+}
+
+/// What an updates response shows.
+enum Updates {
+    /// The keys of the response and of its first update, such as
+    /// `next_page_token, updates[]; updates[]: cause, state, update_id`.
+    Shape(String),
+    /// No update: no `updates` member, or an empty array.
+    None,
+    /// `updates` is not an array.
+    Malformed,
+}
+
+fn shape(body: Node<'_>) -> Updates {
     let keys = |node: Node<'_>| -> BTreeSet<String> {
         node.members()
             .map(|members| members.map(|(key, _)| word(key)).collect())
             .unwrap_or_default()
     };
-    let mut updates = body.get("updates")?.elements()?;
+    let Some(updates) = body.get("updates") else {
+        return Updates::None;
+    };
+    let Some(mut updates) = updates.elements() else {
+        return Updates::Malformed;
+    };
+    let Some(first) = updates.next() else {
+        return Updates::None;
+    };
     let top: Vec<String> = keys(body)
         .into_iter()
         .map(|key| {
@@ -184,17 +235,12 @@ fn shape(body: Node<'_>) -> Option<String> {
             }
         })
         .collect();
-    let first: Vec<String> = updates
-        .next()
-        .map(keys)
-        .unwrap_or_default()
-        .into_iter()
-        .collect();
-    Some(if first.is_empty() {
-        top.join(", ")
-    } else {
-        format!("{}; updates[]: {}", top.join(", "), first.join(", "))
-    })
+    let first: Vec<String> = keys(first).into_iter().collect();
+    Updates::Shape(format!(
+        "{}; updates[]: {}",
+        top.join(", "),
+        first.join(", ")
+    ))
 }
 
 #[cfg(test)]
@@ -309,10 +355,56 @@ mod tests {
                 "absent system.lakeflow.pipeline_update_timeline, system.lakeflow.job_run_timeline, /api/2.0/pipelines/{id}/updates",
             ),
             (
-                "v4-updates-shapeless",
+                "v4-no-history",
                 missing(FakeTransport::default())
                     .get(PIPELINES, LISTED)
                     .get(UPDATES_PATH, "{}"),
+                "unobserved /api/2.0/pipelines/{id}/updates",
+            ),
+            (
+                "v4-empty-history",
+                missing(FakeTransport::default())
+                    .get(PIPELINES, LISTED)
+                    .get(UPDATES_PATH, r#"{"updates":[]}"#),
+                "unobserved /api/2.0/pipelines/{id}/updates",
+            ),
+            (
+                "v4-updates-not-array",
+                missing(FakeTransport::default())
+                    .get(PIPELINES, LISTED)
+                    .get(UPDATES_PATH, r#"{"updates":{}}"#),
+                "unreadable /api/2.0/pipelines/{id}/updates",
+            ),
+            (
+                "v4-updates-no-body",
+                missing(FakeTransport::default())
+                    .get(PIPELINES, LISTED)
+                    .get_answer(UPDATES_PATH, Some(200), None),
+                "unreadable /api/2.0/pipelines/{id}/updates",
+            ),
+            (
+                "v4-empty-statuses",
+                missing(FakeTransport::default()).get(PIPELINES, r#"{"statuses":[]}"#),
+                "unobserved /api/2.0/pipelines/{id}/updates",
+            ),
+            (
+                "v4-no-statuses",
+                missing(FakeTransport::default()).get(PIPELINES, r#"{"next_page_token":"t"}"#),
+                "unreadable /api/2.0/pipelines/{id}/updates",
+            ),
+            (
+                "v4-statuses-not-array",
+                missing(FakeTransport::default()).get(PIPELINES, r#"{"statuses":{}}"#),
+                "unreadable /api/2.0/pipelines/{id}/updates",
+            ),
+            (
+                "v4-no-pipeline-id",
+                missing(FakeTransport::default()).get(PIPELINES, r#"{"statuses":[{"name":"p"}]}"#),
+                "unreadable /api/2.0/pipelines/{id}/updates",
+            ),
+            (
+                "v4-list-no-body",
+                missing(FakeTransport::default()).get_answer(PIPELINES, Some(200), None),
                 "unreadable /api/2.0/pipelines/{id}/updates",
             ),
             (
@@ -329,7 +421,7 @@ mod tests {
                 "v4-unsafe-id",
                 missing(FakeTransport::default())
                     .get(PIPELINES, r#"{"statuses":[{"pipeline_id":"../x"}]}"#),
-                "unobserved /api/2.0/pipelines/{id}/updates",
+                "unreadable /api/2.0/pipelines/{id}/updates",
             ),
         ] {
             let finding = check(name, &transport);
@@ -338,22 +430,6 @@ mod tests {
             assert!(actual.contains(reason), "{name}: {actual}");
             assert!(finding.fallback().is_some(), "{name}");
         }
-    }
-
-    #[test]
-    fn reads_the_shape_of_an_empty_updates_list() {
-        let transport = TABLES
-            .iter()
-            .fold(FakeTransport::default(), |transport, table| {
-                transport.statement_error(&format!("DESCRIBE TABLE {table}"), missing_table())
-            })
-            .get(PIPELINES, LISTED)
-            .get(UPDATES_PATH, r#"{"updates":[]}"#);
-        let finding = check("v4-no-updates", &transport);
-        assert!(
-            verdict(&finding).starts_with("found: /api/2.0/pipelines/{id}/updates (updates[]); "),
-            "{finding:?}"
-        );
     }
 
     #[test]

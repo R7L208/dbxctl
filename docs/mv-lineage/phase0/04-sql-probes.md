@@ -164,8 +164,15 @@ the pipeline definitions, in the bundle configuration and
 
 Each candidate is **found**, with its columns or, for the API, the keys of the
 response and of its first update; **absent**, when the workspace says it does
-not exist; **unreadable**, after any other error or an answer without a shape;
-or, for the API when no pipeline is listed, **unobserved**. The verdict names
+not exist; **unreadable**, after any other error or an answer it cannot read;
+or, for the API, **unobserved** when there is nothing to see. For the API:
+
+- A valid empty list, an empty `statuses` array or an empty object, as the
+  API omits empty arrays, is unobserved. A list without a `statuses` array,
+  or whose first pipeline has no plain `pipeline_id`, is unreadable.
+- An updates response with no `updates` member, or an empty array, is a
+  pipeline with no history, so unobserved. An `updates` that is not an array,
+  or no response body, is unreadable. The verdict names
 the API as `/api/2.0/pipelines/{id}/updates`, never with an ID.
 
 | Outcome | State | Verdict or reason |
