@@ -541,11 +541,7 @@ impl CliRunner {
 
 impl Runner for CliRunner {
     fn run(&self, args: &[&str], timeout: Duration) -> Call {
-        let path: Vec<&str> = args
-            .iter()
-            .copied()
-            .take_while(|argument| !argument.starts_with('-'))
-            .collect();
+        let path = safety::command_path(args);
         // Anything but a known read-only command is refused without
         // starting a process.
         if !safety::is_read_only_command(&path) {

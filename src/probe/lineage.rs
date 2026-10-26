@@ -15,6 +15,7 @@ use crate::args::Parser;
 use crate::databricks::run_captured;
 use crate::probe::model::{CheckId, Finding};
 use crate::probe::orchestrator::Context;
+use crate::safety;
 
 /// Runs one check and returns its finding.
 pub(crate) type Runner = fn(&Context<'_>) -> Result<Finding, String>;
@@ -357,6 +358,14 @@ pub(crate) fn run_bundle_step(
             status: captured.status,
             stdout: captured.stdout,
         },
+        // The transport refuses a command that is not known to be read-only
+        // without starting it; that is a safety decision, not a broken CLI.
+        Err(_) if !safety::is_read_only_command(&safety::command_path(args)) => {
+            Ran::Failed(format!(
+                "dbxctl refused `databricks {}`, which is not a known read-only command (R9); no process was started",
+                args.join(" ")
+            ))
+        }
         Err(_) => Ran::Failed(format!(
             "`databricks {}` could not be run to completion; see the evidence record",
             args.join(" ")
@@ -570,6 +579,44 @@ pub(crate) mod testing {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::probe::validation::Shared;
+    use crate::transport::CliRunner;
+
+    #[test]
+    fn a_refused_bundle_command_is_reported_as_a_refusal() {
+        let fixture = testing::Fixture::new("lineage-refused", "");
+        let bundle = fixture.bundle();
+        let binary = fixture.cli.binary().as_os_str();
+        let cli = CliRunner::for_bundle(binary, &bundle, testing::TARGET, None);
+        let shared = Shared::default();
+        let context = Context {
+            binary,
+            run: &fixture.run_dir,
+            bundle_root: &bundle,
+            target: testing::TARGET,
+            cli: &cli,
+            allow_mutations: false,
+            shared: &shared,
+        };
+        let (evidence, ran) = run_bundle_step(
+            &context,
+            CheckId::Plan,
+            "deploy",
+            &["bundle", "deploy"],
+            Duration::from_secs(5),
+        )
+        .expect("record");
+        let Ran::Failed(reason) = ran else {
+            panic!("a refused command must fail");
+        };
+        assert_eq!(
+            reason,
+            "dbxctl refused `databricks bundle deploy`, which is not a known read-only command (R9); no process was started"
+        );
+        assert!(fixture.invocations().is_empty(), "no process was started");
+        assert_eq!(evidence, ["evidence/plan/deploy.json"]);
+        assert!(fixture.evidence("plan", "deploy.json").contains("refused"));
+    }
 
     fn args(values: &[&str]) -> Vec<OsString> {
         values.iter().map(OsString::from).collect()

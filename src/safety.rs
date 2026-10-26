@@ -29,6 +29,15 @@ pub(crate) fn is_read_only_command(path: &[&str]) -> bool {
     OFFLINE_COMMANDS.contains(&path) || WORKSPACE_COMMANDS.contains(&path)
 }
 
+/// The command path of `args`: its leading arguments that are not flags,
+/// such as `["bundle", "plan"]` for `bundle plan -o json`.
+pub(crate) fn command_path<'a>(args: &[&'a str]) -> Vec<&'a str> {
+    args.iter()
+        .copied()
+        .take_while(|argument| !argument.starts_with('-'))
+        .collect()
+}
+
 /// Words that may start a read-only statement.
 const READ_STARTS: [&str; 5] = ["DESC", "DESCRIBE", "SELECT", "SHOW", "WITH"];
 /// Words that start a statement that writes or changes state. One anywhere
