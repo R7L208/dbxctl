@@ -506,6 +506,26 @@ pub(crate) mod testing {
             .collect()
     }
 
+    /// Runs `check` with a CLI path that does not exist, and asserts it
+    /// failed with `reason`, which must not name that path.
+    pub(crate) fn assert_fails_without_a_cli(check: Runner, name: &str, reason: &str) {
+        let temp = TempDir::new(name);
+        let run_dir = RunDir::create(temp.path(), "lineage", 0).expect("create run");
+        let missing = temp.path().join("no-such-databricks");
+        let finding = run_with(check, missing.as_os_str(), &run_dir, temp.path());
+        assert_eq!(
+            finding.state(),
+            crate::probe::model::State::Failed,
+            "{finding:?}"
+        );
+        let actual = finding.reason().unwrap_or_default();
+        assert_eq!(actual, reason);
+        assert!(
+            !actual.contains("no-such-databricks"),
+            "reasons must not copy raw error text: {actual}"
+        );
+    }
+
     /// The `workspace.file_path` the gate cases report.
     pub(crate) const FILE_PATH: &str =
         "/Workspace/Users/user@example.test/projects/example-dev/files";

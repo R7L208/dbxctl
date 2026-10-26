@@ -305,4 +305,13 @@ mod tests {
         assert_eq!(finding.state(), State::Unknown);
         assert!(finding.reason().unwrap_or_default().contains("a signal"));
     }
+
+    #[test]
+    fn reports_a_missing_cli_as_failed() {
+        crate::probe::lineage::testing::assert_fails_without_a_cli(
+            run,
+            "validate-missing-cli",
+            "`databricks bundle summary -o json` could not be run to completion; see the evidence record",
+        );
+    }
 }

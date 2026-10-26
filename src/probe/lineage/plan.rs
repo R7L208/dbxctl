@@ -274,4 +274,13 @@ mod tests {
             assert!(actual.contains(reason), "{name}: {actual}");
         }
     }
+
+    #[test]
+    fn reports_a_missing_cli_as_failed() {
+        crate::probe::lineage::testing::assert_fails_without_a_cli(
+            run,
+            "plan-missing-cli",
+            "`databricks bundle plan -o json` could not be run to completion; see the evidence record",
+        );
+    }
 }
