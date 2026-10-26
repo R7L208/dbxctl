@@ -68,21 +68,28 @@ pub(crate) fn run(context: &Context<'_>) -> Result<Finding, String> {
     if !unconfigured.is_empty() {
         let validation = validation(context, CHECK)?;
         evidence.extend(validation.evidence.iter().cloned());
-        match &validation.outcome {
-            Outcome::Config { config, .. } => {
-                if let Ok(resources) = resources(config.root()) {
-                    for entry in &unconfigured {
-                        let found = resources
-                            .get(entry.kind)
-                            .is_some_and(|entries| entries.contains_key(entry.key));
-                        declared.insert((entry.kind, entry.key), found);
-                    }
-                }
-            }
-            Outcome::Unknown(_) => {}
+        // Without the validated configuration, where those entries' configuration
+        // lives is not observed, so the plan is not resolved.
+        let without = |why: &str| {
+            format!(
+                "plan entries without `new_state` need the validated configuration, which is unavailable: {why}"
+            )
+        };
+        let resources = match &validation.outcome {
+            Outcome::Config { config, .. } => match resources(config.root()) {
+                Ok(resources) => resources,
+                Err(reason) => return Ok(unknown(without(&reason), &evidence)),
+            },
+            Outcome::Unknown(reason) => return Ok(unknown(without(reason), &evidence)),
             Outcome::Failed(reason) => {
                 return Ok(Finding::failed(CHECK, reason.clone(), evidence, SITE));
             }
+        };
+        for entry in &unconfigured {
+            let found = resources
+                .get(entry.kind)
+                .is_some_and(|entries| entries.contains_key(entry.key));
+            declared.insert((entry.kind, entry.key), found);
         }
     }
 
@@ -100,9 +107,9 @@ pub(crate) fn run(context: &Context<'_>) -> Result<Finding, String> {
 
 /// Each action, sorted, and where its entries carry their configuration:
 /// `new_state.value`, `validate` for an entry whose resource validate
-/// declares, `not in validate` for one it does not, or `none` without
-/// validate output. `declared` says, for each entry without configuration,
-/// whether validate declares its resource.
+/// declares, or `not in validate` for one it does not. `declared` says, for
+/// each entry without configuration, whether validate declares its
+/// resource.
 fn actions(entries: &[Entry<'_>], declared: &BTreeMap<(&str, &str), bool>) -> Vec<String> {
     let mut locations: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
     for entry in entries {
@@ -111,8 +118,7 @@ fn actions(entries: &[Entry<'_>], declared: &BTreeMap<(&str, &str), bool>) -> Ve
         } else {
             match declared.get(&(entry.kind, entry.key)) {
                 Some(true) => "validate",
-                Some(false) => "not in validate",
-                None => "none",
+                _ => "not in validate",
             }
         };
         let seen = locations.entry(entry.action).or_default();
@@ -206,14 +212,28 @@ mod tests {
     }
 
     #[test]
-    fn skip_without_validate_has_no_configuration() {
-        let (finding, _fixture) = check(
-            "plan-skip-no-validate",
-            &stdout_line(&plan_fixture("plan-skip.json")),
-            "exit 1",
-        );
-        assert_eq!(finding.state(), State::Resolved);
-        assert_eq!(verdict(&finding), "plan_version 2; skip: none");
+    fn skip_without_validate_is_unknown() {
+        for (name, validate, reason) in [
+            ("plan-skip-no-validate", "exit 1", "printed no JSON object"),
+            (
+                "plan-skip-no-resources",
+                "stdout {\"workspace\": {}}",
+                "no `resources` object",
+            ),
+        ] {
+            let (finding, _fixture) = check(
+                name,
+                &stdout_line(&plan_fixture("plan-skip.json")),
+                validate,
+            );
+            assert_eq!(finding.state(), State::Unknown, "{name}: {finding:?}");
+            let actual = finding.reason().unwrap_or_default();
+            assert!(
+                actual.contains("need the validated configuration"),
+                "{name}: {actual}"
+            );
+            assert!(actual.contains(reason), "{name}: {actual}");
+        }
     }
 
     #[test]
@@ -222,10 +242,11 @@ mod tests {
             "resources.jobs.a": {"action": "create", "new_state": {"value": {}}},
             "resources.jobs.b": {"action": "create"}
         }}"#;
-        let (finding, _fixture) = check("plan-odd", &stdout_line(plan), "exit 1");
+        let validated = r#"{"workspace": {}, "resources": {"jobs": {"b": {}}}}"#;
+        let (finding, _fixture) = check("plan-odd", &stdout_line(plan), &stdout_line(validated));
         assert_eq!(
             verdict(&finding),
-            "plan_version unset; create: new_state.value or none"
+            "plan_version unset; create: new_state.value or validate"
         );
     }
 

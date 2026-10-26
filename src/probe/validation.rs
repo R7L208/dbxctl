@@ -257,7 +257,7 @@ mod tests {
             );
         let probe = Fixture::new("validation-withheld", &scenario);
         let findings = probe.run_together(&[validate::run, plan::run, v8::run]);
-        for finding in [&findings[0], &findings[2]] {
+        for finding in &findings {
             assert_eq!(finding.state(), State::Unknown, "{finding:?}");
             assert!(finding.reason().unwrap_or_default().contains("(R9)"));
         }
