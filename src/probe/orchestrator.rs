@@ -14,7 +14,7 @@ use crate::exit::Exit;
 use crate::json::{Document, Value};
 use crate::probe::lineage::{self, LineageOptions};
 use crate::probe::model::{CheckId, Finding, State};
-use crate::probe::validation::Shared;
+use crate::probe::{validation, workspace};
 use crate::transport::{CliRunner, Runner};
 
 const SUITE: &str = "lineage";
@@ -28,13 +28,20 @@ pub(crate) struct Context<'a> {
     pub(crate) run: &'a RunDir,
     pub(crate) bundle_root: &'a Path,
     pub(crate) target: &'a str,
-    /// Runs read-only CLI commands from the bundle root for the target and
-    /// profile, with credentials scrubbed from their output.
-    pub(crate) cli: &'a dyn Runner,
+    /// Runs read-only CLI commands, and the API and SQL calls, from the
+    /// bundle root for the target and profile, with credentials scrubbed
+    /// from their output.
+    pub(crate) transport: &'a dyn Runner,
     /// Whether `--allow-mutations` was given.
     pub(crate) allow_mutations: bool,
+    /// `--warehouse-id`, which the checks that run statements read.
+    pub(crate) warehouse_id: Option<&'a str>,
+    /// `--scope-catalog`, which the catalog-scoped checks read.
+    pub(crate) scope_catalog: Option<&'a str>,
     /// The run's one `bundle validate`, shared by the checks that need it.
-    pub(crate) shared: &'a Shared,
+    pub(crate) validation: &'a validation::Shared,
+    /// Workspace steps more than one check reads, run once per run.
+    pub(crate) shared: &'a workspace::Shared,
 }
 
 /// A validated `probe run --suite lineage` request.
@@ -44,6 +51,8 @@ pub(crate) struct Plan {
     target: String,
     profile: Option<String>,
     allow_mutations: bool,
+    warehouse_id: Option<String>,
+    scope_catalog: Option<String>,
     /// Selected checks in canonical order.
     checks: Vec<CheckId>,
 }
@@ -60,17 +69,23 @@ impl Plan {
         let target =
             utf8("--target", options.target.as_deref())?.ok_or("option --target is required")?;
         let profile = utf8("--profile", options.profile.as_deref())?;
+        let warehouse_id = utf8("--warehouse-id", options.warehouse_id.as_deref())?;
+        let scope_catalog = utf8("--scope-catalog", options.scope_catalog.as_deref())?;
         Ok(Self {
             bundle_root: PathBuf::from(bundle_root),
             target,
             profile,
             allow_mutations: options.allow_mutations,
+            warehouse_id,
+            scope_catalog,
             checks: options.selected_checks(),
         })
     }
 }
 
-/// `run.json` records these as strings, so they must be valid UTF-8.
+/// `run.json` records these as strings, and the transport passes them to the
+/// CLI as text, so they must be valid UTF-8. `run.json` records the target,
+/// profile, warehouse, and scope catalog, each `null` when not given.
 fn utf8(option: &str, value: Option<&OsStr>) -> Result<Option<String>, String> {
     value
         .map(|value| {
@@ -116,20 +131,24 @@ fn complete(
         &run_document(plan, run_dir, started, None).into(),
     )?;
 
-    let cli = CliRunner::for_bundle(
+    let transport = CliRunner::for_bundle(
         binary,
         &plan.bundle_root,
         &plan.target,
         plan.profile.as_deref(),
     );
-    let shared = Shared::default();
+    let validated = validation::Shared::default();
+    let shared = workspace::Shared::default();
     let context = Context {
         binary,
         run: run_dir,
         bundle_root: &plan.bundle_root,
         target: &plan.target,
-        cli: &cli,
+        transport: &transport,
         allow_mutations: plan.allow_mutations,
+        warehouse_id: plan.warehouse_id.as_deref(),
+        scope_catalog: plan.scope_catalog.as_deref(),
+        validation: &validated,
         shared: &shared,
     };
     let findings = plan
@@ -185,6 +204,16 @@ fn run_document(
         ("dbxctl_version", Value::string(env!("CARGO_PKG_VERSION"))),
         ("target", Value::string(plan.target.as_str())),
         ("profile", Value::optional_string(plan.profile.as_deref())),
+        // Identifiers, not credentials. Reports built from this file (#36)
+        // redact them with the other workspace identifiers (R13).
+        (
+            "warehouse_id",
+            Value::optional_string(plan.warehouse_id.as_deref()),
+        ),
+        (
+            "scope_catalog",
+            Value::optional_string(plan.scope_catalog.as_deref()),
+        ),
         (
             "checks",
             Value::Array(
@@ -290,7 +319,7 @@ mod tests {
     use crate::probe::lineage::cli::SURFACES;
     use crate::probe::lineage::parse_lineage_options;
     use crate::probe::model::{CheckId, Finding, State};
-    use crate::probe::validation::Shared;
+    use crate::probe::{validation, workspace};
     use crate::test_support::{
         ScenarioCli, TempDir, assert_no_mutations, fake_databricks, read_tree,
     };
@@ -390,10 +419,12 @@ mod tests {
   "profile": null,
   "run_id": "20260102T030405Z",
   "schema_version": 1,
+  "scope_catalog": null,
   "started_at": "2026-01-02T03:04:05Z",
   "status": "completed",
   "suite": "lineage",
-  "target": "dev"
+  "target": "dev",
+  "warehouse_id": null
 }
 "#
         );
@@ -491,6 +522,31 @@ mod tests {
     }
 
     #[test]
+    fn records_the_warehouse_and_scope_catalog() {
+        let (temp, cli) = setup("orchestrator-sql-inputs", VERSION_SCENARIO);
+        let bundle = temp.path().join("bundle");
+        let plan = plan(
+            &bundle,
+            &[
+                "--only",
+                "cli",
+                "--warehouse-id",
+                "wh",
+                "--scope-catalog",
+                "main",
+            ],
+        )
+        .expect("plan");
+        let outcome = run(&plan, cli.binary().as_os_str(), &FixedClock(0)).expect("run probe");
+        let run_json = fs::read_to_string(outcome.run_dir.join("run.json")).expect("read");
+        assert!(run_json.contains("\"warehouse_id\": \"wh\""), "{run_json}");
+        assert!(
+            run_json.contains("\"scope_catalog\": \"main\""),
+            "{run_json}"
+        );
+    }
+
+    #[test]
     fn unresolved_cli_check_sets_the_unresolved_exit() {
         let (temp, cli) = setup("orchestrator-unknown", "case\narg version\nexit 2\n");
         let bundle = temp.path().join("bundle");
@@ -526,9 +582,12 @@ mod tests {
                 run: &run_dir,
                 bundle_root: &bundle,
                 target: "dev",
-                cli: &runner,
+                transport: &runner,
                 allow_mutations: false,
-                shared: &Shared::default(),
+                warehouse_id: None,
+                scope_catalog: None,
+                validation: &validation::Shared::default(),
+                shared: &workspace::Shared::default(),
             },
         )
         .expect_err("blocked evidence");

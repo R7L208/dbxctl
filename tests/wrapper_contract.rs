@@ -766,12 +766,34 @@ fn probe_run_rejects_empty_check_id() {
 }
 
 #[test]
-fn probe_run_without_only_runs_every_check() {
-    // Every check is selected. Only `cli` and `v6` are implemented, and
-    // neither reads a warehouse or catalog, so neither option is needed; the
-    // skipped checks leave the run unresolved.
-    let fixture = ProbeFixture::new("probe-all-checks", CLI_VERSION_SCENARIO);
+fn probe_run_without_only_requires_the_sql_inputs() {
+    // Every check is selected, and the implemented SQL checks read a
+    // warehouse and a scope catalog, so a run without them is a usage error
+    // that starts no CLI process.
+    let fixture = ProbeFixture::new("probe-all-no-inputs", CLI_VERSION_SCENARIO);
     let output = fixture.run(&[]);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stdout.is_empty());
+    assert_eq!(
+        String::from_utf8_lossy(&output.stderr),
+        "error: --warehouse-id is required by selected checks: v2, v3, v11, v9, v4\n"
+    );
+    assert!(fixture.cli.invocations().is_empty());
+
+    let output = fixture.run(&["--warehouse-id", "w"]);
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(
+        String::from_utf8_lossy(&output.stderr),
+        "error: --scope-catalog is required by selected checks: v3, v11\n"
+    );
+}
+
+#[test]
+fn probe_run_without_only_runs_every_check() {
+    // Every check is selected. The fake answers only `version`, so the API
+    // and SQL checks come back unknown and the skipped checks unresolved.
+    let fixture = ProbeFixture::new("probe-all-checks", CLI_VERSION_SCENARIO);
+    let output = fixture.run(&["--warehouse-id", "w", "--scope-catalog", "c"]);
     assert_eq!(output.status.code(), Some(10));
     assert!(output.stderr.is_empty());
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -782,6 +804,83 @@ fn probe_run_without_only_runs_every_check() {
         stdout.contains("\nv7        skipped   not implemented yet; #37 adds this check\n"),
         "{stdout}"
     );
+    assert_no_mutations(&fixture.cli.invocations());
+}
+
+/// A scenario case for `databricks api get <path> --debug -t dev`, answered
+/// with `stdout`, a debug log of `status`, and `exit`.
+fn api_get_case(path: &str, stdout: &str, status: &str, body: &str, exit: u8) -> String {
+    let log = format!("09:56:51 Debug: GET {path}\n< HTTP/1.0 {status}\n{body}");
+    format!(
+        "case\narg api\narg get\narg {path}\narg --debug\narg -t\narg dev\n{}\n{}\nexit {exit}\n",
+        stdout_line(stdout),
+        stdout_line(&log).replacen("stdout ", "stderr ", 1),
+    )
+}
+
+#[test]
+fn probe_run_answers_api_through_the_cli() {
+    let bad = "/api/2.0/pipelines/00000000-0000-0000-0000-000000000000";
+    let scenario = [
+        api_get_case(
+            "/api/2.0/clusters/spark-versions",
+            r#"{"versions":[]}"#,
+            "200 OK",
+            "< {} pid=1 sdk=true\n",
+            0,
+        ),
+        api_get_case(
+            bad,
+            "",
+            "404 Not Found",
+            "< {\n<   \"error_code\": \"RESOURCE_DOES_NOT_EXIST\"\n< } pid=1 sdk=true\nError: not found\n",
+            1,
+        ),
+    ]
+    .concat();
+    let fixture = ProbeFixture::new("probe-api", &scenario);
+    let output = fixture.run(&["--only", "api"]);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(output.status.code(), Some(0), "{stdout}");
+    assert!(
+        stdout.starts_with(
+            "api       resolved  status and error_code: HTTP 200; HTTP 404 RESOURCE_DOES_NOT_EXIST\n"
+        ),
+        "{stdout}"
+    );
+    let invocations = fixture.cli.invocations();
+    assert_eq!(invocations.len(), 2);
+    assert_no_mutations(&invocations);
+    let run_dir = fixture.run_dir();
+    for name in ["good.json", "good.stderr", "bad.json", "bad.stderr"] {
+        assert!(run_dir.join("evidence/api").join(name).is_file(), "{name}");
+    }
+}
+
+#[test]
+fn probe_run_sends_statements_to_the_given_warehouse() {
+    // Nothing answers the submits, so v2 comes back unknown, but each
+    // submit names the warehouse and passes the read-only guard.
+    let fixture = ProbeFixture::new("probe-v2-warehouse", CLI_VERSION_SCENARIO);
+    let output = fixture.run(&["--only", "v2", "--warehouse-id", "wh-0123"]);
+    assert_eq!(output.status.code(), Some(10));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.starts_with("v2        unknown   "), "{stdout}");
+    let invocations = fixture.cli.invocations();
+    assert_eq!(
+        invocations.len(),
+        1,
+        "it stops at the first unanswered submit"
+    );
+    assert!(
+        invocations[0]
+            .iter()
+            .any(|argument| argument.contains(r#""warehouse_id":"wh-0123""#)
+                && argument.contains(r#""wait_timeout":"0s""#)),
+        "{:?}",
+        invocations[0]
+    );
+    assert_no_mutations(&invocations);
 }
 
 #[test]

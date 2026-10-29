@@ -225,6 +225,16 @@ impl Finding {
         self.reason.as_deref()
     }
 
+    #[cfg(test)]
+    pub(crate) fn fallback(&self) -> Option<&str> {
+        self.fallback.as_deref()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn evidence(&self) -> &[String] {
+        &self.evidence
+    }
+
     /// The finding as a JSON object. Absent fields are `null`, so every
     /// finding has the same shape.
     pub(crate) fn to_value(&self) -> Value {

@@ -23,7 +23,7 @@ the boundary through which every workspace operation passes. It implements
 | `src/args.rs` | A small reusable option parser over `OsString`. | #29 |
 | `src/exit.rs` | The exit-code table from [R3](01-requirements.md#r3-exit-codes). | #30 |
 | `src/evidence.rs` | Run-ID generation, the run directory, raw evidence writes, `run.json`, and the `.dbxctl/.gitignore`. | #30 |
-| `src/transport.rs` | The `Runner` trait and `CliRunner::for_bundle(binary, root, target, profile)`: captured runs of known read-only CLI commands, API GETs through `databricks api get --debug` with the HTTP status and `error_code` of the logged response, and Statement Execution with a submit wait, polls, and result-chunk reads all bounded by the deadline, cancellation of a still-running statement at the deadline or after a failed poll, result chunks checked against the manifest, and error classification. | #31 |
+| `src/transport.rs` | The `Runner` trait and `CliRunner::for_bundle(binary, root, target, profile)`: captured runs of known read-only CLI commands, API GETs through `databricks api get --debug` with the HTTP status and `error_code` of the logged response, and Statement Execution with a submit wait, polls, and result-chunk reads all bounded by the deadline, cancellation of a still-running statement at the deadline or after a failed poll, result chunks checked against the manifest, and error classification. `submit` sends one statement with a chosen wait and cancels it if it is left running, and `is_not_found` and `is_permission_denied` classify an error by HTTP status or error class. | #31, #33 |
 | `src/safety.rs` | The read-only CLI commands, as offline commands and commands that contact the workspace, and `is_read_only_command`. `is_read_statement`, the read-only SQL guard. It refuses anything Spark could read differently, such as query hints or a backslash before a literal's quote, and calls to functions with side effects (`http_request`, `remote_query`, `ai_query`). | #31 |
 | `src/uc/fqn.rs` | Parsing and formatting Unity Catalog three-part names, including backtick quoting. | #31 |
 | `src/text.rs` | SQL string-literal and identifier quoting. A value with a `'` or `\` has no literal that means the same text under every `escapedStringLiterals` setting, so it must be a statement parameter. | #31 |
@@ -41,7 +41,7 @@ the boundary through which every workspace operation passes. It implements
 
 ### Implemented Probe Modules
 
-`probe run` runs the bundle checks and `v6` part A so far; every other selected check
+`probe run` runs the bundle checks, the SQL and API checks, and `v6` part A so far; every other selected check
 is recorded as skipped and names the issue that adds it.
 
 | Module | Owns | Issue |
@@ -57,13 +57,20 @@ is recorded as skipped and names the issue that adds it.
 | `src/probe/lineage/state.rs` | The `state` check: the layout of the local `resources.json` and its ID paths. | #32 |
 | `src/probe/lineage/v8.rs` | The `v8` check: source path forms, their local files, and where each resource is defined. | #32 |
 | `src/probe/lineage/v1.rs` | The `v1` check: whether the bundle schema accepts any `experimental.scripts` key. | #32 |
+| `src/probe/workspace.rs` | Workspace steps for the API and SQL checks: running one transport operation, recording each of its CLI runs as evidence, telling a CLI that could not run from a workspace that answered with an error, keeping workspace values in verdicts to plain words, and the scope-catalog `table_type` scan that `v3` and `v11` share, run once per run. | #33 |
+| `src/probe/lineage/api.rs` | `api`: whether `databricks api --debug` logs the HTTP status and `error_code`, from one readable and one missing path. | #33 |
+| `src/probe/lineage/v2.rs` | `v2`: which `wait_timeout` values Statement Execution accepts, from one `SELECT 1` submit per value. | #33 |
+| `src/probe/lineage/v3.rs` | `v3`: materialized-view `table_type` in the scope catalog, and the shape and `pipeline_type` values of `system.lakeflow.pipelines`. | #33 |
+| `src/probe/lineage/v11.rs` | `v11`: metric-view `table_type` in the scope catalog, and the `catalog_type` of shared catalogs. | #33 |
+| `src/probe/lineage/v9.rs` | `v9`: whether `system.access.table_lineage` attributes pipeline writes by `entity_id`. | #33 |
+| `src/probe/lineage/v4.rs` | `v4`: which candidate system tables and pipeline APIs expose refresh history, and their shape. | #33 |
 | `src/probe/lineage/v6.rs` | `v6` part A: running `databricks bundle schema`, naming each package that declares table-update triggers, and building the verdict: `jobs`, the jobs packages and `; also: ` the others, or `not jobs: `. | #34 |
 
 ### Planned Probe Modules
 
 | Module | Will own | Issue |
 | --- | --- | --- |
-| `src/probe/lineage/` | The remaining 8 checks from [R4](01-requirements.md#r4-checks), and nothing else. | #33, #37 |
+| `src/probe/lineage/` | The remaining 2 checks from [R4](01-requirements.md#r4-checks), and nothing else. | #37 |
 | `src/probe/lineage/sites.rs` | The mapping from each `CheckId` to the code or design sites its answer affects. | #36 |
 | `src/probe/report.rs` | `findings.json` and `findings.md` generation and redaction. | #36 |
 

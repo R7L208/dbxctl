@@ -62,7 +62,7 @@ pub(crate) fn validation<'a>(
     context: &Context<'a>,
     check: CheckId,
 ) -> Result<&'a Validation, String> {
-    let shared = context.shared;
+    let shared = context.validation;
     if let Some(validation) = shared.0.get() {
         return Ok(validation);
     }
@@ -159,7 +159,7 @@ fn exists(
     evidence: &mut Vec<String>,
 ) -> Result<Result<bool, Outcome>, String> {
     let request = format!("{GET_STATUS}?path={}", encode(file_path));
-    let outcome = context.cli.api_get(&request);
+    let outcome = context.transport.api_get(&request);
     for (index, call) in outcome.calls.iter().enumerate() {
         let step = if index == 0 {
             "get-status".to_owned()
