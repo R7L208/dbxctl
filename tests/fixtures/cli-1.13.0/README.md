@@ -87,6 +87,7 @@ against a real 1.13.0 environment.
 | Offline `bundle schema` structure | Verified offline | 1.13.0 | `databricks bundle schema` runs without a workspace |
 | Unknown experimental script keys are not rejected | Verified offline; captured against a stub | 1.13.0 | The schema's `experimental.scripts` accepts any key, and `bundle validate` keeps an unknown key without a warning |
 | `bundle validate` creates `workspace.file_path` if it is missing | Captured against a stub | 1.13.0 | It calls `POST /api/2.0/workspace/mkdirs` |
+| `bundle plan` does not create `workspace.file_path` | Checked against a stub | 1.21.0 | With `get-status` answering 404, it made only `GET` calls |
 
 ## Mock Server
 

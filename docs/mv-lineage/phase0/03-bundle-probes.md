@@ -68,6 +68,11 @@ records. Validation and planning also write the CLI's local cache under
 `.databricks/` in the bundle root, and every CLI command posts the CLI's own
 telemetry; neither changes a workspace object.
 
+`bundle plan` itself runs without this guard. Against a stub workspace where
+`workspace.file_path` did not exist, CLI 1.21.0's `bundle plan -o json` made
+only `GET` calls (the current user and `get-status`) and created nothing; this
+is not yet confirmed on 1.13.0.
+
 ## validate
 
 **Runs:** the shared validate.
