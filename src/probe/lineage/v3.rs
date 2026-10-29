@@ -8,8 +8,8 @@
 use crate::probe::model::{CheckId, Finding, Verdict};
 use crate::probe::orchestrator::Context;
 use crate::probe::workspace::{
-    Read, Reply, describe, described_columns, list_or_none, scope_catalog, scope_table_types, step,
-    warehouse, words,
+    Read, Reply, describe, described_columns, list_or_none, required_words, scope_catalog,
+    scope_table_types, step, warehouse,
 };
 
 const CHECK: CheckId = CheckId::V3;
@@ -103,9 +103,12 @@ fn pipelines(
             evidence,
             |transport| transport.statement(PIPELINE_TYPES, warehouse_id),
         )? {
-            Reply::Answer(result) => {
-                list_or_none(&words(&result, "pipeline_type").unwrap_or_default())
-            }
+            Reply::Answer(result) => match required_words(&result, "pipeline_type") {
+                Ok(types) => list_or_none(&types),
+                Err(shape) => {
+                    return Ok(Read::Unknown(format!("`{PIPELINES}` {shape}")));
+                }
+            },
             Reply::Error(error) => {
                 return Ok(Read::Unknown(format!(
                     "reading `pipeline_type` from `{PIPELINES}` {}",
@@ -282,6 +285,34 @@ mod tests {
                 "the scope catalog's `information_schema.tables` has a null `table_type`",
             ),
         ] {
+            let finding = check(case, &transport, Some("main"));
+            assert_eq!(finding.state(), State::Unknown, "{case}");
+            assert_eq!(finding.reason(), Some(reason), "{case}");
+        }
+    }
+
+    #[test]
+    fn reports_an_unexpected_pipeline_types_shape_as_unknown() {
+        let columns = described(&["pipeline_type"]);
+        let one: &[&[Option<&str>]] = &[&[Some("MV"), Some("1")]];
+        let null: &[&[Option<&str>]] = &[&[Some("MV"), Some("1")], &[None, Some("2")]];
+        for (case, result_columns, rows, reason) in [
+            (
+                "v3-no-pipeline-type-column",
+                &["kind", "pipelines"],
+                one,
+                "`system.lakeflow.pipelines` has no `pipeline_type` column",
+            ),
+            (
+                "v3-null-pipeline-type",
+                &["pipeline_type", "pipelines"],
+                null,
+                "`system.lakeflow.pipelines` has a null `pipeline_type`",
+            ),
+        ] {
+            let transport = with_types(&["MATERIALIZED_VIEW"])
+                .statement(DESCRIBE_PIPELINES, &DESCRIBE, &statement_rows(&columns))
+                .statement("SELECT pipeline_type", result_columns, rows);
             let finding = check(case, &transport, Some("main"));
             assert_eq!(finding.state(), State::Unknown, "{case}");
             assert_eq!(finding.reason(), Some(reason), "{case}");

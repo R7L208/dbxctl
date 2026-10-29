@@ -202,7 +202,7 @@ enum Updates {
     Shape(String),
     /// No update: no `updates` member, or an empty array.
     None,
-    /// `updates` is not an array.
+    /// The body is not an object, or `updates` is not an array.
     Malformed,
 }
 
@@ -212,6 +212,9 @@ fn shape(body: Node<'_>) -> Updates {
             .map(|members| members.map(|(key, _)| word(key)).collect())
             .unwrap_or_default()
     };
+    if body.members().is_none() {
+        return Updates::Malformed;
+    }
     let Some(updates) = body.get("updates") else {
         return Updates::None;
     };
@@ -398,6 +401,13 @@ mod tests {
                 missing(FakeTransport::default())
                     .get(PIPELINES, LISTED)
                     .get(UPDATES_PATH, r#"{"updates":{}}"#),
+                "unreadable /api/2.0/pipelines/{id}/updates",
+            ),
+            (
+                "v4-updates-not-object",
+                missing(FakeTransport::default())
+                    .get(PIPELINES, LISTED)
+                    .get(UPDATES_PATH, "[]"),
                 "unreadable /api/2.0/pipelines/{id}/updates",
             ),
             (

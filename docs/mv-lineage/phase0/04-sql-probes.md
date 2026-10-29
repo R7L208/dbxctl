@@ -98,7 +98,7 @@ the transport's 30-second submit wait is inside it.
 | --- | --- | --- |
 | A `table_type` in the scope catalog names a materialized view, and the pipelines table is described | resolved | `materialized views: table_type MATERIALIZED_VIEW; scope table_type values: …; system.lakeflow.pipelines columns: …; pipeline_type values: …`, where the last is `no such column` when there is none |
 | No `table_type` in the scope catalog names a materialized view | unknown | Choose a scope catalog with a materialized view |
-| A step fails, such as a missing catalog or table, the tables result has no `table_type` column or a null one, or the describe lists no columns | unknown | The reason names the step and the kind of error or shape |
+| A step fails, such as a missing catalog or table, the tables result has no `table_type` column or a null one, the describe lists no columns, or the `pipeline-types` result has no `pipeline_type` column or a null one | unknown | The reason names the step and the kind of error or shape |
 | The CLI cannot be run to completion | failed | See the evidence record |
 
 **Fallback for unknown:** identify materialized views by `table_type`
@@ -171,8 +171,8 @@ or, for the API, **unobserved** when there is nothing to see. For the API:
   API omits empty arrays, is unobserved. A list without a `statuses` array,
   or whose first pipeline has no plain `pipeline_id`, is unreadable.
 - An updates response with no `updates` member, or an empty array, is a
-  pipeline with no history, so unobserved. An `updates` that is not an array,
-  or no response body, is unreadable.
+  pipeline with no history, so unobserved. A body that is not an object, an
+  `updates` that is not an array, or no response body, is unreadable.
 
 The verdict names the API as `/api/2.0/pipelines/{id}/updates`, never with an
 ID.
