@@ -7,9 +7,9 @@ families (`R`, `T`, `V`, `v`, `DP`) are defined in the
 [design nomenclature and glossary](../design-nomenclature-and-glossary.md).
 
 > **Status:** Phase 0 is in progress under milestone 0.0.1. The `dbxctl probe`
-> command parses its arguments (#29) and runs the `cli` check (#30) and `v6`
-> part A (#34). The other checks are reported as skipped until #32, #33,
-> and #37 add them. Pages marked as stubs are completed by the issue they
+> command parses its arguments (#29) and runs the `cli` check (#30), `v6`
+> part A (#34), and the SQL and API checks (#33). The other checks are
+> reported as skipped until #32 and #37 add them. Pages marked as stubs are completed by the issue they
 > name. Tracking issue: #23.
 
 ## Purpose
@@ -43,7 +43,7 @@ defines them.
 | [01-requirements.md](phase0/01-requirements.md) | The Phase 0 contract from #23 | #38 |
 | [02-architecture.md](phase0/02-architecture.md) | Module ownership, layering rule, transport boundary | #38 |
 | [03-bundle-probes.md](phase0/03-bundle-probes.md) | Bundle probes (stub) | #32, #34 |
-| [04-sql-probes.md](phase0/04-sql-probes.md) | SQL and API probes (stub) | #33 |
+| [04-sql-probes.md](phase0/04-sql-probes.md) | SQL and API probes | #33 |
 | [05-workspace-probes.md](phase0/05-workspace-probes.md) | Opt-in mutation probes (stub) | #37 |
 | [06-findings-and-handoff.md](phase0/06-findings-and-handoff.md) | Report schema, redaction, Phase 1–4 gates (stub) | #36 |
 | [07-tests-and-task-plan.md](phase0/07-tests-and-task-plan.md) | Test strategy and work order | #38 |

@@ -1,6 +1,7 @@
 mod lineage;
 mod model;
 mod orchestrator;
+mod workspace;
 
 use std::ffi::{OsStr, OsString};
 use std::process::ExitCode;

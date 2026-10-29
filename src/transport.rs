@@ -73,6 +73,18 @@ impl Limits {
     }
 }
 
+impl Limits {
+    /// How long a single submit with `wait` may run: the call, or the wait
+    /// plus [`SUBMIT_MARGIN`] when longer, so the warehouse can answer,
+    /// and never past the deadline. `None` when the wait and margin do not
+    /// fit the deadline, since the CLI would then be stopped before the
+    /// warehouse answers with a statement ID.
+    fn single_submit(&self, wait: Duration) -> Option<Duration> {
+        let needed = wait + SUBMIT_MARGIN;
+        (needed <= self.deadline).then(|| self.call.max(needed).min(self.deadline))
+    }
+}
+
 impl Default for Limits {
     fn default() -> Self {
         Self {
@@ -114,6 +126,15 @@ pub(crate) struct ResultSet {
     /// Each cell as the API renders it in `JSON_ARRAY` format: text, or
     /// `None` for SQL `NULL`.
     pub(crate) rows: Vec<Vec<Option<String>>>,
+}
+
+/// A statement as one submit left it, before any poll.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct Submitted {
+    pub(crate) statement_id: String,
+    /// `status.state` from the submit response, such as `SUCCEEDED` or
+    /// `PENDING`.
+    pub(crate) state: String,
 }
 
 /// Why an operation failed.
@@ -178,6 +199,54 @@ impl fmt::Display for Error {
     }
 }
 
+/// Error classes that name a missing table, view, schema, or catalog. A
+/// failed statement carries its class in `error_code` or, as `[CLASS]`, at the
+/// start of its message.
+const NOT_FOUND_CLASSES: [&str; 4] = [
+    "TABLE_OR_VIEW_NOT_FOUND",
+    "SCHEMA_NOT_FOUND",
+    "CATALOG_NOT_FOUND",
+    "RESOURCE_DOES_NOT_EXIST",
+];
+/// Error classes that name missing privileges.
+const DENIED_CLASSES: [&str; 2] = ["PERMISSION_DENIED", "INSUFFICIENT_PERMISSIONS"];
+
+impl Error {
+    /// Whether the workspace said that what was asked for does not exist: an
+    /// HTTP 404, or an error whose class names a missing object.
+    pub(crate) fn is_not_found(&self) -> bool {
+        matches!(self, Self::Http { status: 404, .. }) || self.has_class(&NOT_FOUND_CLASSES)
+    }
+
+    /// Whether the workspace refused the caller: an HTTP 403, or an error
+    /// whose class names missing privileges.
+    pub(crate) fn is_permission_denied(&self) -> bool {
+        matches!(self, Self::Http { status: 403, .. }) || self.has_class(&DENIED_CLASSES)
+    }
+
+    fn has_class(&self, classes: &[&str]) -> bool {
+        let (Self::Http {
+            error_code,
+            message,
+            ..
+        }
+        | Self::Sql {
+            error_code,
+            message,
+            ..
+        }) = self
+        else {
+            return false;
+        };
+        classes.iter().any(|class| {
+            error_code.as_deref() == Some(*class)
+                || message
+                    .as_deref()
+                    .is_some_and(|message| message.starts_with(&format!("[{class}]")))
+        })
+    }
+}
+
 /// How probes reach the workspace. Tests can supply their own.
 pub(crate) trait Runner {
     /// Runs a read-only CLI command, such as `bundle validate`, and captures
@@ -189,6 +258,15 @@ pub(crate) trait Runner {
 
     /// Runs a read-only statement on a SQL warehouse and returns every row.
     fn statement(&self, sql: &str, warehouse_id: &str) -> Outcome<ResultSet>;
+
+    /// Submits a read-only statement once with `wait` as its `wait_timeout`,
+    /// and returns the statement as the submit left it, without polling or
+    /// reading rows: succeeded, or pending or running and then cancelled. A
+    /// statement that ended `FAILED`, `CANCELED`, or `CLOSED` is a SQL error.
+    /// A missing or unexpected state is a transport error, and the statement
+    /// is cancelled in case it is still running. A `wait_timeout` the API
+    /// rejects comes back as an HTTP error.
+    fn submit(&self, sql: &str, warehouse_id: &str, wait: Duration) -> Outcome<Submitted>;
 }
 
 /// The [`Runner`] that runs the `databricks` CLI for one bundle target.
@@ -287,15 +365,7 @@ impl CliRunner {
         let submit = submit_body(sql, warehouse_id, self.limits.submit_wait());
         let body =
             self.statement_call("post", STATEMENTS, Some(&submit), self.limits.call, calls)?;
-        let statement_id = body
-            .root()
-            .get("statement_id")
-            .and_then(Node::as_str)
-            .filter(|id| is_statement_id(id))
-            .ok_or_else(|| {
-                Error::Transport("the statement response has no valid `statement_id`".to_owned())
-            })?
-            .to_owned();
+        let statement_id = statement_id(&body)?;
         let status_path = format!("{STATEMENTS}/{statement_id}");
         match self.wait(body, started, &statement_id, &status_path, calls) {
             Ok(body) => self.result_set(&body, started, statement_id, &status_path, calls),
@@ -308,6 +378,64 @@ impl CliRunner {
                 Err(error)
             }
         }
+    }
+
+    /// One submit, bounded by [`Limits::single_submit`].
+    ///
+    /// If the submit's own CLI run fails or is stopped, the warehouse may
+    /// already have created the statement, but its ID is only in the
+    /// response that was lost. The Statement Execution API cannot look a
+    /// statement up by its request, and query history cannot tell this
+    /// run's statement from an identical one, so cancelling by a guess could
+    /// stop someone else's. Callers should therefore submit only statements
+    /// that end on their own at once, such as v2's `SELECT 1`.
+    fn submit_once(
+        &self,
+        sql: &str,
+        warehouse_id: &str,
+        wait: Duration,
+        calls: &mut Vec<Call>,
+    ) -> Result<Submitted, Error> {
+        let Some(timeout) = self.limits.single_submit(wait) else {
+            return Err(Error::Transport(format!(
+                "a {}s wait does not fit the {}s deadline",
+                wait.as_secs(),
+                self.limits.deadline.as_secs()
+            )));
+        };
+        let submit = submit_body(sql, warehouse_id, wait);
+        let body = self.statement_call("post", STATEMENTS, Some(&submit), timeout, calls)?;
+        let statement_id = statement_id(&body)?;
+        let state = body
+            .root()
+            .pointer("/status/state")
+            .and_then(Node::as_str)
+            .unwrap_or_default()
+            .to_owned();
+        let status_path = format!("{STATEMENTS}/{statement_id}");
+        match state.as_str() {
+            "SUCCEEDED" => {}
+            // Only the submit was asked for, so nothing is left running.
+            "PENDING" | "RUNNING" => self.cancel(&status_path, calls),
+            "FAILED" | "CANCELED" | "CLOSED" => return Err(sql_error(&body, state)),
+            // A state it cannot read may be a statement still running.
+            "" => {
+                self.cancel(&status_path, calls);
+                return Err(Error::Transport(
+                    "the statement response has no `status.state`".to_owned(),
+                ));
+            }
+            other => {
+                let error =
+                    Error::Transport(format!("the statement is in an unexpected state {other:?}"));
+                self.cancel(&status_path, calls);
+                return Err(error);
+            }
+        }
+        Ok(Submitted {
+            statement_id,
+            state,
+        })
     }
 
     /// Polls a submitted statement until it succeeds and returns the final
@@ -353,18 +481,7 @@ impl CliRunner {
                         .map_err(running)?;
                 }
                 "FAILED" | "CANCELED" | "CLOSED" => {
-                    let error = body.root().pointer("/status/error");
-                    let text = |key| {
-                        error
-                            .and_then(|error| error.get(key))
-                            .and_then(Node::as_str)
-                            .map(str::to_owned)
-                    };
-                    return Err(ended(Error::Sql {
-                        state,
-                        error_code: text("error_code"),
-                        message: text("message"),
-                    }));
+                    return Err(ended(sql_error(&body, state)));
                 }
                 "" => {
                     return Err(running(Error::Transport(
@@ -580,6 +697,18 @@ impl Runner for CliRunner {
         let result = self.statement_rows(sql, warehouse_id, &mut calls);
         Outcome { calls, result }
     }
+
+    fn submit(&self, sql: &str, warehouse_id: &str, wait: Duration) -> Outcome<Submitted> {
+        if !safety::is_read_statement(sql) {
+            return Outcome {
+                calls: Vec::new(),
+                result: Err(Error::Refused),
+            };
+        }
+        let mut calls = Vec::new();
+        let result = self.submit_once(sql, warehouse_id, wait, &mut calls);
+        Outcome { calls, result }
+    }
 }
 
 /// Why a statement stopped without a result, and whether it may still be
@@ -625,6 +754,35 @@ fn check_path(path: &str) -> Result<(), String> {
     } else {
         Err(format!("refused API path {path:?}"))
     }
+}
+
+/// The error of a statement that ended in `state`, with the `error_code`
+/// and `message` from its `status.error`.
+fn sql_error(body: &Document, state: String) -> Error {
+    let error = body.root().pointer("/status/error");
+    let text = |key| {
+        error
+            .and_then(|error| error.get(key))
+            .and_then(Node::as_str)
+            .map(str::to_owned)
+    };
+    Error::Sql {
+        state,
+        error_code: text("error_code"),
+        message: text("message"),
+    }
+}
+
+/// The statement ID in a submit response, which must be UUID-like.
+fn statement_id(body: &Document) -> Result<String, Error> {
+    body.root()
+        .get("statement_id")
+        .and_then(Node::as_str)
+        .filter(|id| is_statement_id(id))
+        .map(str::to_owned)
+        .ok_or_else(|| {
+            Error::Transport("the statement response has no valid `statement_id`".to_owned())
+        })
 }
 
 /// Statement IDs are UUID-like: letters, digits, and `-`.
@@ -1131,8 +1289,8 @@ mod tests {
 
     use super::{
         Call, CliRunner, Error, Limits, Request, ResultSet, Runner, STATEMENT_EVIDENCE_BYTES,
-        STATEMENTS, WAIT_TIMEOUT, error_body, http_status, logged_object, logged_response, scrub,
-        scrubbed, stopped_at_deadline, submit_body,
+        STATEMENTS, Submitted, WAIT_TIMEOUT, error_body, http_status, logged_object,
+        logged_response, scrub, scrubbed, stopped_at_deadline, submit_body,
     };
     use crate::databricks::Captured;
     use crate::json::Node;
@@ -1494,6 +1652,233 @@ mod tests {
             assert!(outcome.calls.is_empty());
         }
         assert!(fixture.invocations().is_empty());
+    }
+
+    #[test]
+    fn submit_returns_the_statement_as_the_submit_left_it() {
+        let scenario = submit_waiting(Duration::from_secs(50), &state("SUCCEEDED"));
+        let fixture = Fixture::new("transport-submit", &scenario);
+        let outcome = fixture
+            .runner(QUICK)
+            .submit(SQL, WAREHOUSE, Duration::from_secs(50));
+        assert_eq!(
+            outcome.result,
+            Ok(Submitted {
+                statement_id: ID.to_owned(),
+                state: "SUCCEEDED".to_owned(),
+            })
+        );
+        // A finished statement is neither polled nor cancelled.
+        let invocations = fixture.invocations();
+        assert_eq!(invocations.len(), 1);
+        assert_no_mutations(&invocations);
+    }
+
+    #[test]
+    fn submit_cancels_a_statement_it_leaves_running() {
+        for pending in ["PENDING", "RUNNING"] {
+            let scenario = [
+                submit_waiting(Duration::ZERO, &state(pending)),
+                cancel_case(),
+            ]
+            .concat();
+            let fixture = Fixture::new(&format!("transport-submit-{pending}"), &scenario);
+            let outcome = fixture.runner(QUICK).submit(SQL, WAREHOUSE, Duration::ZERO);
+            assert_eq!(
+                outcome.result.map(|submitted| submitted.state),
+                Ok(pending.to_owned())
+            );
+            let invocations = fixture.invocations();
+            assert_eq!(invocations.len(), 2, "{pending}");
+            assert_eq!(invocations[1][2], cancel_path());
+            assert_no_mutations(&invocations);
+        }
+    }
+
+    #[test]
+    fn submit_reports_an_ended_statement_as_a_sql_error() {
+        let failed = format!(
+            r#"{{"statement_id":"{ID}","status":{{"state":"FAILED","error":{{"error_code":"BAD_REQUEST","message":"m"}}}}}}"#
+        );
+        let fixture = Fixture::new(
+            "transport-submit-failed",
+            &submit_waiting(Duration::ZERO, &failed),
+        );
+        let outcome = fixture.runner(QUICK).submit(SQL, WAREHOUSE, Duration::ZERO);
+        assert_eq!(
+            outcome.result,
+            Err(Error::Sql {
+                state: "FAILED".to_owned(),
+                error_code: Some("BAD_REQUEST".to_owned()),
+                message: Some("m".to_owned()),
+            })
+        );
+        // It has ended, so it is not cancelled.
+        assert_eq!(fixture.invocations().len(), 1);
+    }
+
+    #[test]
+    fn submit_cancels_a_statement_whose_state_it_cannot_read() {
+        for (name, body, problem) in [
+            (
+                "transport-submit-no-state",
+                format!(r#"{{"statement_id":"{ID}"}}"#),
+                "the statement response has no `status.state`".to_owned(),
+            ),
+            (
+                "transport-submit-odd-state",
+                state("QUEUED"),
+                "the statement is in an unexpected state \"QUEUED\"".to_owned(),
+            ),
+        ] {
+            let scenario = [submit_waiting(Duration::ZERO, &body), cancel_case()].concat();
+            let fixture = Fixture::new(name, &scenario);
+            let outcome = fixture.runner(QUICK).submit(SQL, WAREHOUSE, Duration::ZERO);
+            assert_eq!(outcome.result, Err(Error::Transport(problem)), "{name}");
+            let invocations = fixture.invocations();
+            assert_eq!(invocations.len(), 2, "{name}");
+            assert_eq!(invocations[1][2], cancel_path());
+            assert_no_mutations(&invocations);
+        }
+    }
+
+    #[test]
+    fn submit_reports_a_rejected_wait_as_an_http_error() {
+        let wait = Duration::from_secs(51);
+        let rejected = submit_case_waiting(
+            wait,
+            "",
+            &format!(
+                "{}< {{\n<   \"error_code\": \"INVALID_PARAMETER_VALUE\"\n< }}\n",
+                debug_log("post", STATEMENTS, "400 Bad Request")
+            ),
+            1,
+        );
+        let fixture = Fixture::new("transport-submit-rejected", &rejected);
+        let outcome = fixture.runner(QUICK).submit(SQL, WAREHOUSE, wait);
+        assert_eq!(
+            outcome.result,
+            Err(Error::Http {
+                status: 400,
+                error_code: Some("INVALID_PARAMETER_VALUE".to_owned()),
+                message: None,
+            })
+        );
+        assert_eq!(outcome.calls.len(), 1);
+    }
+
+    #[test]
+    fn submit_refuses_statements_that_are_not_read_only() {
+        let fixture = Fixture::new("transport-submit-refused", "");
+        let outcome = fixture
+            .runner(QUICK)
+            .submit("DROP TABLE t", WAREHOUSE, Duration::ZERO);
+        assert_eq!(outcome.result, Err(Error::Refused));
+        assert!(outcome.calls.is_empty());
+        assert!(fixture.invocations().is_empty());
+    }
+
+    #[test]
+    fn a_single_submit_fits_its_wait_and_the_deadline() {
+        let secs = Duration::from_secs;
+        let limits = |call, deadline| Limits {
+            call: secs(call),
+            deadline: secs(deadline),
+            poll: Duration::ZERO,
+        };
+        // The call when it is longer than the wait and margin.
+        assert_eq!(limits(60, 300).single_submit(secs(5)), Some(secs(60)));
+        // The wait and margin when they are longer than the call.
+        assert_eq!(limits(10, 300).single_submit(secs(50)), Some(secs(55)));
+        // Never past the deadline.
+        assert_eq!(limits(60, 30).single_submit(secs(5)), Some(secs(30)));
+        assert_eq!(limits(60, 55).single_submit(secs(50)), Some(secs(55)));
+        // Nothing when the warehouse could not answer in time.
+        assert_eq!(limits(60, 54).single_submit(secs(50)), None);
+    }
+
+    #[test]
+    fn submit_refuses_a_wait_that_does_not_fit_the_deadline() {
+        let fixture = Fixture::new("transport-submit-no-time", "");
+        let outcome = fixture
+            .runner(Duration::from_secs(4))
+            .submit(SQL, WAREHOUSE, Duration::ZERO);
+        assert_eq!(
+            outcome.result,
+            Err(Error::Transport(
+                "a 0s wait does not fit the 4s deadline".to_owned()
+            ))
+        );
+        assert!(outcome.calls.is_empty());
+        assert!(fixture.invocations().is_empty());
+    }
+
+    #[test]
+    fn submit_lets_the_cli_outlast_its_wait() {
+        // A one-second call could not hold a five-second wait, so the run
+        // gets the wait plus the submit margin; the fake answers after 1.5s.
+        let wait = Duration::from_secs(5);
+        let slow =
+            submit_waiting(wait, &state("SUCCEEDED")).replace("exit 0", "sleep 1500\nexit 0");
+        let fixture = Fixture::new("transport-submit-slow", &slow);
+        let runner =
+            CliRunner::for_bundle(fixture.cli.binary().as_os_str(), &fixture.root, "dev", None)
+                .with_limits(Limits {
+                    call: Duration::from_secs(1),
+                    deadline: QUICK,
+                    poll: Duration::ZERO,
+                });
+        let outcome = runner.submit(SQL, WAREHOUSE, wait);
+        assert!(outcome.result.is_ok(), "{:?}", outcome.result);
+    }
+
+    #[test]
+    fn classifies_missing_objects_and_denied_access() {
+        let http = |status, code: Option<&str>| Error::Http {
+            status,
+            error_code: code.map(str::to_owned),
+            message: None,
+        };
+        let sql = |code: Option<&str>, message: &str| Error::Sql {
+            state: "FAILED".to_owned(),
+            error_code: code.map(str::to_owned),
+            message: Some(message.to_owned()),
+        };
+        for missing in [
+            http(404, None),
+            http(400, Some("RESOURCE_DOES_NOT_EXIST")),
+            sql(
+                Some("BAD_REQUEST"),
+                "[TABLE_OR_VIEW_NOT_FOUND] The table or view `system`.`x`.`y` cannot be found.",
+            ),
+            sql(Some("SCHEMA_NOT_FOUND"), "no such schema"),
+            sql(None, "[CATALOG_NOT_FOUND] The catalog `c` was not found."),
+        ] {
+            assert!(missing.is_not_found(), "{missing:?}");
+            assert!(!missing.is_permission_denied(), "{missing:?}");
+        }
+        for denied in [
+            http(403, None),
+            http(401, Some("PERMISSION_DENIED")),
+            sql(
+                None,
+                "[INSUFFICIENT_PERMISSIONS] User does not have USE SCHEMA.",
+            ),
+        ] {
+            assert!(denied.is_permission_denied(), "{denied:?}");
+            assert!(!denied.is_not_found(), "{denied:?}");
+        }
+        for neither in [
+            http(500, None),
+            // A class only counts where the API puts it, not anywhere in the
+            // message.
+            sql(None, "near TABLE_OR_VIEW_NOT_FOUND"),
+            Error::Transport("TABLE_OR_VIEW_NOT_FOUND".to_owned()),
+            Error::Refused,
+        ] {
+            assert!(!neither.is_not_found(), "{neither:?}");
+            assert!(!neither.is_permission_denied(), "{neither:?}");
+        }
     }
 
     #[test]

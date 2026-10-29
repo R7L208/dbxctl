@@ -71,7 +71,9 @@ mod tests {
     use crate::evidence::RunDir;
     use crate::probe::model::{Finding, State, Verdict};
     use crate::probe::orchestrator::Context;
-    use crate::test_support::{ScenarioCli, TempDir, assert_no_mutations, fake_databricks};
+    use crate::test_support::{
+        FakeTransport, ScenarioCli, TempDir, assert_no_mutations, fake_databricks,
+    };
 
     /// Runs the check against a scenario answering `version`.
     fn check(name: &str, response: &str) -> (Finding, Vec<Vec<String>>, TempDir) {
@@ -89,6 +91,10 @@ mod tests {
         let finding = run(&Context {
             binary: cli.binary().as_os_str(),
             run: &run_dir,
+            transport: &FakeTransport::default(),
+            warehouse_id: None,
+            scope_catalog: None,
+            shared: &crate::probe::workspace::Shared::default(),
         })
         .expect("run check");
         (finding, cli.invocations(), temp)
@@ -138,6 +144,10 @@ mod tests {
         let finding = run(&Context {
             binary: missing.as_os_str(),
             run: &run_dir,
+            transport: &FakeTransport::default(),
+            warehouse_id: None,
+            scope_catalog: None,
+            shared: &crate::probe::workspace::Shared::default(),
         })
         .expect("run check");
         assert_eq!(finding.state(), State::Failed);
