@@ -194,7 +194,7 @@ on interrupt-safe passthrough.
   controlled self-hosted runners.
 - The live RustSec database is trusted as security data.
 - The Databricks CLI alone decides which workspace and credentials a probe
-  uses. Once probes pass a bundle target (#79, #80), the target's host
+  uses. Probes pass a bundle target, so the target's host
   silently overrides `DATABRICKS_HOST`, the CLI does not report where the token
   came from, and it can pick a host-matched profile without saying which.
   Without a target or profile, a `[DEFAULT]` profile is used silently. A

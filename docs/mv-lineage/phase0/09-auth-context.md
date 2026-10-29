@@ -4,11 +4,12 @@
 > 1.13.0 unless a row says otherwise. Recording and checking the context in
 > `probe run` is planned in #55 and not implemented yet.
 
-Once probe checks run through the shared `CliRunner` (#79, #80), `dbxctl probe`
-forwards `-t <target>` and `-p <profile>` to every CLI call and passes its
+`dbxctl probe` runs every CLI call that contacts the workspace (the bundle
+commands, `api get`, and SQL statements) through the shared `CliRunner`, from
+the bundle root with `-t <target>` and `-p <profile>`, and passes its
 environment through unchanged, so the CLI alone decides which workspace and
-credentials a probe uses. The checks on `main` today pass neither flag. This
-page records how the CLI makes that decision when a bundle target, a profile,
+credentials a probe uses. The offline calls (`version`, `--help`, and
+`bundle schema`) take neither flag. This page records how the CLI makes that decision when a bundle target, a profile,
 and environment variables are combined, and what `probe run` will do about it.
 
 ## How the Results Were Observed
@@ -39,7 +40,7 @@ differ in which host, credentials, and sources the CLI reports.
 ## Bundle Targets
 
 The bundle in these cases sets `workspace.host` on each target and no
-`workspace.profile`. Every probe call passes `-t`, so **this is the mode probes
+`workspace.profile`. Every workspace call a probe makes passes `-t`, so **this is the mode probes
 run in**; the table above applies to probes only through the profile a target
 resolves to.
 
