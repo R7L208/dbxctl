@@ -1,0 +1,13 @@
+resources:
+  jobs:
+    gold_job:
+      name: gold_job
+      tasks:
+        - task_key: gold
+          notebook_task:
+            notebook_path: ../notebooks/silver.py
+        - task_key: sql
+          sql_task:
+            warehouse_id: abc123
+            file:
+              path: ../src/gold/g.sql

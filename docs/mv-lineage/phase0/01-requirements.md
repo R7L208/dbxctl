@@ -7,8 +7,8 @@ as defined in the [glossary](../../design-nomenclature-and-glossary.md);
 headings are stable so code sites can link to them.
 
 > **Status:** Argument parsing for R1 and R2 is implemented (#29), and
-> `probe run` runs the `cli` check (#30), `v6` part A (#34), and the SQL and
-> API checks (#33). The other
+> `probe run` runs the bundle checks (#30, #32), the SQL and API checks (#33),
+> and `v6` part A (#34). The other
 > checks are not implemented yet. Each requirement names the issue that implements it.
 
 ## Goal
@@ -132,7 +132,14 @@ pass environment values to child processes instead.
 ## R9: Read-Only by Default
 
 Probes are read-only unless mutation is explicitly authorized. SQL that is not
-a read statement is refused before any CLI process starts (#31).
+a read statement is refused before any CLI process starts (#31), and only
+known read-only CLI commands run (`safety::is_read_only_command`).
+
+`bundle validate` is not strictly read-only: on CLI 1.13.0 it creates
+`workspace.file_path` when that directory does not exist yet. The probe runs
+it only after a read-only `get-status` finds the directory, or with
+`--allow-mutations`; otherwise the checks that need it are unknown (#32). See
+[the shared validate](03-bundle-probes.md#the-shared-validate).
 
 ## R10: Mutation Capability and Cleanup
 

@@ -1,0 +1,65 @@
+{
+  "$defs": {
+    "github.com": {
+      "databricks": {
+        "cli": {
+          "bundle": {
+            "config.Command": {
+              "type": "string"
+            },
+            "config.Experimental": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "scripts": {
+                      "description": "The commands to run.",
+                      "$ref": "#/$defs/map/github.com/databricks/cli/bundle/config.Command"
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                {
+                  "type": "string",
+                  "pattern": "\\$\\{(var(\\.\\p{L}+([-_]*[\\p{L}\\p{N}]+)*(\\[[0-9]+\\])*)+)\\}"
+                }
+              ]
+            }
+          }
+        }
+      }
+    },
+    "map": {
+      "github.com": {
+        "databricks": {
+          "cli": {
+            "bundle": {
+              "config.Command": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "additionalProperties": {
+                      "$ref": "#/$defs/github.com/databricks/cli/bundle/config.Command"
+                    }
+                  },
+                  {
+                    "type": "string",
+                    "pattern": "\\$\\{(var(\\.\\p{L}+([-_]*[\\p{L}\\p{N}]+)*(\\[[0-9]+\\])*)+)\\}"
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "type": "object",
+  "properties": {
+    "experimental": {
+      "description": "Defines attributes for experimental features.",
+      "$ref": "#/$defs/github.com/databricks/cli/bundle/config.Experimental"
+    }
+  },
+  "additionalProperties": false
+}

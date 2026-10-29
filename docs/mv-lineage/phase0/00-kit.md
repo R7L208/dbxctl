@@ -4,9 +4,9 @@ What you need to run the Phase 0 lineage probes, and how to run them. The
 command shapes come from the contract in
 [01-requirements.md](01-requirements.md).
 
-> **Status:** `dbxctl probe run` works. The `cli`, `v6`, and SQL and API
-> checks are implemented; the bundle checks (#32) and the mutation checks
-> (#37) are reported as skipped, so a full run exits with code 10. `probe report` and `probe cleanup` are not
+> **Status:** `dbxctl probe run` runs the bundle checks, the SQL and API
+> checks, and `v6` part A; the mutation checks (#37) are reported as skipped,
+> so a full run exits with code 10. `probe report` and `probe cleanup` are not
 > implemented yet (#36, #37). #38 checks every command against the real
 > `dbxctl probe ... --help` output.
 
@@ -32,16 +32,22 @@ what each SQL check reads in [04-sql-probes.md](04-sql-probes.md).
 
 ## Read-Only Run
 
-The `cli` and `v6` checks need no warehouse or catalog, and exit 0 when they
-resolve. `v6` runs part A, which reads the CLI's bundle schema offline:
+The offline checks need no bundle or workspace: `cli` reads the CLI's
+version and help, and `v1` and `v6` part A read its bundle schema. They exit
+0 when they resolve:
 
 ```console
 dbxctl probe run --suite lineage --bundle-root <path> --target <non-prod> \
-  --only cli,v6
+  --only cli,v1,v6
 ```
 
-Bundle-only checks, which need no warehouse or catalog. Until #32 implements
-them, every check but `cli` is skipped and the run exits 10:
+Bundle-only checks, which need no warehouse or catalog. `validate`, `plan`,
+and `v8` contact the workspace through the CLI. They share one
+`bundle validate`, which runs only if `workspace.file_path` already exists,
+because validate would create it; otherwise those checks are unknown unless
+you pass `--allow-mutations`. `state` reads the local
+copy of the deployment state, so deploy the bundle to the target from this
+checkout first. They exit 0 when every check resolves:
 
 ```console
 dbxctl probe run --suite lineage --bundle-root <path> --target <non-prod> \
@@ -50,8 +56,8 @@ dbxctl probe run --suite lineage --bundle-root <path> --target <non-prod> \
 
 Every check with a read step, which leaves out the mutation-only `v7`. `v6`
 and `v10` run only their read steps, because no mutation step runs without
-`--allow-mutations`. The SQL checks read both options. Until #32 and #37
-implement the remaining checks, they are skipped and the run exits 10:
+`--allow-mutations`. The SQL checks read both options. Until #37 implements
+the remaining checks, they are skipped and the run exits 10:
 
 ```console
 dbxctl probe run --suite lineage --bundle-root <path> --target <non-prod> \

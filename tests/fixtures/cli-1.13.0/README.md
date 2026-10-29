@@ -4,6 +4,11 @@ Synthetic, internally consistent test fixtures designed for Databricks CLI 1.13.
 supported version). These enable offline testing without a real workspace, credentials, or
 network access.
 
+The bundle, plan, and state fixtures were captured from CLI 1.13.0 (#32) by running it against a
+local stub server that answered the workspace API with placeholder values, so their shapes are the
+CLI's own while every value stays synthetic. The stub is not part of the repository. A real
+workspace may still differ; #35 checks.
+
 All values are placeholders: no real credentials, hosts, workspace IDs, org IDs, pipeline IDs,
 emails, or user paths are present.
 
@@ -15,13 +20,18 @@ emails, or user paths are present.
 | `api-debug-200.stderr` | Debug output from successful API call | Synthesized debug log format |
 | `api-debug-400.stderr` | Structured error response with `error_code` (HTTP 400) | Synthesized based on error format from #23 baseline |
 | `api-debug-404.stderr` | Resource not found error (HTTP 404) | Synthesized based on error format from #23 baseline |
-| `resources.json` | State file: resources with pipeline and job definitions. Flat-key structure: `resources.pipelines.dlt_pipeline/__id__` resolves via JSON pointer. | Synthesized; structure matches #23 baseline |
-| `plan-create.json` | CLI native plan output with create action. Keyed by resource (`jobs.refresh_silver`), with `action` and `config` fields. | Synthesized from CLI vocabulary; exact shape unverified on 1.13.0 |
-| `plan-mixed.json` | CLI native plan with create and update actions. | Synthesized from CLI vocabulary; exact shape unverified on 1.13.0 |
-| `plan-skip.json` | CLI native plan with skip action *without* source configuration. Probes must handle skip actions and consult `validate.json`. | Synthesized from CLI vocabulary; demonstrates baseline scenario |
-| `validate.json` | Bundle validate resolved output: expanded bundle configuration for the `dev` target with all variables resolved. | Synthesized; exact shape unverified on 1.13.0 |
+| `resources.json` | `direct`-engine state after `bundle deploy -t dev`: `state_version` 2, and `state` keyed `resources.<type>.<key>`, each with `__id__` and the deployed `state`. `/state/resources.pipelines.dlt_pipeline/__id__` resolves via JSON pointer. | Captured (stub) |
+| `plan-create.json` | `bundle plan -o json` before any deploy: `plan_version` 2 and `plan` keyed `resources.<type>.<key>`, every entry `create` with `new_state.value`. | Captured (stub) |
+| `plan-mixed.json` | The pipeline's configuration changed after a deploy: the pipeline is `update`, with `new_state`, `remote_state`, and `changes`; both jobs are `skip`. | Captured (stub) |
+| `plan-skip.json` | Nothing changed after a deploy: every entry is `skip`, with `remote_state` but no `new_state`. Probes must consult `validate.json`. | Captured (stub) |
+| `plan-delete.json` | `resources/extra.yml` removed after a deploy: `gold_job` is `delete`, the rest `skip`. | Captured (stub) |
+| `validate.json` | `bundle validate -o json -t dev`: the expanded configuration with variables resolved and source paths rewritten below `workspace.file_path`. | Captured (stub) |
+| `validate-locations.json` | The same with `--include-locations`, which adds `__locations`: the configuration files and where each resource is defined. | Captured (stub) |
+| `validate-no-resources.json` | `bundle validate -o json` for a bundle that declares no resources: the output has no `resources` key at all. | Captured (stub) |
+| `validate-exit-1.stdout`, `validate-exit-1.stderr` | `bundle validate -o json` exiting 1 because it could not create `workspace.file_path`: the configuration is still on stdout. | Captured (stub); the stub's address replaced by the placeholder host |
 | `dot-databricks.gitignore` | Sample `.databricks/.gitignore` template | Synthesized best-practice pattern |
-| `bundle/databricks.yml` | Minimal bundle definition with pipeline and job | Synthesized example DAB |
+| `bundle/databricks.yml` | Minimal bundle definition with pipeline and job, including `resources/*.yml` | Synthesized example DAB |
+| `bundle/resources/extra.yml` | A second job, whose relative paths are resolved from its own directory | Synthesized example DAB |
 | `bundle/src/silver.sql` | Materialized view definitions | Synthesized SQL code |
 | `bundle/src/q.sql` | Query table definition | Synthesized SQL code |
 | `bundle/src/gold/g.sql` | Gold layer metrics and views | Synthesized SQL code |
@@ -70,12 +80,14 @@ against a real 1.13.0 environment.
 | Fact | Status | Observed on | Evidence |
 | --- | --- | --- | --- |
 | Required CLI surfaces exist | Verified offline | 1.19.0 | `databricks --version` and `databricks bundle schema` work without workspace contact |
-| `bundle validate` can emit JSON on stdout even when it exits 1 | Synthesized | (unverified) | `validate.json` structure; needs workspace test for error case on 1.13.0 |
-| State pipeline IDs at `/state/resources.pipelines.<key>/__id__` | Synthesized | (unverified) | `resources.json` structure matches #23 baseline expectations; needs verification on 1.13.0 |
-| CLI plan output keyed by resource with action and config fields | Synthesized | (unverified) | `plan-*.json` structure inferred from baseline; exact shape needs verification on 1.13.0 |
-| Skip actions may lack source configuration | Synthesized | (unverified) | `plan-skip.json` demonstrates; needs verification on 1.13.0 |
-| Offline `bundle schema` structure | Verified offline | 1.19.0 | `databricks bundle schema` runs successfully and produces schema with expected fields |
-| Unknown experimental script keys are not rejected | Deferred | — | Requires workspace contact or bundle with experimental keys; scheduled for #32 bundle probes |
+| `bundle validate` can emit JSON on stdout even when it exits 1 | Captured against a stub | 1.13.0 | `validate-exit-1.stdout` |
+| State pipeline IDs at `/state/resources.pipelines.<key>/__id__` | Captured against a stub | 1.13.0 | `resources.json`; the local copy matched the deployed file |
+| Plan output keyed by resource, with `action`, and config in `new_state.value` for `create` and `update` | Captured against a stub | 1.13.0 | `plan-*.json` |
+| Skip actions lack source configuration | Captured against a stub | 1.13.0 | `plan-skip.json`, `plan-mixed.json` |
+| Offline `bundle schema` structure | Verified offline | 1.13.0 | `databricks bundle schema` runs without a workspace |
+| Unknown experimental script keys are not rejected | Verified offline; captured against a stub | 1.13.0 | The schema's `experimental.scripts` accepts any key, and `bundle validate` keeps an unknown key without a warning |
+| `bundle validate` creates `workspace.file_path` if it is missing | Captured against a stub | 1.13.0 | It calls `POST /api/2.0/workspace/mkdirs` |
+| `bundle plan` does not create `workspace.file_path` | Checked against a stub | 1.21.0 | With `get-status` answering 404, it made only `GET` calls |
 
 ## Mock Server
 
@@ -175,4 +187,5 @@ cargo test --locked --all-features
 - #28: Shared JSON layer (parallel work)
 - #29: Probe command (parallel work)
 - #30: Evidence model and minimal CLI check
-- #32: Bundle probes (will verify these fixtures on 1.13.0)
+- #32: Bundle probes; captured the bundle, plan, and state fixtures from 1.13.0
+- #35: Checks these shapes against a real workspace

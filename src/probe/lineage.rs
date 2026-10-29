@@ -1,20 +1,27 @@
 pub(crate) mod api;
 pub(crate) mod cli;
+pub(crate) mod plan;
+pub(crate) mod state;
+pub(crate) mod v1;
 pub(crate) mod v11;
 pub(crate) mod v2;
 pub(crate) mod v3;
 pub(crate) mod v4;
 pub(crate) mod v6;
+pub(crate) mod v8;
 pub(crate) mod v9;
+pub(crate) mod validate;
 
 use std::collections::HashSet;
 use std::ffi::{OsStr, OsString};
+use std::process::ExitStatus;
 use std::time::Duration;
 
 use crate::args::Parser;
 use crate::databricks::run_captured;
 use crate::probe::model::{CheckId, Finding};
 use crate::probe::orchestrator::Context;
+use crate::safety;
 
 /// Runs one check and returns its finding.
 pub(crate) type Runner = fn(&Context<'_>) -> Result<Finding, String>;
@@ -26,6 +33,11 @@ pub(crate) type Runner = fn(&Context<'_>) -> Result<Finding, String>;
 pub(crate) fn runner(check: CheckId) -> Option<Runner> {
     match check {
         CheckId::Cli => Some(cli::run),
+        CheckId::Validate => Some(validate::run),
+        CheckId::Plan => Some(plan::run),
+        CheckId::State => Some(state::run),
+        CheckId::V8 => Some(v8::run),
+        CheckId::V1 => Some(v1::run),
         CheckId::Api => Some(api::run),
         CheckId::V2 => Some(v2::run),
         CheckId::V3 => Some(v3::run),
@@ -171,7 +183,6 @@ pub(crate) struct LineageOptions {
     pub(crate) warehouse_id: Option<OsString>,
     pub(crate) scope_catalog: Option<OsString>,
     pub(crate) only: Option<Vec<String>>,
-    #[allow(dead_code)] // Used by #37
     pub(crate) allow_mutations: bool,
     #[allow(dead_code)] // Used by #37
     pub(crate) v6_table: Option<OsString>,
@@ -308,20 +319,334 @@ pub(crate) fn run_step(
             site,
         )),
         Ok(captured) if captured.status.success() => Step::Succeeded(captured.stdout),
-        Ok(captured) => {
-            let status = captured
-                .status
-                .code()
-                .map_or_else(|| "a signal".to_owned(), |code| format!("exit code {code}"));
-            Step::Unsuccessful(format!("{command} failed with {status}"))
-        }
+        Ok(captured) => Step::Unsuccessful(format!(
+            "{command} failed with {}",
+            exit_text(captured.status)
+        )),
     };
     Ok((evidence, step))
+}
+
+/// How a non-zero exit is named in a reason: `exit code 1` or `a signal`.
+pub(crate) fn exit_text(status: ExitStatus) -> String {
+    status
+        .code()
+        .map_or_else(|| "a signal".to_owned(), |code| format!("exit code {code}"))
+}
+
+/// What one bundle CLI step produced.
+pub(crate) enum Ran {
+    /// The CLI ran to completion, successfully or not.
+    Completed { status: ExitStatus, stdout: Vec<u8> },
+    /// The CLI could not be run to completion, or the command was refused:
+    /// the reason for a failed finding.
+    Failed(String),
+}
+
+/// Runs `databricks <args>` for the bundle, from its root with its target
+/// and profile, as `step` of `check`, and records the invocation with
+/// credentials scrubbed. Unlike [`run_step`], a non-zero exit keeps its
+/// output: `bundle validate` prints JSON even when it exits 1. Returns an
+/// error if the evidence cannot be written.
+pub(crate) fn run_bundle_step(
+    context: &Context<'_>,
+    check: CheckId,
+    step: &str,
+    args: &[&str],
+    timeout: Duration,
+) -> Result<(Vec<String>, Ran), String> {
+    let call = context.transport.run(args, timeout);
+    let evidence = vec![context.run.record_invocation(
+        check.as_str(),
+        step,
+        context.binary,
+        &call.args,
+        &call.result,
+    )?];
+    let ran = match call.result {
+        Ok(captured) => Ran::Completed {
+            status: captured.status,
+            stdout: captured.stdout,
+        },
+        // The transport refuses a command that is not known to be read-only
+        // without starting it; that is a safety decision, not a broken CLI.
+        Err(_) if !safety::is_read_only_command(&safety::command_path(args)) => {
+            Ran::Failed(format!(
+                "dbxctl refused `databricks {}`, which is not a known read-only command (R9); no process was started",
+                args.join(" ")
+            ))
+        }
+        Err(_) => Ran::Failed(format!(
+            "`databricks {}` could not be run to completion; see the evidence record",
+            args.join(" ")
+        )),
+    };
+    Ok((evidence, ran))
+}
+
+/// `text` with control characters escaped, so a name taken from CLI output
+/// keeps a verdict on one line.
+pub(crate) fn one_line(text: &str) -> String {
+    let mut line = String::with_capacity(text.len());
+    for character in text.chars() {
+        if character.is_control() {
+            line.extend(character.escape_default());
+        } else {
+            line.push(character);
+        }
+    }
+    line
+}
+
+/// Runs checks against a scenario-backed fake CLI in unit tests.
+#[cfg(test)]
+pub(crate) mod testing {
+    use std::fs;
+    use std::path::{Path, PathBuf};
+
+    use super::Runner;
+    use crate::evidence::RunDir;
+    use crate::probe::model::Finding;
+    use crate::probe::orchestrator::Context;
+    use crate::probe::validation::Shared;
+    use crate::test_support::{ScenarioCli, TempDir, fake_databricks};
+    use crate::transport::CliRunner;
+
+    /// The target every check test uses.
+    pub(crate) const TARGET: &str = "dev";
+
+    /// A scratch bundle root, run directory, and fake CLI replaying a
+    /// scenario.
+    pub(crate) struct Fixture {
+        pub(crate) temp: TempDir,
+        pub(crate) cli: ScenarioCli,
+        pub(crate) run_dir: RunDir,
+    }
+
+    impl Fixture {
+        pub(crate) fn new(name: &str, scenario: &str) -> Self {
+            let temp = TempDir::new(name);
+            let cli_dir = temp.path().join("cli");
+            fs::create_dir_all(&cli_dir).expect("create CLI dir");
+            fs::create_dir_all(temp.path().join("bundle")).expect("create bundle");
+            let cli = ScenarioCli::new(fake_databricks(), &cli_dir, scenario);
+            let run_dir =
+                RunDir::create(&temp.path().join("bundle"), "lineage", 0).expect("create run");
+            Self { temp, cli, run_dir }
+        }
+
+        pub(crate) fn bundle(&self) -> PathBuf {
+            self.temp.path().join("bundle")
+        }
+
+        pub(crate) fn run(&self, check: Runner) -> Finding {
+            self.run_as(check, false)
+        }
+
+        /// Runs `check` as if `--allow-mutations` were given.
+        pub(crate) fn run_allowing_mutations(&self, check: Runner) -> Finding {
+            self.run_as(check, true)
+        }
+
+        fn run_as(&self, check: Runner, allow_mutations: bool) -> Finding {
+            run_checks(
+                &[check],
+                self.cli.binary().as_os_str(),
+                &self.run_dir,
+                &self.bundle(),
+                allow_mutations,
+            )
+            .remove(0)
+        }
+
+        /// Runs `checks` in order in one probe run, so they share its
+        /// validate.
+        pub(crate) fn run_together(&self, checks: &[Runner]) -> Vec<Finding> {
+            run_checks(
+                checks,
+                self.cli.binary().as_os_str(),
+                &self.run_dir,
+                &self.bundle(),
+                false,
+            )
+        }
+
+        pub(crate) fn invocations(&self) -> Vec<Vec<String>> {
+            self.cli.invocations()
+        }
+
+        /// The evidence file `name` that `check` wrote.
+        pub(crate) fn evidence(&self, check: &str, name: &str) -> String {
+            fs::read_to_string(self.run_dir.path().join("evidence").join(check).join(name))
+                .expect("read evidence")
+        }
+    }
+
+    /// Runs `check` with `binary` as the CLI and `bundle` as the root.
+    pub(crate) fn run_with(
+        check: Runner,
+        binary: &std::ffi::OsStr,
+        run_dir: &RunDir,
+        bundle: &Path,
+    ) -> Finding {
+        run_checks(&[check], binary, run_dir, bundle, false).remove(0)
+    }
+
+    fn run_checks(
+        checks: &[Runner],
+        binary: &std::ffi::OsStr,
+        run_dir: &RunDir,
+        bundle: &Path,
+        allow_mutations: bool,
+    ) -> Vec<Finding> {
+        let cli = CliRunner::for_bundle(binary, bundle, TARGET, None);
+        let validation = Shared::default();
+        let context = Context {
+            binary,
+            run: run_dir,
+            bundle_root: bundle,
+            target: TARGET,
+            transport: &cli,
+            allow_mutations,
+            warehouse_id: None,
+            scope_catalog: None,
+            validation: &validation,
+            shared: &crate::probe::workspace::Shared::default(),
+        };
+        checks
+            .iter()
+            .map(|check| check(&context).expect("run check"))
+            .collect()
+    }
+
+    /// Runs `check` with a CLI path that does not exist, and asserts it
+    /// failed with `reason`, which must not name that path.
+    pub(crate) fn assert_fails_without_a_cli(check: Runner, name: &str, reason: &str) {
+        let temp = TempDir::new(name);
+        let run_dir = RunDir::create(temp.path(), "lineage", 0).expect("create run");
+        let missing = temp.path().join("no-such-databricks");
+        let finding = run_with(check, missing.as_os_str(), &run_dir, temp.path());
+        assert_eq!(
+            finding.state(),
+            crate::probe::model::State::Failed,
+            "{finding:?}"
+        );
+        let actual = finding.reason().unwrap_or_default();
+        assert_eq!(actual, reason);
+        assert!(
+            !actual.contains("no-such-databricks"),
+            "reasons must not copy raw error text: {actual}"
+        );
+    }
+
+    /// The `workspace.file_path` the gate cases report.
+    pub(crate) const FILE_PATH: &str =
+        "/Workspace/Users/user@example.test/projects/example-dev/files";
+
+    /// The probe run's validate, `VALIDATE_COMMAND`.
+    pub(crate) const VALIDATE: [&str; 5] =
+        ["bundle", "validate", "-o", "json", "--include-locations"];
+
+    /// Scenario cases answering the read-only gate before validate:
+    /// `bundle summary` with `FILE_PATH`, then get-status for it with HTTP
+    /// `status`, such as 200 or 404.
+    pub(crate) fn gate_cases(status: u16) -> String {
+        let summary = format!(r#"{{"workspace": {{"file_path": "{FILE_PATH}"}}}}"#);
+        bundle_case(
+            &["bundle", "summary", "-o", "json"],
+            &format!("stdout {summary}"),
+        ) + &get_status_case(status)
+    }
+
+    /// The get-status request path for `FILE_PATH`.
+    pub(crate) fn get_status_path() -> String {
+        format!(
+            "/api/2.0/workspace/get-status?path={}",
+            FILE_PATH.replace('@', "%40")
+        )
+    }
+
+    /// A case answering the get-status call with HTTP `status`, logged as
+    /// `databricks api get --debug` logs it.
+    pub(crate) fn get_status_case(status: u16) -> String {
+        let path = get_status_path();
+        let log = format!(
+            "stderr 2026/10/26 10:00:00 GET {path} HTTP/1.1\\n2026/10/26 10:00:00 < HTTP/1.1 {status} X\\n"
+        );
+        let response = if status < 400 {
+            format!("stdout {{\"object_type\": \"DIRECTORY\"}}\n{log}")
+        } else {
+            format!("{log}\nexit 1")
+        };
+        bundle_case(&["api", "get", &path, "--debug"], &response)
+    }
+
+    /// A scenario case answering `args`, then `-t dev`, the way the bundle
+    /// runner calls the CLI.
+    pub(crate) fn bundle_case(args: &[&str], response: &str) -> String {
+        let mut args = args.to_vec();
+        args.extend(["-t", TARGET]);
+        case(&args, response)
+    }
+
+    /// A scenario case answering `args` exactly.
+    pub(crate) fn case(args: &[&str], response: &str) -> String {
+        let mut case = String::from("case\n");
+        for argument in args {
+            case.push_str("arg ");
+            case.push_str(argument);
+            case.push('\n');
+        }
+        case.push_str(response);
+        case.push('\n');
+        case
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::probe::validation::Shared;
+    use crate::transport::CliRunner;
+
+    #[test]
+    fn a_refused_bundle_command_is_reported_as_a_refusal() {
+        let fixture = testing::Fixture::new("lineage-refused", "");
+        let bundle = fixture.bundle();
+        let binary = fixture.cli.binary().as_os_str();
+        let cli = CliRunner::for_bundle(binary, &bundle, testing::TARGET, None);
+        let validation = Shared::default();
+        let context = Context {
+            binary,
+            run: &fixture.run_dir,
+            bundle_root: &bundle,
+            target: testing::TARGET,
+            transport: &cli,
+            allow_mutations: false,
+            warehouse_id: None,
+            scope_catalog: None,
+            validation: &validation,
+            shared: &crate::probe::workspace::Shared::default(),
+        };
+        let (evidence, ran) = run_bundle_step(
+            &context,
+            CheckId::Plan,
+            "deploy",
+            &["bundle", "deploy"],
+            Duration::from_secs(5),
+        )
+        .expect("record");
+        let Ran::Failed(reason) = ran else {
+            panic!("a refused command must fail");
+        };
+        assert_eq!(
+            reason,
+            "dbxctl refused `databricks bundle deploy`, which is not a known read-only command (R9); no process was started"
+        );
+        assert!(fixture.invocations().is_empty(), "no process was started");
+        assert_eq!(evidence, ["evidence/plan/deploy.json"]);
+        assert!(fixture.evidence("plan", "deploy.json").contains("refused"));
+    }
 
     fn args(values: &[&str]) -> Vec<OsString> {
         values.iter().map(OsString::from).collect()
@@ -414,7 +739,7 @@ mod tests {
     }
 
     #[test]
-    fn the_cli_api_sql_and_v6_checks_are_implemented() {
+    fn the_bundle_api_sql_and_v6_checks_are_implemented() {
         let implemented: Vec<_> = CheckId::ALL
             .into_iter()
             .filter(|&id| is_implemented(id))
@@ -423,6 +748,11 @@ mod tests {
             implemented,
             [
                 CheckId::Cli,
+                CheckId::Validate,
+                CheckId::Plan,
+                CheckId::State,
+                CheckId::V8,
+                CheckId::V1,
                 CheckId::Api,
                 CheckId::V2,
                 CheckId::V3,

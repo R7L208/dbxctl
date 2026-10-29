@@ -157,9 +157,7 @@ pub fn assert_no_mutations(invocations: &[Vec<String>]) {
         // name a different command.
         let api_get = matches!(path.as_slice(), ["api", "get", url] if url.starts_with('/'));
         assert!(
-            safety::READ_ONLY_COMMANDS.contains(&path.as_slice())
-                || api_get
-                || is_statement_post(argv, &path),
+            safety::is_read_only_command(&path) || api_get || is_statement_post(argv, &path),
             "invocation {argv:?} is not a known read-only command"
         );
     }

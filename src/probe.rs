@@ -1,6 +1,7 @@
 mod lineage;
 mod model;
 mod orchestrator;
+mod validation;
 mod workspace;
 
 use std::ffi::{OsStr, OsString};

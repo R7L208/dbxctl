@@ -442,6 +442,10 @@ mod tests {
         let context = Context {
             binary: "databricks".as_ref(),
             run: &run_dir,
+            bundle_root: std::path::Path::new("."),
+            target: "dev",
+            allow_mutations: false,
+            validation: &crate::probe::validation::Shared::default(),
             transport: &transport,
             warehouse_id: Some("w"),
             scope_catalog: Some("main"),
@@ -472,6 +476,10 @@ mod tests {
         let context = Context {
             binary: "databricks".as_ref(),
             run: &run_dir,
+            bundle_root: std::path::Path::new("."),
+            target: "dev",
+            allow_mutations: false,
+            validation: &crate::probe::validation::Shared::default(),
             transport: &transport,
             warehouse_id: Some("w"),
             scope_catalog: Some("main"),

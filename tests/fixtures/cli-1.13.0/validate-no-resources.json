@@ -1,0 +1,30 @@
+{
+  "bundle": {
+    "engine": "direct",
+    "environment": "dev",
+    "git": {
+      "bundle_root_path": "."
+    },
+    "name": "empty",
+    "target": "dev"
+  },
+  "sync": {
+    "paths": [
+      "."
+    ]
+  },
+  "workspace": {
+    "artifact_path": "/Workspace/Users/user@example.test/projects/empty/artifacts",
+    "current_user": {
+      "active": true,
+      "domain_friendly_name": "user",
+      "id": "9876543210",
+      "short_name": "user",
+      "userName": "user@example.test"
+    },
+    "file_path": "/Workspace/Users/user@example.test/projects/empty/files",
+    "resource_path": "/Workspace/Users/user@example.test/projects/empty/resources",
+    "root_path": "/Workspace/Users/user@example.test/projects/empty",
+    "state_path": "/Workspace/Users/user@example.test/projects/empty/state"
+  }
+}

@@ -2,6 +2,9 @@ bundle:
   name: example-analytics
   engine: direct
 
+include:
+  - resources/*.yml
+
 workspace:
   root_path: /Workspace/Users/user@example.test/projects/example
 

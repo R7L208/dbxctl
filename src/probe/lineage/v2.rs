@@ -150,6 +150,10 @@ mod tests {
         run(&Context {
             binary: "databricks".as_ref(),
             run: &run_dir,
+            bundle_root: std::path::Path::new("."),
+            target: "dev",
+            allow_mutations: false,
+            validation: &crate::probe::validation::Shared::default(),
             transport,
             warehouse_id,
             scope_catalog: None,

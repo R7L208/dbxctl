@@ -4,16 +4,39 @@
 //! warehouse. The transport calls it before it starts any CLI process, so a
 //! refused statement never reaches the workspace.
 
-/// The CLI commands known to be read-only, by their full command path. The
-/// transport runs no other command, and the tests' fake CLI counts any
-/// other invocation as a mutation. Each check that adds a CLI surface
-/// extends this list. `api get <path>` is read-only too.
-pub(crate) const READ_ONLY_COMMANDS: &[&[&str]] = &[
-    &["version"],
-    &["bundle", "validate"],
+/// CLI commands that read only the CLI itself, by their full command path:
+/// they need no bundle and contact no workspace.
+pub(crate) const OFFLINE_COMMANDS: &[&[&str]] = &[&["version"], &["bundle", "schema"]];
+/// CLI commands that read the bundle and contact the workspace. Each reads,
+/// with one exception: on CLI 1.13.0 `bundle validate` creates
+/// `workspace.file_path` (`POST /api/2.0/workspace/mkdirs`) when it does not
+/// exist yet. The probe therefore runs validate only after a read-only
+/// `get-status` finds that directory, or with `--allow-mutations`
+/// (`src/probe/validation.rs`); `bundle summary` reads the path without
+/// creating it.
+pub(crate) const WORKSPACE_COMMANDS: &[&[&str]] = &[
+    &["bundle", "summary"],
     &["bundle", "plan"],
-    &["bundle", "schema"],
+    &["bundle", "validate"],
 ];
+
+/// Whether `path`, a full command path such as `["bundle", "plan"]`, is one
+/// of the read-only commands above. The transport runs no other command,
+/// and the tests' fake CLI counts any other invocation as a mutation. Each
+/// check that adds a CLI surface extends a list. `api get <path>` is
+/// read-only too.
+pub(crate) fn is_read_only_command(path: &[&str]) -> bool {
+    OFFLINE_COMMANDS.contains(&path) || WORKSPACE_COMMANDS.contains(&path)
+}
+
+/// The command path of `args`: its leading arguments that are not flags,
+/// such as `["bundle", "plan"]` for `bundle plan -o json`.
+pub(crate) fn command_path<'a>(args: &[&'a str]) -> Vec<&'a str> {
+    args.iter()
+        .copied()
+        .take_while(|argument| !argument.starts_with('-'))
+        .collect()
+}
 
 /// Words that may start a read-only statement.
 const READ_STARTS: [&str; 5] = ["DESC", "DESCRIBE", "SELECT", "SHOW", "WITH"];

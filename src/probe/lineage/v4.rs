@@ -262,6 +262,10 @@ mod tests {
         run(&Context {
             binary: "databricks".as_ref(),
             run: &run_dir,
+            bundle_root: std::path::Path::new("."),
+            target: "dev",
+            allow_mutations: false,
+            validation: &crate::probe::validation::Shared::default(),
             transport,
             warehouse_id: Some("w"),
             scope_catalog: None,
@@ -458,6 +462,10 @@ mod tests {
         let finding = run(&Context {
             binary: "databricks".as_ref(),
             run: &run_dir,
+            bundle_root: std::path::Path::new("."),
+            target: "dev",
+            allow_mutations: false,
+            validation: &crate::probe::validation::Shared::default(),
             transport: &FakeTransport::default(),
             warehouse_id: None,
             scope_catalog: None,
