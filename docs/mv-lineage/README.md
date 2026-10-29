@@ -48,6 +48,7 @@ defines them.
 | [06-findings-and-handoff.md](phase0/06-findings-and-handoff.md) | Report schema, redaction, Phase 1–4 gates (stub) | #36 |
 | [07-tests-and-task-plan.md](phase0/07-tests-and-task-plan.md) | Test strategy and work order | #38 |
 | [08-cli-findings.md](phase0/08-cli-findings.md) | Live results (stub) | #39 |
+| [09-auth-context.md](phase0/09-auth-context.md) | How the CLI picks the workspace and credentials; planned context checks (partly planned; outside the Phase 0 contract) | #55 |
 
 ## Design Decisions
 

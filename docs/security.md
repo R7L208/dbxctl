@@ -193,6 +193,15 @@ on interrupt-safe passthrough.
   not expose digest-pinned hosted images; removing this boundary would require
   controlled self-hosted runners.
 - The live RustSec database is trusted as security data.
+- The Databricks CLI alone decides which workspace and credentials a probe
+  uses. Probes pass a bundle target, so the target's host
+  silently overrides `DATABRICKS_HOST`, the CLI does not report where the token
+  came from, and it can pick a host-matched profile without saying which.
+  Without a target or profile, a `[DEFAULT]` profile is used silently. A
+  profile named with `-p` also silently overrides `DATABRICKS_HOST` and
+  `DATABRICKS_TOKEN`, and `auth describe` exits 0 even when authentication
+  fails. `probe run` does not yet record or check the resolved context (#55);
+  see [Workspace and Auth Context](mv-lineage/phase0/09-auth-context.md).
 - There is no automated workflow security scanner or policy preventing a
   future unpinned Action.
 - Release archives and SBOMs are not yet published as durable GitHub Release
