@@ -10,7 +10,7 @@ The Linux quality and supply-chain jobs run inside this platform-specific OCI
 manifest:
 
 ```text
-rust:1.89.0-bookworm@sha256:c9ac3fa8945b61dede1e4500d25028aa8fd8a8fe46365fcf9c0422f8d999b9b0
+rust:1.100.0-bookworm@sha256:198cd28b4ba92b20fe849d5d8b119ace1bd28423d9e82e9c4de5ee1300d453a0
 ```
 
 This pins the Linux userspace, compiler, Cargo, and base utilities. GitHub
@@ -30,8 +30,8 @@ verified. Current pinned tools are:
 | Tool | Version | SHA-256 |
 | --- | --- | --- |
 | cargo-llvm-cov | 0.9.1 | `b3f68e625481fed9b16444174f3fa5ebcdbde4a1878803a35eabe2dcefcdc41a` |
-| cargo-audit | 0.22.2, musl | `7fb9497f8594b389e5fce5ef9b92db08432996895b2e0c5a0167a69ed445c428` |
-| cargo-deny | 0.20.2, musl | `9f12ed4c49936e09b48bf862b595cde2fe64fcbd9d74dfacac6131ca824c8d5f` |
+| cargo-audit | 0.23.0, musl | `4f01c74ed84b2dffd0b1d37012a62cdf2a92c96e25bdf8eec7fcc0d4d3eb7811` |
+| cargo-deny | 0.21.0, musl | `a2170b854ff697e79e39c4c538981c9c1bdd803addbae6719a4cb66b4585a903` |
 | Databricks CLI | 1.13.0, Linux amd64 | `0a94deffe3c9f1109020c91ac744a25bf45dc833ac302f8192892779e25b3df7` |
 
 The Databricks CLI pin equals the minimum supported version and is not raised
@@ -47,7 +47,7 @@ them automatically. Developers on networks that block pypi.org can select a
 local mirror (see [Package Index](development.md#package-index)); hashes are
 enforced regardless of the index, and no private index URL is committed.
 
-The Linux quality job also downloads the Rust 1.89.0 Clippy, LLVM tools, and
+The Linux quality job also downloads the Rust 1.100.0 Clippy, LLVM tools, and
 Rustfmt component archives directly from the dated Rust distribution path.
 Their SHA-256 values are pinned in `.github/pins.json` and verified before
 their installers run. This avoids allowing `rustup component add` to resolve and
@@ -57,12 +57,12 @@ so the repository's toolchain file cannot trigger implicit component setup.
 
 | Rust component | Archive SHA-256 |
 | --- | --- |
-| Clippy | `c6c362c6cd74567022e9ba0c16f6676f8c2b73d955adcf1f6f4c51cf15e57ce8` |
-| LLVM tools | `bb0ced899fd1ac628f26e375adabc970b415c516ec82fb7cf9ac3c63cb4d0fee` |
-| Rustfmt | `540eb7adf43e37b22936f981c630b10c63915f64f3c227d981a8b592ece33430` |
+| Clippy | `0d18df3bff6c852ef8243727fed075ecb33dbf93b8ab8c138c2f45e3f270102a` |
+| LLVM tools | `2c84cada1aef73339b1a2d101a35cd78d71072c8f6a3921bf1abb852c3f42ad3` |
+| Rustfmt | `4c9389e4722b16499e5d47d89837ec84a4ef755f105ed2a84c038156064e01ab` |
 
 The macOS and Windows portability jobs similarly install Cargo, `rustc`, and
-the target standard library from dated Rust 1.89.0 standalone archives rather
+the target standard library from dated Rust 1.100.0 standalone archives rather
 than asking `rustup` to resolve the minimal toolchain. `.github/pins.json`
 holds the archive SHA-256 values for macOS Arm64, macOS x86-64, and Windows
 x86-64, and the workflows reject runner architectures without an explicit
@@ -72,9 +72,9 @@ commands.
 
 | Target | Cargo SHA-256 | rustc SHA-256 | standard library SHA-256 |
 | --- | --- | --- | --- |
-| `aarch64-apple-darwin` | `545517d16ac76789aa6ce801cbc3eeecc9acaf43f3ccb63148c3577f2bb4b8d3` | `6d2cf6164bef00ff3d2c37ca0a0658ffb7c9c3178882a72d78e35abeba888860` | `1f729f8ba21725618ab894f14cc38f01470f1d15ea76a81fac2da63291bed75c` |
-| `x86_64-apple-darwin` | `81fabf0d783af844c7dd74dfe10d0302dd063775789a914f29b33e3d46ee1cf0` | `04f3acf7ddfb998fa2713226fd8528e6157b9030f9a6ac6678133d82d5c099f9` | `09780642e83b12085500ea78dcb46112a546467352cc4a4dd229f22e03d4a5f0` |
-| `x86_64-pc-windows-msvc` | `8c0a40a5411746ff6600d93acd16652fef56702196bb25b940ff399d7e107f40` | `76f70bbd3dc8681ee189931bc5e270cd9524ff3d17738d87f609bba4980c466c` | `ba81500406fdf8a3a81078df2129bd6e4793b579c9e1a498563670bccad92611` |
+| `aarch64-apple-darwin` | `7e18265d2d2cda8dec6cac4d0faa3bbafe927b401e5185350abc7d669f9adafb` | `3fcd7f1709f62dda58bf4db2dcfd630a451e750aadaaa551a21cc4a627a37b4c` | `9345645b6f56eea28bf8cc2c0f628a61d507a688f91c1bec5ae6bfad216a16c7` |
+| `x86_64-apple-darwin` | `b597b59d15b19469b8ee19d2800217d8946511e4a8d930ff839bf7688b15a7c6` | `d788934c1fdca7f59217bc4de90641b80cc20e4764b449aaa2dda96392378c63` | `1cc179e8e58af18b6fcfc095065a75fb6ed9afb9e33dc7fd596551cf755efe9f` |
+| `x86_64-pc-windows-msvc` | `efb63c35df751dbd58b7aa73d6a43d75b00bd356bfdb925901e85379d0de108a` | `4f1f70145ab94e1036b6a9fb0a1fa1393352999701699aedab4dd2724047149e` | `24ad2f28791e08a573b9c7df5efa3ace884eecd1fa7e7f5b62c65f4b49bb4532` |
 
 Tools and Cargo state are installed under the job's ephemeral `RUNNER_TEMP`.
 They are not restored from shared caches or written into the repository.
@@ -89,7 +89,7 @@ Pushing a version tag such as `v0.1.0` builds locked native packages for Linux
 x86-64, macOS Arm64 or x86-64 (matching the hosted runner), and Windows x86-64.
 The tag must exactly match the version in `Cargo.toml`. Each job packages the
 binary with its license and Cargo manifests, records the archive's SHA-256
-digest, and generates an SPDX JSON SBOM with checksum-pinned Syft 1.52.0.
+digest, and generates an SPDX JSON SBOM with checksum-pinned Syft 1.57.2.
 
 All platforms use the same package layout and normalized `tar.gz` format.
 Archive entry order, timestamps, ownership, user names, and gzip metadata are
